@@ -28,7 +28,7 @@ send_commands() {
         
         # Keep alive briefly
         sleep 1
-    ) | timeout $TIMEOUT $QEMU -drive file=$DISK,format=raw,if=ide -m 16M -nographic -serial stdio 2>&1 || true
+    ) | timeout $TIMEOUT $QEMU -drive "file=$DISK,format=raw,if=ide" -m 16M -nographic -serial stdio 2>&1 || true
 }
 
 # Test cases

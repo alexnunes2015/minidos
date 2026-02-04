@@ -38,7 +38,7 @@ run_test() {
     
     # Run QEMU with input
     echo "$input" | timeout 10 $QEMU \
-        -drive file=$DISK,format=raw,if=ide \
+        -drive "file=$DISK,format=raw,if=ide" \
         -m 16M \
         -serial stdio \
         -monitor none \

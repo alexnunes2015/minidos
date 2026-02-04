@@ -38,7 +38,7 @@ run_test() {
         # Keep connection alive
         sleep 1
     ) | timeout 15 $QEMU \
-        -drive file=$DISK,format=raw,if=ide \
+        -drive "file=$DISK,format=raw,if=ide" \
         -m 16M \
         -serial stdio \
         -monitor none \
