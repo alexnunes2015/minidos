@@ -15,6 +15,15 @@ start:
     mov si, msg_start
     call serial_print_string
     
+    ; Show boot logo
+    mov si, msg_before_logo
+    call serial_print_string
+    
+    call show_boot_logo
+    
+    mov si, msg_after_logo
+    call serial_print_string
+    
     ; Load kernel from sector 3 (after MBR + stage2)
     mov si, msg_loading_kernel
     call serial_print_string
@@ -71,6 +80,47 @@ start:
 
     ; Far jump to flush prefetch and enter 32-bit mode
     jmp 0x08:pm_start
+
+; Show boot logo in VGA Mode 13h
+show_boot_logo:
+    pusha
+    
+    ; Switch to VGA Mode 13h (320x200, 256 colors)
+    mov ax, 0x0013
+    int 0x10
+    
+    ; Fill screen with blue (color 9)
+    mov ax, 0xA000
+    mov es, ax
+    xor di, di
+    mov ax, 0x0909          ; Blue in both bytes
+    mov cx, 32000           ; 64000 bytes / 2
+    rep stosw
+    
+    ; SHORT delay - 3 seconds
+    mov bp, 9
+.delay_outer3:
+    mov cx, 0xFFFF
+.delay_outer2:
+    push cx
+    mov cx, 0x0FFF
+.delay_inner:
+    nop
+    nop
+    nop
+    nop
+    loop .delay_inner
+    pop cx
+    loop .delay_outer2
+    dec bp
+    jnz .delay_outer3
+    
+    ; Return to text mode
+    mov ax, 0x0003
+    int 0x10
+    
+    popa
+    ret
 
 ; Serial port functions (COM1)
 serial_init:
@@ -169,6 +219,8 @@ sectors_per_track: dw 63
 heads: dw 255
 
 msg_start: db '[Stage2] Started', 0x0D, 0x0A, 0
+msg_before_logo: db '[Stage2] Displaying boot logo...', 0x0D, 0x0A, 0
+msg_after_logo: db '[Stage2] Logo displayed', 0x0D, 0x0A, 0
 msg_loading_kernel: db '[Stage2] Loading kernel...', 0x0D, 0x0A, 0
 msg_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
 msg_pm: db '[Stage2] Entering PM...', 0x0D, 0x0A, 0
