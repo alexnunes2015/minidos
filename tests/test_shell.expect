@@ -1,0 +1,41 @@
+#!/usr/bin/expect -f
+
+# Test MiniDOS shell interactively
+# Usage: expect test_shell.expect cmd1 cmd2 cmd3...
+
+set timeout 3
+set root_dir [file normalize [file join [file dirname [info script]] ".."]]
+set disk [file join $root_dir "minidos.img"]
+
+# Get commands from arguments
+set commands $argv
+
+# Start QEMU
+spawn qemu-system-i386 -drive file=$disk,format=raw,if=ide -m 16M -nographic -serial stdio
+
+# Wait for initial boot
+expect {
+    "MiniDOS v" { puts "✓ Boot detected"; sleep 1 }
+    timeout { puts "✗ Boot timeout"; exit 1 }
+}
+
+# Send each command
+foreach cmd $commands {
+    puts "\n>>> Sending: $cmd"
+    send "$cmd\r"
+    expect {
+        ">" { puts "✓ Command accepted" }
+        timeout { puts "✗ Timeout waiting for prompt" }
+    }
+}
+
+# Wait a bit for output
+sleep 2
+
+# Exit shell
+puts "\n>>> Exiting"
+send "exit\r"
+
+# Keep running briefly
+sleep 1
+exit 0
