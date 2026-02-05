@@ -81,6 +81,9 @@ test-runner:
 test-interactive:
 	./tests/test_interactive.sh
 
+test-serial:
+	python3 tests/test_serial.py "ver" "drives"
+
 test: test-help test-ver test-drives
 
-.PHONY: all clean run test test-help test-ver test-drives test-dir test-runner test-interactive
+.PHONY: all clean run test test-help test-ver test-drives test-dir test-runner test-interactive test-serial

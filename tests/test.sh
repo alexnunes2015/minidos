@@ -5,8 +5,11 @@
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISK="$ROOT_DIR/minidos.img"
-QEMU="qemu-system-i386"
 OUTPUT="/tmp/minidos_test.log"
+READY_TIMEOUT="${READY_TIMEOUT:-30}"
+POST_PM_DELAY="${POST_PM_DELAY:-2}"
+CMD_TIMEOUT="${CMD_TIMEOUT:-10}"
+PYTHON="${PYTHON:-python3}"
 
 # Colors
 RED='\033[0;31m'
@@ -30,19 +33,12 @@ run_test() {
     echo -e "${YELLOW}TEST: $name${NC}"
     echo -e "${YELLOW}═══════════════════════════════════${NC}"
     
-    # Build command input
-    input=""
-    for cmd in "${commands[@]}"; do
-        input+="$cmd"$'\n'
-    done
-    
-    # Run QEMU with input
-    echo "$input" | timeout 10 $QEMU \
-        -drive "file=$DISK,format=raw,if=ide" \
-        -m 16M \
-        -serial stdio \
-        -monitor none \
-        -display none \
+    # Run via serial, waiting for shell readiness before sending commands
+    $PYTHON "$ROOT_DIR/tests/test_serial.py" \
+        --ready-timeout "$READY_TIMEOUT" \
+        --post-pm-delay "$POST_PM_DELAY" \
+        --cmd-timeout "$CMD_TIMEOUT" \
+        "${commands[@]}" \
         2>&1 | tee "$OUTPUT"
     
     echo ""

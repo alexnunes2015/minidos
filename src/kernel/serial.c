@@ -4,6 +4,8 @@ static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static int serial_ready = 0;
+
 static inline unsigned char inb(unsigned short port) {
     unsigned char ret;
     __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
@@ -19,6 +21,7 @@ void serial_init() {
     outb(SERIAL_PORT + 3, 0x03);    // 8 bits, no parity, one stop bit
     outb(SERIAL_PORT + 2, 0xC7);    // Enable FIFO, clear them, with 14-byte threshold
     outb(SERIAL_PORT + 4, 0x0B);    // IRQs enabled, RTS/DSR set
+    serial_ready = 1;
 }
 
 // Check if transmit buffer is empty
@@ -59,6 +62,10 @@ void serial_print_hex(unsigned int num) {
     for (int i = 28; i >= 0; i -= 4) {
         serial_putchar(hex[(num >> i) & 0xF]);
     }
+}
+
+int serial_is_ready() {
+    return serial_ready;
 }
 
 // Read a line from serial into buffer

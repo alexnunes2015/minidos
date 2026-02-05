@@ -1,4 +1,5 @@
 #include "video.h"
+#include "serial.h"
 
 #define VIDEO_MEMORY (char*)0xB8000
 #define SCREEN_WIDTH 80
@@ -78,6 +79,10 @@ void print_char(char c) {
     }
     
     update_cursor();
+
+    if (serial_is_ready()) {
+        serial_putchar(c);
+    }
 }
 
 void print_string(const char* str) {

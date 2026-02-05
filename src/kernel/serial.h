@@ -25,4 +25,7 @@ char serial_getchar();
 // Read a line from serial into buffer
 void serial_read_line(char* buffer, int max_len);
 
+// Returns 1 if serial has been initialized
+int serial_is_ready();
+
 #endif
