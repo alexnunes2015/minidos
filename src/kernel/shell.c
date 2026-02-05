@@ -63,13 +63,14 @@ static void parse_command(char* cmd, char* command, char* args) {
 void shell_init() {
     show_boot_screen();
     print_string("MiniDOS Shell Ready.\nType 'help' for commands.\n");
+    fat16_set_drive(drive_get_current());
 }
 
 void shell_prompt() {
     // Print current drive letter
     int drive = drive_get_current();
     print_char('A' + drive);
-    print_string(":> ");
+    print_string(":>");
 }
 
 void shell_execute(char* cmd) {
@@ -90,7 +91,7 @@ void shell_execute(char* cmd) {
         }
     }
     
-    // Check if command is drive letter (e.g., "C:")
+    // Check if command is drive letter (e.g., "A:")
     if (cmd[0] >= 'A' && cmd[0] <= 'Z' && cmd[1] == ':' && cmd[2] == '\0') {
         int drive_letter = cmd[0] - 'A';
         if (drive_get_info(drive_letter)) {
@@ -156,6 +157,7 @@ void shell_execute(char* cmd) {
     } else if (mystrcmp(command, "dir") == 0) {
         static int fat16_initialized = 0;
         if (!fat16_initialized) {
+            fat16_set_drive(drive_get_current());
             fat16_init();
             fat16_initialized = 1;
         }

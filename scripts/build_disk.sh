@@ -11,12 +11,10 @@ echo "Creating disk..."
 dd if=/dev/zero of="$DISK_IMG" bs=1M count=256 status=none
 
 # Create MBR partition table
-echo "Creating partition table (C:, D:, E:)..."
+echo "Creating partition table (A:)..."
 sfdisk "$DISK_IMG" << 'EOF' >/dev/null 2>&1
 unit: sectors
-/dev/sda1: start=2048, size=131072, Id=6
-/dev/sda2: start=133120, size=131072, Id=6
-/dev/sda3: start=264192, size=131072, Id=6
+/dev/sda1: start=2048, size=522240, Id=6
 EOF
 
 # Write bootloader and kernel
@@ -32,7 +30,7 @@ if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
     dd if="$ROOT_DIR/assets/bootlogo/logo.raw" of="$DISK_IMG" bs=512 seek=21 conv=notrunc status=none 2>/dev/null
 fi
 
-echo "Formatting partitions and adding test files..."
+echo "Formatting partition and adding README..."
 
 format_with_sudo() {
 sudo bash << SUDO_EOF
@@ -41,24 +39,18 @@ DISK_IMG="$ROOT_DIR/minidos.img"
 
 # Setup loop devices
 LOOP1=$(losetup -f --show -o 1048576 "$DISK_IMG")
-LOOP2=$(losetup -f --show -o 68157440 "$DISK_IMG")
-LOOP3=$(losetup -f --show -o 135266304 "$DISK_IMG")
 
-trap "losetup -d $LOOP1 $LOOP2 $LOOP3 2>/dev/null" EXIT
+trap "losetup -d $LOOP1 2>/dev/null" EXIT
 
 # Format
-mkfs.vfat -F 16 -n "MINIDOS_C" "$LOOP1"
-mkfs.vfat -F 16 -n "MINIDOS_D" "$LOOP2"
-mkfs.vfat -F 16 -n "MINIDOS_E" "$LOOP3"
+mkfs.vfat -F 16 -n "MINIDOS_A" "$LOOP1"
 
 TMPDIR=$(mktemp -d)
-trap "losetup -d $LOOP1 $LOOP2 $LOOP3 2>/dev/null; rm -rf $TMPDIR" EXIT
+trap "losetup -d $LOOP1 2>/dev/null; rm -rf $TMPDIR" EXIT
 
-# Add files to C:
+# Add files to A:
 mount "$LOOP1" "$TMPDIR"
-echo "Welcome to drive C:" > $TMPDIR/README.TXT
-echo "Test file 1" > $TMPDIR/FILE1.TXT
-echo "Test file 2" > $TMPDIR/FILE2.TXT
+echo "Welcome to drive A:" > $TMPDIR/README.TXT
 
 # Add boot logo if it exists
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
@@ -68,19 +60,6 @@ fi
 
 umount "$TMPDIR"
 
-# Add files to D:
-mount "$LOOP2" "$TMPDIR"
-echo "Welcome to drive D:" > $TMPDIR/README.TXT
-echo "Data on D:" > $TMPDIR/DATA.TXT
-echo "More text" > $TMPDIR/MORE.TXT
-umount "$TMPDIR"
-
-# Add files to E:
-mount "$LOOP3" "$TMPDIR"
-echo "Welcome to drive E:" > $TMPDIR/README.TXT
-echo "System info" > $TMPDIR/INFO.TXT
-umount "$TMPDIR"
-
 chown $(id -u 1000):$(id -g 1000) "$DISK_IMG" 2>/dev/null || true
 chmod 644 "$DISK_IMG"
 SUDO_EOF
@@ -88,29 +67,17 @@ SUDO_EOF
 
 format_with_mtools() {
     DISK_IMG="$ROOT_DIR/minidos.img"
-    C_OFF=$((2048*512))
-    D_OFF=$((133120*512))
-    E_OFF=$((264192*512))
+    A_OFF=$((2048*512))
 
-    mformat -i "$DISK_IMG@@$C_OFF" -F -v MINIDOS_C ::
-    mformat -i "$DISK_IMG@@$D_OFF" -F -v MINIDOS_D ::
-    mformat -i "$DISK_IMG@@$E_OFF" -F -v MINIDOS_E ::
+    # NOTE: Do NOT use -F here (it forces FAT32). We need FAT16.
+    mformat -i "$DISK_IMG@@$A_OFF" -v MINIDOS_A ::
 
-    echo "Welcome to drive C:" | mcopy -i "$DISK_IMG@@$C_OFF" - ::/README.TXT
-    echo "Test file 1" | mcopy -i "$DISK_IMG@@$C_OFF" - ::/FILE1.TXT
-    echo "Test file 2" | mcopy -i "$DISK_IMG@@$C_OFF" - ::/FILE2.TXT
+    echo "Welcome to drive A:" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/README.TXT
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
-        mcopy -i "$DISK_IMG@@$C_OFF" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT
+        mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT
         echo "✓ Boot logo added"
     fi
-
-    echo "Welcome to drive D:" | mcopy -i "$DISK_IMG@@$D_OFF" - ::/README.TXT
-    echo "Data on D:" | mcopy -i "$DISK_IMG@@$D_OFF" - ::/DATA.TXT
-    echo "More text" | mcopy -i "$DISK_IMG@@$D_OFF" - ::/MORE.TXT
-
-    echo "Welcome to drive E:" | mcopy -i "$DISK_IMG@@$E_OFF" - ::/README.TXT
-    echo "System info" | mcopy -i "$DISK_IMG@@$E_OFF" - ::/INFO.TXT
 }
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then

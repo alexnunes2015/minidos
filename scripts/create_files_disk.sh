@@ -10,9 +10,7 @@ dd if=/dev/zero of="$DISK_IMG" bs=1M count=256 status=none
 
 echo "Creating partition table..."
 parted -s "$DISK_IMG" mklabel msdos
-parted -s "$DISK_IMG" mkpart primary fat16 1MiB 65MiB
-parted -s "$DISK_IMG" mkpart primary fat16 65MiB 129MiB
-parted -s "$DISK_IMG" mkpart primary fat16 129MiB 193MiB
+parted -s "$DISK_IMG" mkpart primary fat16 1MiB 255MiB
 parted -s "$DISK_IMG" set 1 boot on
 
 echo "Writing bootloader..."
@@ -29,30 +27,14 @@ DISK_IMG="$ROOT_DIR/minidos_files.img"
 LOOP=$(losetup -f --show -P "$DISK_IMG")
 trap "losetup -d $LOOP" EXIT
 
-mkfs.vfat -F 16 -n "C" "${LOOP}p1" >/dev/null 2>&1
-mkfs.vfat -F 16 -n "D" "${LOOP}p2" >/dev/null 2>&1
-mkfs.vfat -F 16 -n "E" "${LOOP}p3" >/dev/null 2>&1
+mkfs.vfat -F 16 -n "A" "${LOOP}p1" >/dev/null 2>&1
 
 TMPDIR=$(mktemp -d)
 trap "losetup -d $LOOP; rm -rf $TMPDIR" EXIT
 
-# Add files to C:
+# Add files to A:
 mount "${LOOP}p1" "$TMPDIR"
-echo "Welcome to drive C:" > $TMPDIR/README.TXT
-echo "Test file 1" > $TMPDIR/FILE1.TXT
-echo "Test file 2" > $TMPDIR/FILE2.TXT
-umount "$TMPDIR"
-
-# Add files to D:
-mount "${LOOP}p2" "$TMPDIR"
-echo "Welcome to drive D:" > $TMPDIR/README.TXT
-echo "Data file" > $TMPDIR/DATA.TXT
-umount "$TMPDIR"
-
-# Add files to E:
-mount "${LOOP}p3" "$TMPDIR"
-echo "Welcome to drive E:" > $TMPDIR/README.TXT
-echo "System info" > $TMPDIR/INFO.TXT
+echo "Welcome to drive A:" > $TMPDIR/README.TXT
 umount "$TMPDIR"
 
 chown $(id -u 1000):$(id -g 1000) "$DISK_IMG" 2>/dev/null || true

@@ -33,7 +33,7 @@ static void show_boot_logo() {
     disk_init();
     drive_init();
     
-    // Try to read BOOTLOGO.DAT from drive C: (drive 0)
+    // Try to read BOOTLOGO.DAT from drive A: (drive 0)
     fat16_set_drive(0);
     fat16_init();
     
@@ -143,4 +143,3 @@ void kernel_main() {
         shell_execute(command);
     }
 }
-

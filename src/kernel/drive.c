@@ -104,20 +104,25 @@ void drive_init() {
     }
     
     if (next_letter == 0) {
-        print_string("  No partitions found - creating test drives\n");
-        // Create test drives A:, B:, C:, D: pointing to different areas for testing
-        for (int i = 0; i < 4; i++) {
-            drives[i].valid = 1;
-            drives[i].disk_id = 0;
-            drives[i].partition_num = -1;
-            drives[i].lba_start = 2048 + (i * 32768);  // Each "drive" gets 16MB
-            drives[i].sector_count = 32768;            // 16MB = 32768 sectors
-            drives[i].fs_type = 0x06;                  // FAT16
-            next_letter++;
-        }
-        print_string("  Created test drives A: through D:\n");
+        print_string("  No partitions found - creating test drive A:\n");
+        drives[0].valid = 1;
+        drives[0].disk_id = 0;
+        drives[0].partition_num = -1;
+        drives[0].lba_start = 2048;  // 1MB offset
+        drives[0].sector_count = 32768;  // 16MB
+        drives[0].fs_type = 0x06;  // FAT16
+        next_letter = 1;
     }
     
+    // Set current drive to first valid drive (default A:)
+    current_drive = 0;
+    for (int i = 0; i < MAX_DRIVES; i++) {
+        if (drives[i].valid) {
+            current_drive = i;
+            break;
+        }
+    }
+
     print_string("Total drives: ");
     print_num(next_letter);
     print_string("\n\n");
@@ -147,6 +152,15 @@ int drive_read_sector(int drive_letter, unsigned int lba, unsigned char* buffer)
 }
 
 int drive_get_current() {
+    if (current_drive < 0 || current_drive >= MAX_DRIVES || !drives[current_drive].valid) {
+        for (int i = 0; i < MAX_DRIVES; i++) {
+            if (drives[i].valid) {
+                current_drive = i;
+                return current_drive;
+            }
+        }
+        current_drive = 0;
+    }
     return current_drive;
 }
 
