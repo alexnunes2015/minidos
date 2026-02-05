@@ -116,10 +116,37 @@ void shell_execute(char* cmd) {
         print_string("  type <file>   - View file contents\n");
         print_string("  cls           - Clear screen\n");
         print_string("  ver           - Show version\n");
+        print_string("  mem           - Show system memory\n");
         print_string("  boot          - Show boot screen\n");
         print_string("  help          - This help\n");
     } else if (mystrcmp(command, "ver") == 0) {
         print_string("MiniDOS Version 0.1 (MVP) - FAT16\n");
+    } else if (mystrcmp(command, "mem") == 0) {
+        print_string("System Memory: ");
+        // Convert to string manually
+        char mem_str[16];
+        unsigned int mem = g_memory_kb;
+        int i = 0;
+        if (mem == 0) {
+            mem_str[i++] = '0';
+        } else {
+            // Convert number to string
+            int temp = mem;
+            int digits = 0;
+            while (temp > 0) {
+                temp /= 10;
+                digits++;
+            }
+            i = digits;
+            temp = mem;
+            while (temp > 0) {
+                mem_str[--digits] = '0' + (temp % 10);
+                temp /= 10;
+            }
+        }
+        mem_str[i] = '\0';
+        print_string(mem_str);
+        print_string(" KB\n");
     } else if (mystrcmp(command, "cls") == 0) {
         cls();
     } else if (mystrcmp(command, "boot") == 0) {

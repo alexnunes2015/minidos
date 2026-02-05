@@ -12,6 +12,22 @@ start:
     ; Initialize serial
     call serial_init
     
+    ; Read base memory from BIOS (0x413 contains KB of base memory, max 640KB)
+    xor eax, eax
+    mov ax, [0x413]         ; Read base memory KB from BIOS data area
+    mov [0x500], ax         ; Store at 0x500 for kernel
+    
+    ; Read extended memory using INT 0x15, AH=0x88 (returns KB above 1MB)
+    xor eax, eax
+    mov ah, 0x88
+    int 0x15
+    jc .no_extended         ; If carry set, no extended memory
+    mov [0x502], ax         ; Store extended memory KB at 0x502
+    jmp .mem_done
+.no_extended:
+    mov word [0x502], 0     ; No extended memory
+.mem_done:
+    
     mov si, msg_start
     call serial_print_string
     

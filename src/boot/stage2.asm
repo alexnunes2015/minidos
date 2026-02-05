@@ -12,6 +12,11 @@ start:
     ; Initialize serial
     call serial_init
     
+    ; Read memory size from BIOS (0x413 contains KB of base memory)
+    xor eax, eax
+    mov ax, [0x413]         ; Read KB from BIOS data area
+    mov [0x500], ax         ; Store at safe location (0x500) for kernel to read
+    
     ; Serial debug message
     mov si, msg_stage2_start
     call serial_print_string
