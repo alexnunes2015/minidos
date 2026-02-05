@@ -1,6 +1,7 @@
 #include "drive.h"
 #include "disk.h"
 #include "video.h"
+#include "serial.h"
 
 static DriveInfo drives[MAX_DRIVES];
 static int current_drive = 0;  // A:
@@ -171,6 +172,7 @@ void drive_set_current(int drive_letter) {
 }
 
 void drive_list_all() {
+    serial_print("Available drives:\n");
     print_string("Available drives:\n\n");
     
     for (int i = 0; i < MAX_DRIVES; i++) {

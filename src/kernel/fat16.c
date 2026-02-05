@@ -1,6 +1,7 @@
 #include "fat16.h"
 #include "video.h"
 #include "drive.h"
+#include "serial.h"
 
 static FAT16_BPB bpb;
 static unsigned char sector_buffer[SECTOR_SIZE];
@@ -49,6 +50,7 @@ void fat16_list_root() {
     int root_sectors = ((bpb.root_entries * 32) + (SECTOR_SIZE - 1)) / SECTOR_SIZE;
     
     // Print directory header with current drive letter
+    serial_print("Directory of ");
     print_string("Directory of ");
     print_char('A' + current_drive_letter);
     print_string(":\\\n\n");

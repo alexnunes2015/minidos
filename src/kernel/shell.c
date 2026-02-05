@@ -2,6 +2,7 @@
 #include "video.h"
 #include "fat16.h"
 #include "drive.h"
+#include "serial.h"
 
 static void delay(unsigned int count) {
     for (volatile unsigned int i = 0; i < count; i++) {
@@ -63,6 +64,7 @@ static void parse_command(char* cmd, char* command, char* args) {
 void shell_init() {
     show_boot_screen();
     print_string("MiniDOS Shell Ready.\nType 'help' for commands.\n");
+    serial_print("MiniDOS Shell Ready.\nType 'help' for commands.\n");
     fat16_set_drive(drive_get_current());
 }
 
@@ -97,10 +99,14 @@ void shell_execute(char* cmd) {
         if (drive_get_info(drive_letter)) {
             drive_set_current(drive_letter);
             fat16_set_drive(drive_letter);
+            serial_print("Switched to drive ");
+            serial_putchar('A' + drive_letter);
+            serial_print(":\n");
             print_string("Switched to drive ");
             print_char('A' + drive_letter);
             print_string(":\n");
         } else {
+            serial_print("Invalid drive\n");
             print_string("Invalid drive\n");
         }
         return;
@@ -111,6 +117,7 @@ void shell_execute(char* cmd) {
     parse_command(cmd, command, args);
     
     if (mystrcmp(command, "help") == 0) {
+        serial_print("Available commands:\n");
         print_string("Available commands:\n");
         print_string("  dir           - List files\n");
         print_string("  drives        - List all drives\n");
@@ -121,8 +128,10 @@ void shell_execute(char* cmd) {
         print_string("  boot          - Show boot screen\n");
         print_string("  help          - This help\n");
     } else if (mystrcmp(command, "ver") == 0) {
+        serial_print("MiniDOS Version 0.1 (MVP) - FAT16\n");
         print_string("MiniDOS Version 0.1 (MVP) - FAT16\n");
     } else if (mystrcmp(command, "mem") == 0) {
+        serial_print("System Memory: ");
         print_string("System Memory: ");
         // Convert to string manually
         char mem_str[16];
@@ -146,6 +155,8 @@ void shell_execute(char* cmd) {
             }
         }
         mem_str[i] = '\0';
+        serial_print(mem_str);
+        serial_print(" KB\n");
         print_string(mem_str);
         print_string(" KB\n");
     } else if (mystrcmp(command, "cls") == 0) {

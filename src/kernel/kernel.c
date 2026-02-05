@@ -101,6 +101,7 @@ void kernel_main() {
     serial_print(" KB\n");
     
     cls();
+    serial_print("MiniDOS v0.1 Kernel Started\n");
     print_string("MiniDOS v0.1 Kernel Started\n");
     print_string("Welcome to your minimalist 16/32-bit OS.\n\n");
     

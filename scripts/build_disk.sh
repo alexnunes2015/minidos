@@ -24,10 +24,32 @@ dd if="$ROOT_DIR/build/boot.bin" of="$DISK_IMG" bs=1 skip=510 seek=510 count=2 c
 dd if="$ROOT_DIR/build/stage2.bin" of="$DISK_IMG" bs=512 seek=1 conv=notrunc status=none 2>/dev/null
 dd if="$ROOT_DIR/build/kernel.bin" of="$DISK_IMG" bs=512 seek=3 conv=notrunc status=none 2>/dev/null
 
-# Write boot logo if it exists (at sector 21, after kernel)
+# Write boot logo raw data if it exists (fixed LBA for bootloader)
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
-    echo "Writing boot logo to sector 21..."
-    dd if="$ROOT_DIR/assets/bootlogo/logo.raw" of="$DISK_IMG" bs=512 seek=21 conv=notrunc status=none 2>/dev/null
+    PAL_SECTOR=98
+    LOGO_SECTOR=100
+    KERNEL_BYTES=$(stat -c%s "$ROOT_DIR/build/kernel.bin")
+    KERNEL_SECTORS=$(((KERNEL_BYTES + 511) / 512))
+    KERNEL_END=$((3 + KERNEL_SECTORS))
+
+    if [ "$KERNEL_END" -ge "$PAL_SECTOR" ]; then
+        echo "WARNING: Kernel overlaps boot logo area. Increase logo LBA or shrink kernel." >&2
+    else
+        if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
+            echo "Writing boot logo palette to sector $PAL_SECTOR..."
+            dd if="$ROOT_DIR/assets/bootlogo/logo.pal" of="$DISK_IMG" bs=512 seek="$PAL_SECTOR" conv=notrunc status=none 2>/dev/null
+        fi
+
+        LOGO_BYTES=$(stat -c%s "$ROOT_DIR/assets/bootlogo/logo.raw")
+        LOGO_SECTORS=$(((LOGO_BYTES + 511) / 512))
+        LOGO_END=$((LOGO_SECTOR + LOGO_SECTORS))
+        if [ "$LOGO_END" -ge 2048 ]; then
+            echo "WARNING: Boot logo would overlap the FAT partition. Skipping raw logo write." >&2
+        else
+            echo "Writing boot logo to sector $LOGO_SECTOR..."
+            dd if="$ROOT_DIR/assets/bootlogo/logo.raw" of="$DISK_IMG" bs=512 seek="$LOGO_SECTOR" conv=notrunc status=none 2>/dev/null
+        fi
+    fi
 fi
 
 echo "Formatting partition and adding README..."

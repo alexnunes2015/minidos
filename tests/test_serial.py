@@ -127,7 +127,6 @@ def main():
             "Entering main loop",
             "MiniDOS Shell Ready",
             "MiniDOS v0.1 Kernel Started",
-            "A:>",
         ]
         matched = _read_until(
             proc, kernel_ready, args.ready_timeout, echo=not args.quiet

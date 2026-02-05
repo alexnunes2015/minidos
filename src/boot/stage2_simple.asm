@@ -5,12 +5,32 @@
 [BITS 16]
 [ORG 0x7E00]
 
+%define PAL_LBA       98
+%define PAL_SECTORS   2
+%define PAL_BUFFER    0x0600
+%define LOGO_LBA      100
+%define LOGO_SECTORS  125
+%define LOGO_BUF_SEG  0x9000
+
 start:
     ; Save drive number from DL
     mov [drive_number], dl
     
     ; Initialize serial
     call serial_init
+
+    ; Query BIOS drive geometry for CHS translation
+    mov ah, 0x08
+    mov dl, [drive_number]
+    int 0x13
+    jc .geom_done
+    and cl, 0x3F            ; sectors per track (lower 6 bits)
+    xor ch, ch
+    mov [sectors_per_track], cx
+    movzx cx, dh            ; heads = max head + 1
+    inc cx
+    mov [heads], cx
+.geom_done:
     
     ; Read base memory from BIOS (0x413 contains KB of base memory, max 640KB)
     xor eax, eax
@@ -100,18 +120,65 @@ start:
 ; Show boot logo in VGA Mode 13h
 show_boot_logo:
     pusha
+    push ds
+    push es
+    cld
+    
+    xor ax, ax
+    mov ds, ax
     
     ; Switch to VGA Mode 13h (320x200, 256 colors)
     mov ax, 0x0013
     int 0x10
+
+    ; Load palette into low memory buffer
+    xor ax, ax
+    mov es, ax
+    mov bx, PAL_BUFFER
+    mov ax, PAL_LBA
+    mov cx, PAL_SECTORS
+.pal_loop:
+    call disk_read
+    add bx, 512
+    inc ax
+    loop .pal_loop
+
+    ; Program VGA DAC palette (256 * 3 bytes)
+    mov dx, 0x3C8
+    xor al, al
+    out dx, al
+    mov dx, 0x3C9
+    mov si, PAL_BUFFER
+    mov cx, 256*3
+.pal_out:
+    lodsb
+    out dx, al
+    loop .pal_out
     
-    ; Fill screen with blue (color 9)
+    ; Load raw logo from disk into a safe buffer first
+    mov ax, LOGO_BUF_SEG
+    mov es, ax
+    xor bx, bx
+    mov ax, LOGO_LBA
+    mov cx, LOGO_SECTORS
+.logo_loop:
+    call disk_read
+    add bx, 512
+    inc ax
+    loop .logo_loop
+
+    ; Copy logo buffer to VGA memory
+    mov ax, LOGO_BUF_SEG
+    mov ds, ax
     mov ax, 0xA000
     mov es, ax
+    xor si, si
     xor di, di
-    mov ax, 0x0909          ; Blue in both bytes
-    mov cx, 32000           ; 64000 bytes / 2
-    rep stosw
+    mov cx, 64000
+    rep movsb
+    
+    xor ax, ax
+    mov ds, ax
     
     ; SHORT delay - 3 seconds
     mov bp, 9
@@ -135,6 +202,8 @@ show_boot_logo:
     mov ax, 0x0003
     int 0x10
     
+    pop es
+    pop ds
     popa
     ret
 
@@ -177,27 +246,45 @@ serial_print_string:
 .done:
     ret
 
-; Read disk sector
+; Read disk sector (LBA if supported, CHS fallback)
 ; AX = LBA sector, CX = 1
 disk_read:
     pusha
-    
-    ; Convert LBA to CHS
+
+    ; Try INT 13h extensions (LBA)
+    push ds
+    xor dx, dx
+    mov ds, dx
+    mov word [dap + 2], 1       ; sectors
+    mov word [dap + 4], bx      ; offset
+    mov word [dap + 6], es      ; segment
+    mov word [dap + 8], ax      ; LBA low
+    mov word [dap + 10], dx     ; LBA high (0)
+    mov dword [dap + 12], 0     ; LBA upper 32
+    mov si, dap
+    mov dl, [drive_number]
+    mov ah, 0x42
+    int 0x13
+    pop ds
+    jnc .done
+
+    ; CHS fallback
     xor dx, dx
     div word [sectors_per_track]
     inc dx
     mov cl, dl              ; Sector
-    
+
     xor dx, dx
     div word [heads]
     mov dh, dl              ; Head
     mov ch, al              ; Cylinder
-    
+
     mov al, 1               ; Sector count
     mov dl, [drive_number]
     mov ah, 0x02            ; Read
     int 0x13
-    
+
+.done:
     popa
     ret
 
@@ -233,6 +320,15 @@ gdt_desc:
 drive_number: db 0x80
 sectors_per_track: dw 63
 heads: dw 255
+
+dap:
+    db 0x10                 ; size of DAP
+    db 0x00                 ; reserved
+    dw 0x0001               ; sectors to read
+    dw 0x0000               ; offset
+    dw 0x0000               ; segment
+    dd 0x00000000           ; LBA low
+    dd 0x00000000           ; LBA high
 
 msg_start: db '[Stage2] Started', 0x0D, 0x0A, 0
 msg_before_logo: db '[Stage2] Displaying boot logo...', 0x0D, 0x0A, 0
