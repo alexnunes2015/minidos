@@ -1,9 +1,16 @@
-; MiniDOS Second-Stage Bootloader
+; MiniDOS Simple Second-Stage Bootloader
 ; Loaded by MBR at 0x7E00
-; Shows boot logo, then loads kernel
+; Just loads kernel and jumps to it
 
 [BITS 16]
 [ORG 0x7E00]
+
+%define PAL_LBA       98
+%define PAL_SECTORS   2
+%define PAL_BUFFER    0x0600
+%define LOGO_LBA      100
+%define LOGO_SECTORS  125
+%define LOGO_BUF_SEG  0x9000
 
 start:
     ; Save drive number from DL
@@ -11,14 +18,37 @@ start:
     
     ; Initialize serial
     call serial_init
+
+    ; Query BIOS drive geometry for CHS translation
+    mov ah, 0x08
+    mov dl, [drive_number]
+    int 0x13
+    jc .geom_done
+    and cl, 0x3F            ; sectors per track (lower 6 bits)
+    xor ch, ch
+    mov [sectors_per_track], cx
+    movzx cx, dh            ; heads = max head + 1
+    inc cx
+    mov [heads], cx
+.geom_done:
     
-    ; Read memory size from BIOS (0x413 contains KB of base memory)
+    ; Read base memory from BIOS (0x413 contains KB of base memory, max 640KB)
     xor eax, eax
-    mov ax, [0x413]         ; Read KB from BIOS data area
-    mov [0x500], ax         ; Store at safe location (0x500) for kernel to read
+    mov ax, [0x413]         ; Read base memory KB from BIOS data area
+    mov [0x500], ax         ; Store at 0x500 for kernel
     
-    ; Serial debug message
-    mov si, msg_stage2_start
+    ; Read extended memory using INT 0x15, AH=0x88 (returns KB above 1MB)
+    xor eax, eax
+    mov ah, 0x88
+    int 0x15
+    jc .no_extended         ; If carry set, no extended memory
+    mov [0x502], ax         ; Store extended memory KB at 0x502
+    jmp .mem_done
+.no_extended:
+    mov word [0x502], 0     ; No extended memory
+.mem_done:
+    
+    mov si, msg_start
     call serial_print_string
     
     ; Show boot logo
@@ -27,22 +57,18 @@ start:
     
     call show_boot_logo
     
-    ; Serial debug after logo
-    mov si, msg_stage2_logo_done
+    mov si, msg_after_logo
     call serial_print_string
     
     ; Load kernel from sector 3 (after MBR + stage2)
     mov si, msg_loading_kernel
-    call print_string
-    
-    mov si, msg_loading_kernel_serial
     call serial_print_string
     
     mov cx, 20              ; Load 20 sectors
     mov ax, 3               ; Start at sector 3
-    mov bx, 0x1000
+    mov bx, 0x0100           ; Load at 0x0100:0000 = physical 0x1000
     mov es, bx
-    xor bx, bx              ; Target: 0x1000:0000 = physical 0x10000
+    xor bx, bx
 
 .load_loop:
     push cx
@@ -64,16 +90,10 @@ start:
     add bx, 512
     loop .load_loop
 
-    mov si, msg_ok
-    call print_string
-    
-    mov si, msg_kernel_loaded
+    mov si, msg_loaded
     call serial_print_string
 
     ; Enable A20 Line
-    mov si, msg_enabling_a20
-    call serial_print_string
-    
     mov ax, 0x2401
     int 0x15
     in al, 0x92
@@ -81,52 +101,87 @@ start:
     out 0x92, al
 
     ; Disable interrupts and load GDT
-    mov si, msg_loading_gdt
+    mov si, msg_pm
     call serial_print_string
     
     cli
     
-    ; Create a temporary GDT descriptor that points to absolute address
-    mov eax, gdt_start
-    mov ecx, 0x7E00
-    add eax, ecx            ; EAX = 0x7E00 + offset of gdt_start
-    
-    ; Build GDT descriptor on the stack temporarily
-    mov word [temp_gdt_descriptor], gdt_end - gdt_start - 1
-    mov dword [temp_gdt_descriptor + 2], eax
-    
-    ; Load GDT
-    lgdt [temp_gdt_descriptor]
+    ; Load GDT (absolute address via ORG 0x7E00)
+    lgdt [gdt_desc]
 
-    mov si, msg_entering_pm
-    call serial_print_string
-    
     ; Set Protected Mode bit
     mov eax, cr0
     or eax, 1
     mov cr0, eax
 
-    ; Far jump to 32-bit mode
+    ; Far jump to flush prefetch and enter 32-bit mode
     jmp 0x08:pm_start
 
 ; Show boot logo in VGA Mode 13h
 show_boot_logo:
     pusha
+    push ds
+    push es
+    cld
+    
+    xor ax, ax
+    mov ds, ax
     
     ; Switch to VGA Mode 13h (320x200, 256 colors)
     mov ax, 0x0013
     int 0x10
+
+    ; Load palette into low memory buffer
+    xor ax, ax
+    mov es, ax
+    mov bx, PAL_BUFFER
+    mov ax, PAL_LBA
+    mov cx, PAL_SECTORS
+.pal_loop:
+    call disk_read
+    add bx, 512
+    inc ax
+    loop .pal_loop
+
+    ; Program VGA DAC palette (256 * 3 bytes)
+    mov dx, 0x3C8
+    xor al, al
+    out dx, al
+    mov dx, 0x3C9
+    mov si, PAL_BUFFER
+    mov cx, 256*3
+.pal_out:
+    lodsb
+    out dx, al
+    loop .pal_out
     
-    ; Fill screen with blue (color 9)
+    ; Load raw logo from disk into a safe buffer first
+    mov ax, LOGO_BUF_SEG
+    mov es, ax
+    xor bx, bx
+    mov ax, LOGO_LBA
+    mov cx, LOGO_SECTORS
+.logo_loop:
+    call disk_read
+    add bx, 512
+    inc ax
+    loop .logo_loop
+
+    ; Copy logo buffer to VGA memory
+    mov ax, LOGO_BUF_SEG
+    mov ds, ax
     mov ax, 0xA000
     mov es, ax
+    xor si, si
     xor di, di
-    mov ax, 0x0909          ; Blue in both bytes
-    mov cx, 32000           ; 64000 bytes / 2
-    rep stosw
+    mov cx, 64000
+    rep movsb
     
-    ; SHORT delay - 1 second
-    mov bp, 3
+    xor ax, ax
+    mov ds, ax
+    
+    ; SHORT delay - 3 seconds
+    mov bp, 9
 .delay_outer3:
     mov cx, 0xFFFF
 .delay_outer2:
@@ -147,21 +202,22 @@ show_boot_logo:
     mov ax, 0x0003
     int 0x10
     
+    pop es
+    pop ds
     popa
     ret
 
-; Serial port debug functions
+; Serial port functions (COM1)
 serial_init:
-    ; Initialize COM1 (0x3F8) - 38400 baud
-    mov dx, 0x3F8 + 3       ; Line control register
-    mov al, 0x80            ; Enable DLAB
+    mov dx, 0x3F8 + 3       ; Line control
+    mov al, 0x80            ; DLAB
     out dx, al
     
-    mov dx, 0x3F8           ; Divisor low byte
-    mov al, 0x03            ; 38400 baud
+    mov dx, 0x3F8
+    mov al, 0x03            ; Divisor = 3 (38400 baud)
     out dx, al
     
-    mov dx, 0x3F8 + 1       ; Divisor high byte
+    mov dx, 0x3F8 + 1
     xor al, al
     out dx, al
     
@@ -177,7 +233,6 @@ serial_print_string:
     or al, al
     jz .done
     
-    ; Send character
     mov dx, 0x3F8 + 5       ; Line status
 .wait:
     in al, dx
@@ -191,42 +246,45 @@ serial_print_string:
 .done:
     ret
 
-; Print string to screen
-print_string:
-    pusha
-.loop:
-    lodsb
-    or al, al
-    jz .done
-    mov ah, 0x0E
-    int 0x10
-    jmp .loop
-.done:
-    popa
-    ret
-
-; Read disk sector
-; AX = LBA sector, ES:BX = buffer, CX = sector count
+; Read disk sector (LBA if supported, CHS fallback)
+; AX = LBA sector, CX = 1
 disk_read:
     pusha
-    push cx
-    
-    ; Convert LBA to CHS (simplified for hard disk)
+
+    ; Try INT 13h extensions (LBA)
+    push ds
+    xor dx, dx
+    mov ds, dx
+    mov word [dap + 2], 1       ; sectors
+    mov word [dap + 4], bx      ; offset
+    mov word [dap + 6], es      ; segment
+    mov word [dap + 8], ax      ; LBA low
+    mov word [dap + 10], dx     ; LBA high (0)
+    mov dword [dap + 12], 0     ; LBA upper 32
+    mov si, dap
+    mov dl, [drive_number]
+    mov ah, 0x42
+    int 0x13
+    pop ds
+    jnc .done
+
+    ; CHS fallback
     xor dx, dx
     div word [sectors_per_track]
     inc dx
     mov cl, dl              ; Sector
-    
+
     xor dx, dx
     div word [heads]
     mov dh, dl              ; Head
     mov ch, al              ; Cylinder
-    
-    pop ax                  ; Sector count to AL
+
+    mov al, 1               ; Sector count
     mov dl, [drive_number]
-    mov ah, 0x02            ; Read sectors
+    mov ah, 0x02            ; Read
     int 0x13
-    
+
+.done:
     popa
     ret
 
@@ -241,12 +299,12 @@ pm_start:
     mov ss, ax
     mov esp, 0x90000
 
-    ; Jump to kernel - simple absolute jump
-    jmp 0x10000
+    ; Jump to kernel entry (linked at 0x1000)
+    jmp 0x1000
 
 ; --- Data ---
 gdt_start:
-    dq 0x0
+    dq 0x0                  ; NULL descriptor
 gdt_code:
     dw 0xFFFF, 0x0000
     db 0x00, 0b10011010, 0b11001111, 0x00
@@ -255,26 +313,29 @@ gdt_data:
     db 0x00, 0b10010010, 0b11001111, 0x00
 gdt_end:
 
-gdt_descriptor:
+gdt_desc:
     dw gdt_end - gdt_start - 1
-    dd gdt_start            ; Offset within this file = label address
+    dd gdt_start
 
 drive_number: db 0x80
 sectors_per_track: dw 63
 heads: dw 255
-temp_gdt_descriptor: dd 0, 0  ; Space for temporary GDT descriptor
 
-msg_stage2: db 'Stage2 loaded', 0x0D, 0x0A, 0
-msg_stage2_start: db '[Stage2] Starting...', 0x0D, 0x0A, 0
-msg_before_logo: db '[Stage2] Entering show_boot_logo...', 0x0D, 0x0A, 0
-msg_stage2_logo_done: db '[Stage2] Logo done, loading kernel...', 0x0D, 0x0A, 0
-msg_loading_kernel_serial: db '[Stage2] Loading kernel from sector 3...', 0x0D, 0x0A, 0
-msg_kernel_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
-msg_enabling_a20: db '[Stage2] Enabling A20 line...', 0x0D, 0x0A, 0
-msg_loading_gdt: db '[Stage2] Loading GDT...', 0x0D, 0x0A, 0
-msg_entering_pm: db '[Stage2] Entering protected mode...', 0x0D, 0x0A, 0
-msg_after_logo: db 'Logo done', 0x0D, 0x0A, 0
-msg_loading_kernel: db 'Loading kernel', 0
-msg_ok: db ' Done', 0x0D, 0x0A, 0
+dap:
+    db 0x10                 ; size of DAP
+    db 0x00                 ; reserved
+    dw 0x0001               ; sectors to read
+    dw 0x0000               ; offset
+    dw 0x0000               ; segment
+    dd 0x00000000           ; LBA low
+    dd 0x00000000           ; LBA high
 
-times 1024-($-$$) db 0      ; Pad to 2 sectors (1024 bytes)
+msg_start: db '[Stage2] Started', 0x0D, 0x0A, 0
+msg_before_logo: db '[Stage2] Displaying boot logo...', 0x0D, 0x0A, 0
+msg_after_logo: db '[Stage2] Logo displayed', 0x0D, 0x0A, 0
+msg_loading_kernel: db '[Stage2] Loading kernel...', 0x0D, 0x0A, 0
+msg_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
+msg_pm: db '[Stage2] Entering PM...', 0x0D, 0x0A, 0
+msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
+
+times 1024-($-$$) db 0      ; Pad to 1024 bytes
