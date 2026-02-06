@@ -19,6 +19,22 @@ start:
     ; Initialize serial
     call serial_init
 
+    ; Detect INT 13h extensions (LBA). Skip for floppy drives.
+    mov byte [lba_supported], 0
+    mov dl, [drive_number]
+    cmp dl, 0x80
+    jb .lba_check_done
+    mov ah, 0x41
+    mov bx, 0x55AA
+    int 0x13
+    jc .lba_check_done
+    cmp bx, 0xAA55
+    jne .lba_check_done
+    test cx, 0x0001
+    jz .lba_check_done
+    mov byte [lba_supported], 1
+.lba_check_done:
+
     ; Query BIOS drive geometry for CHS translation
     mov ah, 0x08
     mov dl, [drive_number]
@@ -30,7 +46,16 @@ start:
     movzx cx, dh            ; heads = max head + 1
     inc cx
     mov [heads], cx
+    mov byte [geom_ok], 1
 .geom_done:
+    ; Fallback geometry for floppy if BIOS query failed
+    cmp byte [geom_ok], 0
+    jne .geom_done2
+    cmp byte [drive_number], 0x80
+    jae .geom_done2
+    mov word [sectors_per_track], 18
+    mov word [heads], 2
+.geom_done2:
     
     ; Read base memory from BIOS (0x413 contains KB of base memory, max 640KB)
     xor eax, eax
@@ -60,12 +85,12 @@ start:
     mov si, msg_after_logo
     call serial_print_string
     
-    ; Load kernel from sector 3 (after MBR + stage2)
+    ; Load kernel from sector 5 (after MBR + stage2)
     mov si, msg_loading_kernel
     call serial_print_string
     
     mov cx, 20              ; Load 20 sectors
-    mov ax, 3               ; Start at sector 3
+    mov ax, 5               ; Start at sector 5
     mov bx, 0x0100           ; Load at 0x0100:0000 = physical 0x1000
     mov es, bx
     xor bx, bx
@@ -154,6 +179,9 @@ show_boot_logo:
     lodsb
     out dx, al
     loop .pal_out
+
+    ; Pick blue/white indices from the loaded palette for the bar
+    call pick_bar_colors
     
     ; Load raw logo from disk into a safe buffer first
     mov ax, LOGO_BUF_SEG
@@ -179,24 +207,93 @@ show_boot_logo:
     
     xor ax, ax
     mov ds, ax
-    
-    ; SHORT delay - 3 seconds
-    mov bp, 9
-.delay_outer3:
-    mov cx, 0xFFFF
-.delay_outer2:
-    push cx
-    mov cx, 0x0FFF
-.delay_inner:
-    nop
-    nop
-    nop
-    nop
-    loop .delay_inner
-    pop cx
-    loop .delay_outer2
-    dec bp
-    jnz .delay_outer3
+
+    ; Animate a 5px bottom blue/white gradient bar for a fixed 5 seconds
+    ; BIOS tick at 0x046C increments ~18.2 times per second
+    mov bx, [0x046C]        ; start tick
+    mov [bar_start_tick], bx
+    mov [bar_last_tick], bx
+    mov word [bar_frame], 0 ; frame offset (0..319)
+.frame_wait:
+    mov ax, [0x046C]
+    cmp ax, [bar_last_tick]
+    je .frame_wait          ; wait for next tick
+    mov [bar_last_tick], ax ; update last tick
+
+    ; Check elapsed ticks (5 seconds ≈ 91 ticks)
+    mov cx, ax
+    sub cx, [bar_start_tick]
+    cmp cx, 91
+    jae .frame_done
+
+    ; Compute gradient start for this frame
+    mov ax, [bar_frame]
+    mov bl, al
+    and bl, 0x07
+    mov [bar_xmod_start], bl
+    xor dx, dx
+    mov bx, 5
+    div bx                  ; ax = frame/5, dx = frame%5
+    mov [bar_intensity_start], al
+    mov [bar_step_start], dl
+
+    ; Draw 5 rows at y=195..199 (320x200)
+    xor bp, bp              ; row = 0
+.bar_row:
+    mov di, 62400           ; 195 * 320
+    mov ax, bp
+    mov cx, 320
+    mul cx                  ; ax = row * 320
+    add di, ax
+
+    mov si, bayer8x8
+    mov ax, bp
+    and ax, 0x0007
+    shl ax, 3               ; row_base = (row & 7) * 8
+    add si, ax              ; SI = row pointer
+
+    mov al, [bar_intensity_start]
+    mov ah, [bar_step_start]
+    xor bx, bx
+    mov bl, [bar_xmod_start]
+    mov cx, 320
+.bar_col:
+    mov dl, [si + bx]       ; bayer value 0..63
+    cmp dl, al
+    jb .bar_white
+    mov dl, [bar_blue_idx]
+    jmp .bar_store
+.bar_white:
+    mov dl, [bar_white_idx]
+.bar_store:
+    mov [es:di], dl
+    inc di
+
+    inc bl
+    and bl, 0x07
+    inc ah
+    cmp ah, 5
+    jb .bar_next
+    xor ah, ah
+    inc al
+    and al, 0x3F
+.bar_next:
+    loop .bar_col
+
+    inc bp
+    cmp bp, 5
+    jb .bar_row
+
+    ; Advance frame offset (wrap at 320)
+    mov ax, [bar_frame]
+    inc ax
+    cmp ax, 320
+    jb .bar_frame_store
+    xor ax, ax
+.bar_frame_store:
+    mov [bar_frame], ax
+    jmp .frame_wait
+.frame_done:
     
     ; Return to text mode
     mov ax, 0x0003
@@ -226,6 +323,50 @@ serial_init:
     out dx, al
     ret
 
+; Pick palette indices for blue and white (from loaded palette at PAL_BUFFER)
+pick_bar_colors:
+    pusha
+    push ds
+    xor ax, ax
+    mov ds, ax
+
+    mov si, PAL_BUFFER
+    xor bx, bx              ; index
+    mov byte [bar_white_score], 0
+    mov byte [bar_white_idx], 0
+    mov byte [bar_blue_score], 0
+    mov byte [bar_blue_idx], 0
+.color_loop:
+    mov al, [si]            ; R
+    mov ah, [si + 1]        ; G
+    mov dl, [si + 2]        ; B
+
+    mov dh, al              ; sum = R+G+B
+    add dh, ah
+    add dh, dl
+    cmp dh, [bar_white_score]
+    jbe .check_blue
+    mov [bar_white_score], dh
+    mov [bar_white_idx], bl
+.check_blue:
+    mov dh, dl              ; score = (B*2) + 128 - R - G
+    add dh, dl
+    add dh, 128
+    sub dh, al
+    sub dh, ah
+    cmp dh, [bar_blue_score]
+    jbe .next_color
+    mov [bar_blue_score], dh
+    mov [bar_blue_idx], bl
+.next_color:
+    add si, 3
+    inc bl
+    jnz .color_loop
+
+    pop ds
+    popa
+    ret
+
 serial_print_string:
     ; SI = string
 .loop:
@@ -251,6 +392,9 @@ serial_print_string:
 disk_read:
     pusha
 
+    cmp byte [lba_supported], 0
+    je .chs_fallback
+
     ; Try INT 13h extensions (LBA)
     push ds
     xor dx, dx
@@ -268,7 +412,11 @@ disk_read:
     pop ds
     jnc .done
 
+    ; LBA failed (likely floppy or unsupported) -> disable and fallback to CHS
+    mov byte [lba_supported], 0
+
     ; CHS fallback
+.chs_fallback:
     xor dx, dx
     div word [sectors_per_track]
     inc dx
@@ -318,6 +466,8 @@ gdt_desc:
     dd gdt_start
 
 drive_number: db 0x80
+lba_supported: db 0
+geom_ok: db 0
 sectors_per_track: dw 63
 heads: dw 255
 
@@ -338,4 +488,25 @@ msg_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
 msg_pm: db '[Stage2] Entering PM...', 0x0D, 0x0A, 0
 msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
 
-times 1024-($-$$) db 0      ; Pad to 1024 bytes
+bar_frame: db 0, 0
+bar_start_tick: db 0, 0
+bar_last_tick: db 0, 0
+bar_white_idx: db 0
+bar_blue_idx: db 0
+bar_white_score: db 0
+bar_blue_score: db 0
+bar_intensity_start: db 0
+bar_step_start: db 0
+bar_xmod_start: db 0
+
+bayer8x8:
+    db 0, 48, 12, 60, 3, 51, 15, 63
+    db 32, 16, 44, 28, 35, 19, 47, 31
+    db 8, 56, 4, 52, 11, 59, 7, 55
+    db 40, 24, 36, 20, 43, 27, 39, 23
+    db 2, 50, 14, 62, 1, 49, 13, 61
+    db 34, 18, 46, 30, 33, 17, 45, 29
+    db 10, 58, 6, 54, 9, 57, 5, 53
+    db 42, 26, 38, 22, 41, 25, 37, 21
+
+times 2048-($-$$) db 0      ; Pad to 2048 bytes

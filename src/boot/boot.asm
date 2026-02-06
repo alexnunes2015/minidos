@@ -45,8 +45,8 @@ start:
     mov si, msg_boot
     call print_string
 
-    ; Load Stage2 bootloader from sector 1 (1024 bytes = 2 sectors)
-    mov cx, 2               ; Load 2 sectors
+    ; Load Stage2 bootloader from sector 1 (2048 bytes = 4 sectors)
+    mov cx, 4               ; Load 4 sectors
     mov ax, 1               ; Start at sector 1
     mov bx, 0x0000
     mov es, bx

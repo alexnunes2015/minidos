@@ -22,7 +22,7 @@ echo "Writing bootloader, stage2, and kernel..."
 dd if="$ROOT_DIR/build/boot.bin" of="$DISK_IMG" bs=1 count=446 conv=notrunc status=none 2>/dev/null
 dd if="$ROOT_DIR/build/boot.bin" of="$DISK_IMG" bs=1 skip=510 seek=510 count=2 conv=notrunc status=none 2>/dev/null
 dd if="$ROOT_DIR/build/stage2.bin" of="$DISK_IMG" bs=512 seek=1 conv=notrunc status=none 2>/dev/null
-dd if="$ROOT_DIR/build/kernel.bin" of="$DISK_IMG" bs=512 seek=3 conv=notrunc status=none 2>/dev/null
+dd if="$ROOT_DIR/build/kernel.bin" of="$DISK_IMG" bs=512 seek=5 conv=notrunc status=none 2>/dev/null
 
 # Write boot logo raw data if it exists (fixed LBA for bootloader)
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
@@ -30,7 +30,7 @@ if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
     LOGO_SECTOR=100
     KERNEL_BYTES=$(stat -c%s "$ROOT_DIR/build/kernel.bin")
     KERNEL_SECTORS=$(((KERNEL_BYTES + 511) / 512))
-    KERNEL_END=$((3 + KERNEL_SECTORS))
+    KERNEL_END=$((5 + KERNEL_SECTORS))
 
     if [ "$KERNEL_END" -ge "$PAL_SECTOR" ]; then
         echo "WARNING: Kernel overlaps boot logo area. Increase logo LBA or shrink kernel." >&2
