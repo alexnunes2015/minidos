@@ -7,7 +7,7 @@ O sistema estava entrando em loop de reinicialização devido a problemas na cri
 
 ### Diagnóstico
 O problema ocorria porque:
-1. O `mformat` criava o sistema de arquivos FAT12
+1. O `mformat` criava o sistema de arquivos FAT
 2. Depois escrevíamos o bootloader com `dd`
 3. O `mformat` com opção `-B` tentava preservar o BPB, mas havia incompatibilidades
 
@@ -17,7 +17,7 @@ Invertemos a ordem das operações no Makefile:
 ```makefile
 # ORDEM CORRETA:
 1. Criar imagem vazia
-2. Formatar com mformat (cria FAT12 com bootloader genérico)
+2. Formatar com mformat (cria FAT com bootloader genérico)
 3. Copiar arquivos para FAT (mcopy)
 4. Escrever kernel no setor 33
 5. Sobrescrever bootloader completo (512 bytes)

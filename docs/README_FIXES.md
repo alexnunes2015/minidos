@@ -7,7 +7,7 @@
    - Corrigido removendo o offset extra 0x7C00
 
 ### 2. **Kernel Não Carregado Corretamente**
-   - O kernel estava sendo copiado para o FAT12 mas o bootloader lia do setor 33
+   - O kernel estava sendo copiado para o FAT (imagem formatada) mas o bootloader lia do setor 33
    - Agora o kernel é escrito diretamente no setor 33 com `dd`
 
 ### 3. **Transição para Modo Protegido Otimizada**

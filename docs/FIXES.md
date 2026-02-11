@@ -22,7 +22,7 @@ gdt_descriptor:
 ```
 
 ### 2. Kernel Não Estava Sendo Carregado do Local Correto
-**Problema**: O bootloader tentava ler o kernel do setor 33, mas o `Makefile` usava `mcopy` para copiar o kernel para o sistema de arquivos FAT12, colocando-o em clusters aleatórios.
+**Problema**: O bootloader tentava ler o kernel do setor 33, mas o `Makefile` usava `mcopy` para copiar o kernel para o sistema de arquivos FAT, colocando-o em clusters aleatórios.
 
 **Solução**: Modificado o `Makefile` para escrever o kernel diretamente no setor 33 usando `dd`:
 

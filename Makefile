@@ -17,7 +17,6 @@ KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCE
 KERNEL_ASM = $(BUILD_DIR)/entry.o
 
 # Ensure drive.o is included
-KERNEL_OBJECTS := $(filter-out $(BUILD_DIR)/fat12.o, $(KERNEL_OBJECTS))
 
 .PHONY: all clean run
 

@@ -9,7 +9,7 @@ MiniDOS is a minimalist operating system inspired by the MS-DOS era. It targets 
 The system starts in 16-bit Real Mode, which is the native state of an x86 CPU upon power-on. Assembly (NASM) is used because:
 - BIOS interrupts (INT 13h for disk, INT 10h for video) are only available in Real Mode.
 - We must respect the 512-byte limit of the boot sector.
-- A BIOS Parameter Block (BPB) is required for FAT12 compatibility.
+- A BIOS Parameter Block (BPB) is required for FAT compatibility.
 
 ### 2. C Kernel and Memory Model
 As requested, C++ is not directly used due to the lack of a standard runtime in real mode. The kernel is written in C with the following constraints:
@@ -20,7 +20,7 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 ### 3. Drivers
 - **Video**: Direct memory access to `0xB8000` is used. This is faster and more flexible than BIOS calls once outside of the bootloader.
 - **Keyboard**: Polling I/O port `0x60` and `0x64`. While interrupts (IRQ1) are better, polling is sufficient for a single-tasking MVP shell.
-- **File System**: FAT12 is implemented minimally. It reads the Root Directory to list files. Disk access logic (the `disk_read_sector` bridge) is the primary abstraction point between the kernel and the hardware (BIOS or FDC).
+- **File System**: FAT16 is implemented. It reads the root directory and directories, and loads files using cluster chains.
 
 ## Trade-offs
 - **Polling vs Interrupts**: Polling was chosen for keyboard input to keep the kernel simple and avoid IDT (Interrupt Descriptor Table) setup in the first version.

@@ -1,5 +1,5 @@
 ; MiniDOS Bootloader
-; Targets 1.44MB Floppy (FAT12)
+; Targets BIOS-compatible disk with FAT BPB
 
 [BITS 16]
 [ORG 0x7C00]
@@ -7,7 +7,7 @@
 jmp short start
 nop
 
-; FAT12 BPB (BIOS Parameter Block)
+; FAT BPB (BIOS Parameter Block)
 bdb_oem:                    db 'MSWIN4.1'           ; 8 bytes
 bdb_bytes_per_sector:       dw 512
 bdb_sectors_per_cluster:    db 1
@@ -28,7 +28,7 @@ ebr_drive_number:           db 0                    ; 0x00 floppy, 0x80 hdd
 ebr_signature:              db 0x29
 ebr_volume_id:              db 0x12, 0x34, 0x56, 0x78
 ebr_volume_label:           db 'MINIDOS    '        ; 11 bytes
-ebr_system_id:              db 'FAT12   '           ; 8 bytes
+ebr_system_id:              db 'FAT16   '           ; 8 bytes
 
 start:
     ; SAVE BOOT DRIVE
