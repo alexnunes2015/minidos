@@ -42,6 +42,11 @@ typedef struct {
 void fat16_init();
 void fat16_set_drive(int drive_letter);
 void fat16_list_root();
+void fat16_list_dir(unsigned int dir_cluster);
 int fat16_read_file(const char* filename, unsigned char* buffer, int max_size);
+int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, unsigned char* buffer, int max_size);
+int fat16_find_dir_cluster(unsigned int dir_cluster, const char* name, unsigned int* out_cluster);
+int fat16_get_parent_cluster(unsigned int dir_cluster, unsigned int* out_cluster);
+int fat16_mkdir(unsigned int dir_cluster, const char* name);
 
 #endif

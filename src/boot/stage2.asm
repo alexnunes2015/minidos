@@ -89,11 +89,15 @@ start:
     mov si, msg_loading_kernel
     call serial_print_string
     
-    mov cx, 20              ; Load 20 sectors
     mov ax, 5               ; Start at sector 5
     mov bx, 0x0100           ; Load at 0x0100:0000 = physical 0x1000
     mov es, bx
     xor bx, bx
+
+    mov cx, [kernel_sectors] ; Load kernel sectors (patched at build time)
+    cmp cx, 0
+    jne .load_loop
+    mov cx, 32               ; Fallback if not patched
 
 .load_loop:
     push cx
@@ -470,6 +474,7 @@ lba_supported: db 0
 geom_ok: db 0
 sectors_per_track: dw 63
 heads: dw 255
+kernel_sectors: dw 32
 
 dap:
     db 0x10                 ; size of DAP

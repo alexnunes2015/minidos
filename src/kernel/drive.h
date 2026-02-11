@@ -41,6 +41,9 @@ DriveInfo* drive_get_info(int drive_letter);
 // Read sector from a specific drive
 int drive_read_sector(int drive_letter, unsigned int lba, unsigned char* buffer);
 
+// Write sector to a specific drive
+int drive_write_sector(int drive_letter, unsigned int lba, unsigned char* buffer);
+
 // Get current drive letter
 int drive_get_current();
 

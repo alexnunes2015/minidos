@@ -152,6 +152,17 @@ int drive_read_sector(int drive_letter, unsigned int lba, unsigned char* buffer)
     return disk_read_lba_from_disk(info->disk_id, absolute_lba, buffer);
 }
 
+int drive_write_sector(int drive_letter, unsigned int lba, unsigned char* buffer) {
+    DriveInfo* info = drive_get_info(drive_letter);
+    if (!info) {
+        return -1;
+    }
+
+    unsigned int absolute_lba = info->lba_start + lba;
+
+    return disk_write_lba_from_disk(info->disk_id, absolute_lba, buffer);
+}
+
 int drive_get_current() {
     if (current_drive < 0 || current_drive >= MAX_DRIVES || !drives[current_drive].valid) {
         for (int i = 0; i < MAX_DRIVES; i++) {

@@ -19,6 +19,34 @@ EOF
 
 # Write bootloader and kernel
 echo "Writing bootloader, stage2, and kernel..."
+
+# Patch kernel sector count into stage2 (auto)
+KERNEL_BYTES=$(stat -c%s "$ROOT_DIR/build/kernel.bin")
+KERNEL_SECTORS=$(((KERNEL_BYTES + 511) / 512))
+STAGE2_LST="$ROOT_DIR/build/stage2.lst"
+STAGE2_BIN="$ROOT_DIR/build/stage2.bin"
+
+if [ -f "$STAGE2_LST" ] && [ -f "$STAGE2_BIN" ]; then
+    OFFSET_HEX=$(awk '/kernel_sectors:/ {print $1; exit}' "$STAGE2_LST")
+    if [ -n "$OFFSET_HEX" ]; then
+        python3 - "$STAGE2_BIN" "$OFFSET_HEX" "$KERNEL_SECTORS" <<'PY'
+import sys
+
+bin_path, offset_hex, sectors = sys.argv[1:4]
+offset = int(offset_hex, 16)
+value = int(sectors) & 0xFFFF
+
+with open(bin_path, "r+b") as f:
+    f.seek(offset)
+    f.write(bytes((value & 0xFF, (value >> 8) & 0xFF)))
+PY
+        echo "Patched stage2 kernel_sectors=$KERNEL_SECTORS at 0x$OFFSET_HEX"
+    else
+        echo "WARNING: kernel_sectors label not found in stage2.lst" >&2
+    fi
+else
+    echo "WARNING: stage2.lst or stage2.bin missing; kernel sectors not patched" >&2
+fi
 dd if="$ROOT_DIR/build/boot.bin" of="$DISK_IMG" bs=1 count=446 conv=notrunc status=none 2>/dev/null
 dd if="$ROOT_DIR/build/boot.bin" of="$DISK_IMG" bs=1 skip=510 seek=510 count=2 conv=notrunc status=none 2>/dev/null
 dd if="$ROOT_DIR/build/stage2.bin" of="$DISK_IMG" bs=512 seek=1 conv=notrunc status=none 2>/dev/null

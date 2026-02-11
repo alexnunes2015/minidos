@@ -1,15 +1,21 @@
 #!/bin/bash
 # Convert BMP to raw VGA Mode 13h format (320x200, 256 colors)
 
+FORCE=0
+if [ "$1" = "--force" ] || [ "$1" = "-f" ]; then
+    FORCE=1
+    shift
+fi
+
 INPUT="$1"
 OUTPUT="${2:-logo.raw}"
 PALETTE_OUTPUT="${OUTPUT%.raw}.pal"
 TMP_BMP="$(mktemp --suffix=.bmp)"
 
 if [ -z "$INPUT" ]; then
-    echo "Usage: $0 <input.bmp> [output.raw]"
+    echo "Usage: $0 [--force|-f] <input_image> [output.raw]"
     echo ""
-    echo "Input must be a BMP file (any size)"
+    echo "Input can be any image supported by ImageMagick"
     echo "Output will be 320x200, 256 colors raw format for VGA Mode 13h"
     exit 1
 fi
@@ -26,7 +32,11 @@ if ! command -v convert &> /dev/null; then
     exit 1
 fi
 
-echo "Converting '$INPUT' to VGA Mode 13h format..."
+if [ "$FORCE" -eq 1 ]; then
+    echo "Converting '$INPUT' to VGA Mode 13h format (force)..."
+else
+    echo "Converting '$INPUT' to VGA Mode 13h format..."
+fi
 
 # Convert to 320x200, 256 colors, 8-bit paletted BMP (uncompressed)
 convert "$INPUT" \
@@ -44,11 +54,12 @@ if [ $? -ne 0 ]; then
 fi
 
 # Extract raw pixel data and 256-color palette (VGA DAC format)
-python3 - "$TMP_BMP" "$OUTPUT" "$PALETTE_OUTPUT" <<'PY'
+python3 - "$TMP_BMP" "$OUTPUT" "$PALETTE_OUTPUT" "$FORCE" <<'PY'
 import struct
 import sys
 
-bmp_path, out_raw, out_pal = sys.argv[1:4]
+bmp_path, out_raw, out_pal, force_flag = sys.argv[1:5]
+force = force_flag == "1"
 data = open(bmp_path, "rb").read()
 
 if data[0:2] != b"BM":
@@ -61,7 +72,10 @@ height = struct.unpack_from("<i", data, 22)[0]
 bpp = struct.unpack_from("<H", data, 28)[0]
 
 if bpp != 8:
-    raise SystemExit(f"Expected 8bpp BMP, got {bpp}")
+    if not force:
+        raise SystemExit(f"Expected 8bpp BMP, got {bpp}")
+    else:
+        print(f"Warning: Expected 8bpp BMP, got {bpp}. Forcing conversion.")
 
 palette_bytes = offset - 14 - dib_size
 palette = data[14 + dib_size : 14 + dib_size + palette_bytes]

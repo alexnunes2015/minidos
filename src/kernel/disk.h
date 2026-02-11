@@ -13,4 +13,7 @@ int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned ch
 // Write a sector to LBA (future)
 int disk_write_lba(unsigned int lba, unsigned char* buffer);
 
+// Write a sector to specific disk (0=primary master, 1=primary slave, etc)
+int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer);
+
 #endif

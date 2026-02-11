@@ -35,7 +35,7 @@ $(BUILD_DIR)/boot.bin: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
 
 # Second-stage bootloader
 $(BUILD_DIR)/stage2.bin: $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
-	$(AS) -f bin $< -o $@
+	$(AS) -f bin $< -o $@ -l $(BUILD_DIR)/stage2.lst
 
 # Kernel entry point (assembly)
 $(BUILD_DIR)/entry.o: $(KERNEL_DIR)/entry.asm | $(BUILD_DIR)
