@@ -2,8 +2,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-    /* The kernel will be loaded at 0x0100:0000 which is physical 0x1000 */
-    . = 0x1000;
+    /* The kernel is loaded at 0x1000:0000 which is physical 0x10000 */
+    . = 0x10000;
 
     .text : {
         *(.text.boot)        /* Entry point FIRST */

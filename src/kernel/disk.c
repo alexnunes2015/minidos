@@ -50,6 +50,10 @@ static inline void io_wait() {
     outb(0x80, 0);
 }
 
+static int ata_has_error() {
+    return (inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_ERR) != 0;
+}
+
 static int ata_wait_bsy() {
     unsigned int timeout = 1000000;
     while ((inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_BSY) && timeout > 0) {
@@ -103,6 +107,10 @@ int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned c
 }
 
 int disk_read_lba(unsigned int lba, unsigned char* buffer) {
+    if (!buffer) {
+        return -1;
+    }
+
     // Wait for drive to be ready
     if (ata_wait_bsy() != 0) {
         return -1;
@@ -136,7 +144,7 @@ int disk_read_lba(unsigned int lba, unsigned char* buffer) {
     }
     
     // Check for errors
-    if (inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_ERR) {
+    if (ata_has_error()) {
         return -1;
     }
     
@@ -147,6 +155,10 @@ int disk_read_lba(unsigned int lba, unsigned char* buffer) {
 }
 
 int disk_write_lba(unsigned int lba, unsigned char* buffer) {
+    if (!buffer) {
+        return -1;
+    }
+
     if (ata_wait_bsy() != 0) {
         return -1;
     }
@@ -173,16 +185,21 @@ int disk_write_lba(unsigned int lba, unsigned char* buffer) {
         return -1;
     }
 
-    if (inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_ERR) {
+    if (ata_has_error()) {
         return -1;
     }
 
     outsw(ATA_PRIMARY_IO + ATA_DATA, (const unsigned short*)buffer, 256);
 
     outb(ATA_PRIMARY_IO + ATA_COMMAND, ATA_CMD_CACHE_FLUSH);
-    ata_wait_bsy();
+    if (ata_wait_bsy() != 0) {
+        return -1;
+    }
+    if (ata_wait_drdy() != 0) {
+        return -1;
+    }
 
-    if (inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_ERR) {
+    if (ata_has_error()) {
         return -1;
     }
 

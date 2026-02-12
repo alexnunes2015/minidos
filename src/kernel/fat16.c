@@ -199,7 +199,93 @@ static int fat16_match_name(const char* filename, const FAT16_DirectoryEntry* en
     return 1;
 }
 
+static int fat16_entry_is_visible(const FAT16_DirectoryEntry* entry) {
+    if (entry->name[0] == 0x00) return 0;
+    if (entry->name[0] == 0xE5) return 0;
+    if (entry->attributes & FAT16_ATTR_VOLUME_ID) return 0;
+    if ((entry->attributes & 0x0F) == 0x0F) return 0;
+    return 1;
+}
+
+static void fat16_build_display_name(const FAT16_DirectoryEntry* entry, char out[13]) {
+    int pos = 0;
+    int name_end = 8;
+    int ext_end = 11;
+
+    while (name_end > 0 && entry->name[name_end - 1] == ' ') name_end--;
+    while (ext_end > 8 && entry->name[ext_end - 1] == ' ') ext_end--;
+
+    for (int i = 0; i < name_end; i++) {
+        out[pos++] = (char)entry->name[i];
+    }
+    if (ext_end > 8) {
+        out[pos++] = '.';
+        for (int i = 8; i < ext_end; i++) {
+            out[pos++] = (char)entry->name[i];
+        }
+    }
+    out[pos] = '\0';
+}
+
+static char fat16_upper_char(char c) {
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - 'a' + 'A');
+    }
+    return c;
+}
+
+static int fat16_wildcard_match(const char* pattern, const char* text) {
+    if (*pattern == '\0') {
+        return *text == '\0';
+    }
+    if (*pattern == '*') {
+        while (*(pattern + 1) == '*') {
+            pattern++;
+        }
+        if (*(pattern + 1) == '\0') {
+            return 1;
+        }
+        const char* t = text;
+        while (*t) {
+            if (fat16_wildcard_match(pattern + 1, t)) {
+                return 1;
+            }
+            t++;
+        }
+        return fat16_wildcard_match(pattern + 1, t);
+    }
+    if (*text == '\0') {
+        return 0;
+    }
+    if (*pattern == '?') {
+        return fat16_wildcard_match(pattern + 1, text + 1);
+    }
+    if (fat16_upper_char(*pattern) != fat16_upper_char(*text)) {
+        return 0;
+    }
+    return fat16_wildcard_match(pattern + 1, text + 1);
+}
+
+static int fat16_match_pattern(const char* pattern, const FAT16_DirectoryEntry* entry) {
+    char display_name[13];
+
+    if (!pattern || pattern[0] == '\0') {
+        return 1;
+    }
+    if ((pattern[0] == '*' && pattern[1] == '\0') ||
+        (pattern[0] == '*' && pattern[1] == '.' && pattern[2] == '*' && pattern[3] == '\0')) {
+        return 1;
+    }
+
+    fat16_build_display_name(entry, display_name);
+    return fat16_wildcard_match(pattern, display_name);
+}
+
 void fat16_list_root() {
+    fat16_list_root_filtered(0);
+}
+
+void fat16_list_root_filtered(const char* pattern) {
     int root_start = get_root_dir_start();
     int root_sectors = ((bpb.root_entries * 32) + (SECTOR_SIZE - 1)) / SECTOR_SIZE;
 
@@ -211,10 +297,9 @@ void fat16_list_root() {
         FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
 
         for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
-            if (entries[i].name[0] == 0x00) return; // End of directory
-            if (entries[i].name[0] == 0xE5) continue; // Deleted
-            if (entries[i].attributes & FAT16_ATTR_VOLUME_ID) continue;
-            if ((entries[i].attributes & 0x0F) == 0x0F) continue; // LFN
+            if (entries[i].name[0] == 0x00) return;
+            if (!fat16_entry_is_visible(&entries[i])) continue;
+            if (!fat16_match_pattern(pattern, &entries[i])) continue;
 
             print_entry_name(&entries[i]);
 
@@ -230,8 +315,12 @@ void fat16_list_root() {
 }
 
 void fat16_list_dir(unsigned int dir_cluster) {
+    fat16_list_dir_filtered(dir_cluster, 0);
+}
+
+void fat16_list_dir_filtered(unsigned int dir_cluster, const char* pattern) {
     if (dir_cluster == 0) {
-        fat16_list_root();
+        fat16_list_root_filtered(pattern);
         return;
     }
 
@@ -249,9 +338,8 @@ void fat16_list_dir(unsigned int dir_cluster) {
 
             for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
                 if (entries[i].name[0] == 0x00) return;
-                if (entries[i].name[0] == 0xE5) continue;
-                if (entries[i].attributes & FAT16_ATTR_VOLUME_ID) continue;
-                if ((entries[i].attributes & 0x0F) == 0x0F) continue;
+                if (!fat16_entry_is_visible(&entries[i])) continue;
+                if (!fat16_match_pattern(pattern, &entries[i])) continue;
 
                 print_entry_name(&entries[i]);
 
@@ -503,7 +591,7 @@ static int fat16_write_dir_entry_at(int sector, int index, const FAT16_Directory
     return 1;
 }
 
-static int fat16_alloc_cluster(unsigned short* out_cluster) {
+static int fat16_alloc_cluster_internal(unsigned short* out_cluster) {
     if (!out_cluster) return 0;
     unsigned int total_clusters = get_total_clusters();
     unsigned int max_cluster = total_clusters + 1;
@@ -590,7 +678,7 @@ static int fat16_init_dir_entries(unsigned short dir_cluster, unsigned int paren
     return 1;
 }
 
-static int fat16_add_dir_entry(unsigned int dir_cluster, const unsigned char name_83[11], unsigned short cluster, unsigned char attributes) {
+static int fat16_add_dir_entry_internal(unsigned int dir_cluster, const unsigned char name_83[11], unsigned short cluster, unsigned int file_size, unsigned char attributes) {
     FAT16_DirectoryEntry entry;
     for (int i = 0; i < 11; i++) {
         entry.name[i] = name_83[i];
@@ -605,7 +693,7 @@ static int fat16_add_dir_entry(unsigned int dir_cluster, const unsigned char nam
     entry.modified_time = 0;
     entry.modified_date = 0;
     entry.cluster_low = cluster;
-    entry.file_size = 0;
+    entry.file_size = file_size;
 
     if (dir_cluster == 0) {
         int sector = 0;
@@ -645,7 +733,7 @@ static int fat16_add_dir_entry(unsigned int dir_cluster, const unsigned char nam
     }
 
     unsigned short new_cluster = 0;
-    if (!fat16_alloc_cluster(&new_cluster)) {
+    if (!fat16_alloc_cluster_internal(&new_cluster)) {
         return 0;
     }
 
@@ -673,7 +761,7 @@ static int fat16_add_dir_entry(unsigned int dir_cluster, const unsigned char nam
     return 1;
 }
 
-static int fat16_find_entry_in_dir(
+static int fat16_find_entry_internal(
     unsigned int dir_cluster,
     const char* name,
     FAT16_DirectoryEntry* out_entry,
@@ -775,7 +863,7 @@ static int fat16_is_directory_empty(unsigned short dir_cluster) {
     return 1;
 }
 
-static int fat16_free_cluster_chain(unsigned short start_cluster) {
+static int fat16_free_cluster_chain_internal(unsigned short start_cluster) {
     if (start_cluster < 2) {
         return 0;
     }
@@ -797,6 +885,318 @@ static int fat16_free_cluster_chain(unsigned short start_cluster) {
     return 1;
 }
 
+int fat16_find_entry(unsigned int dir_cluster, const char* name, FAT16_DirectoryEntry* out_entry, int* out_sector, int* out_index) {
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+    return fat16_find_entry_internal(dir_cluster, name, out_entry, out_sector, out_index);
+}
+
+int fat16_create_entry(unsigned int dir_cluster, const char* name, unsigned short first_cluster, unsigned int file_size, unsigned char attributes) {
+    unsigned char name_83[11];
+    FAT16_DirectoryEntry existing;
+
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+    if (!fat16_format_name(name, name_83)) {
+        return 0;
+    }
+    if (fat16_find_entry_internal(dir_cluster, name, &existing, 0, 0)) {
+        return 0;
+    }
+
+    return fat16_add_dir_entry_internal(dir_cluster, name_83, first_cluster, file_size, attributes);
+}
+
+int fat16_update_entry(unsigned int dir_cluster, const char* old_name, const char* new_name, unsigned short first_cluster, unsigned int file_size, unsigned char attributes) {
+    FAT16_DirectoryEntry current_entry;
+    FAT16_DirectoryEntry conflict_entry;
+    unsigned char name_83[11];
+    int sector = 0;
+    int index = 0;
+    int same_name = 1;
+
+    if (!old_name || !new_name || old_name[0] == '\0' || new_name[0] == '\0') {
+        return 0;
+    }
+    if (!fat16_format_name(new_name, name_83)) {
+        return 0;
+    }
+    if (!fat16_find_entry_internal(dir_cluster, old_name, &current_entry, &sector, &index)) {
+        return 0;
+    }
+
+    for (int i = 0; i < 11; i++) {
+        if (current_entry.name[i] != name_83[i]) {
+            same_name = 0;
+            break;
+        }
+    }
+    if (!same_name && fat16_find_entry_internal(dir_cluster, new_name, &conflict_entry, 0, 0)) {
+        return 0;
+    }
+
+    if (disk_read_sector(sector, sector_buffer) != 0) {
+        return 0;
+    }
+
+    FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+    for (int i = 0; i < 11; i++) {
+        entries[index].name[i] = name_83[i];
+    }
+    entries[index].attributes = attributes;
+    entries[index].cluster_high = 0;
+    entries[index].cluster_low = first_cluster;
+    entries[index].file_size = file_size;
+
+    return disk_write_sector(sector, sector_buffer) == 0;
+}
+
+int fat16_delete_entry(unsigned int dir_cluster, const char* name, int free_cluster_chain) {
+    FAT16_DirectoryEntry target;
+    int sector = 0;
+    int index = 0;
+
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '\0') {
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        return 0;
+    }
+    if (!fat16_find_entry_internal(dir_cluster, name, &target, &sector, &index)) {
+        return 0;
+    }
+    if (target.attributes & FAT16_ATTR_DIRECTORY) {
+        return 0;
+    }
+    if (free_cluster_chain && target.cluster_low >= 2) {
+        if (!fat16_free_cluster_chain_internal(target.cluster_low)) {
+            return 0;
+        }
+    }
+
+    if (disk_read_sector(sector, sector_buffer) != 0) {
+        return 0;
+    }
+    FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+    entries[index].name[0] = 0xE5;
+
+    return disk_write_sector(sector, sector_buffer) == 0;
+}
+
+int fat16_delete_matching(unsigned int dir_cluster, const char* pattern, int free_cluster_chain, int* deleted_count) {
+    int deleted = 0;
+
+    if (!pattern || pattern[0] == '\0') {
+        if (deleted_count) *deleted_count = 0;
+        return 0;
+    }
+
+    if (dir_cluster == 0) {
+        int root_start = get_root_dir_start();
+        int root_sectors = get_root_dir_sectors();
+
+        for (int sector = 0; sector < root_sectors; sector++) {
+            int abs_sector = root_start + sector;
+            if (disk_read_sector(abs_sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+            for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
+                if (entries[i].name[0] == 0x00) {
+                    if (deleted_count) *deleted_count = deleted;
+                    return 1;
+                }
+                if (!fat16_entry_is_visible(&entries[i])) continue;
+                if (entries[i].attributes & FAT16_ATTR_DIRECTORY) continue;
+                if (!fat16_match_pattern(pattern, &entries[i])) continue;
+
+                if (free_cluster_chain && entries[i].cluster_low >= 2) {
+                    if (!fat16_free_cluster_chain_internal(entries[i].cluster_low)) {
+                        return 0;
+                    }
+                }
+                entries[i].name[0] = 0xE5;
+                deleted++;
+            }
+
+            if (disk_write_sector(abs_sector, sector_buffer) != 0) {
+                return 0;
+            }
+        }
+
+        if (deleted_count) *deleted_count = deleted;
+        return 1;
+    }
+
+    unsigned int cluster = dir_cluster;
+    int data_start = get_data_start();
+
+    while (cluster >= 2 && cluster < 0xFFF8) {
+        for (int s = 0; s < bpb.sectors_per_cluster; s++) {
+            int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
+            if (disk_read_sector(sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+            for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
+                if (entries[i].name[0] == 0x00) {
+                    if (deleted_count) *deleted_count = deleted;
+                    return 1;
+                }
+                if (!fat16_entry_is_visible(&entries[i])) continue;
+                if (entries[i].attributes & FAT16_ATTR_DIRECTORY) continue;
+                if (!fat16_match_pattern(pattern, &entries[i])) continue;
+
+                if (free_cluster_chain && entries[i].cluster_low >= 2) {
+                    if (!fat16_free_cluster_chain_internal(entries[i].cluster_low)) {
+                        return 0;
+                    }
+                }
+                entries[i].name[0] = 0xE5;
+                deleted++;
+            }
+
+            if (disk_write_sector(sector, sector_buffer) != 0) {
+                return 0;
+            }
+        }
+
+        cluster = fat16_get_next_cluster((unsigned short)cluster);
+    }
+
+    if (deleted_count) *deleted_count = deleted;
+    return 1;
+}
+
+int fat16_copy_file(unsigned int dir_cluster, const char* src_name, const char* dst_name) {
+    FAT16_DirectoryEntry src_entry;
+    FAT16_DirectoryEntry dst_entry;
+    unsigned char src_83[11];
+    unsigned char dst_83[11];
+    unsigned int remaining = 0;
+    unsigned int max_steps = 0;
+    unsigned short src_cluster = 0;
+    unsigned short dst_first_cluster = 0;
+    unsigned short dst_cluster = 0;
+    int data_start = get_data_start();
+
+    if (!src_name || !dst_name || src_name[0] == '\0' || dst_name[0] == '\0') {
+        return 0;
+    }
+    if (!fat16_format_name(src_name, src_83) || !fat16_format_name(dst_name, dst_83)) {
+        return 0;
+    }
+
+    int same_name = 1;
+    for (int i = 0; i < 11; i++) {
+        if (src_83[i] != dst_83[i]) {
+            same_name = 0;
+            break;
+        }
+    }
+    if (same_name) {
+        return 0;
+    }
+
+    if (!fat16_find_entry_internal(dir_cluster, src_name, &src_entry, 0, 0)) {
+        return 0;
+    }
+    if (src_entry.attributes & FAT16_ATTR_DIRECTORY) {
+        return 0;
+    }
+    if (fat16_find_entry_internal(dir_cluster, dst_name, &dst_entry, 0, 0)) {
+        return 0;
+    }
+
+    remaining = src_entry.file_size;
+    src_cluster = src_entry.cluster_low;
+    max_steps = get_total_clusters() + 2;
+
+    if (remaining > 0) {
+        if (src_cluster < 2) {
+            return 0;
+        }
+        if (!fat16_alloc_cluster_internal(&dst_first_cluster)) {
+            return 0;
+        }
+        dst_cluster = dst_first_cluster;
+    }
+
+    while (remaining > 0 && max_steps-- > 0) {
+        int src_sector_base = data_start + (src_cluster - 2) * bpb.sectors_per_cluster;
+        int dst_sector_base = data_start + (dst_cluster - 2) * bpb.sectors_per_cluster;
+
+        for (int s = 0; s < bpb.sectors_per_cluster && remaining > 0; s++) {
+            unsigned int bytes_this_sector = remaining > SECTOR_SIZE ? SECTOR_SIZE : remaining;
+
+            if (disk_read_sector(src_sector_base + s, sector_buffer) != 0) {
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+            if (disk_write_sector(dst_sector_base + s, sector_buffer) != 0) {
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+
+            remaining -= bytes_this_sector;
+        }
+
+        if (remaining > 0) {
+            unsigned short next_src = fat16_get_next_cluster(src_cluster);
+            unsigned short next_dst = 0;
+
+            if (next_src < 2 || next_src >= 0xFFF8) {
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+            if (!fat16_alloc_cluster_internal(&next_dst)) {
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+            if (!fat16_write_fat_entry(dst_cluster, next_dst)) {
+                fat16_free_cluster_chain_internal(next_dst);
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+            if (!fat16_write_fat_entry(next_dst, 0xFFFF)) {
+                fat16_free_cluster_chain_internal(next_dst);
+                if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+                return 0;
+            }
+
+            src_cluster = next_src;
+            dst_cluster = next_dst;
+        }
+    }
+
+    if (remaining != 0) {
+        if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+        return 0;
+    }
+
+    if (!fat16_create_entry(dir_cluster, dst_name, dst_first_cluster, src_entry.file_size, src_entry.attributes)) {
+        if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
+        return 0;
+    }
+
+    return 1;
+}
+
+int fat16_alloc_cluster(unsigned short* out_cluster) {
+    return fat16_alloc_cluster_internal(out_cluster);
+}
+
+int fat16_free_cluster_chain(unsigned short start_cluster) {
+    return fat16_free_cluster_chain_internal(start_cluster);
+}
+
 int fat16_mkdir(unsigned int dir_cluster, const char* name) {
     unsigned char name_83[11];
     if (!fat16_format_name(name, name_83)) {
@@ -809,7 +1209,7 @@ int fat16_mkdir(unsigned int dir_cluster, const char* name) {
     }
 
     unsigned short new_cluster = 0;
-    if (!fat16_alloc_cluster(&new_cluster)) {
+    if (!fat16_alloc_cluster_internal(&new_cluster)) {
         return 0;
     }
 
@@ -821,7 +1221,7 @@ int fat16_mkdir(unsigned int dir_cluster, const char* name) {
         return 0;
     }
 
-    if (!fat16_add_dir_entry(dir_cluster, name_83, new_cluster, FAT16_ATTR_DIRECTORY)) {
+    if (!fat16_add_dir_entry_internal(dir_cluster, name_83, new_cluster, 0, FAT16_ATTR_DIRECTORY)) {
         return 0;
     }
 
@@ -842,7 +1242,7 @@ int fat16_rmdir(unsigned int dir_cluster, const char* name) {
     FAT16_DirectoryEntry target;
     int sector = 0;
     int index = 0;
-    if (!fat16_find_entry_in_dir(dir_cluster, name, &target, &sector, &index)) {
+    if (!fat16_find_entry_internal(dir_cluster, name, &target, &sector, &index)) {
         return 0;
     }
     if (!(target.attributes & FAT16_ATTR_DIRECTORY)) {
@@ -856,7 +1256,7 @@ int fat16_rmdir(unsigned int dir_cluster, const char* name) {
         return 0;
     }
 
-    if (!fat16_free_cluster_chain(target.cluster_low)) {
+    if (!fat16_free_cluster_chain_internal(target.cluster_low)) {
         return 0;
     }
 

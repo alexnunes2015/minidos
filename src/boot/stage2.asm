@@ -90,7 +90,7 @@ start:
     call serial_print_string
     
     mov ax, 5               ; Start at sector 5
-    mov bx, 0x0100           ; Load at 0x0100:0000 = physical 0x1000
+    mov bx, 0x1000           ; Load at 0x1000:0000 = physical 0x10000
     mov es, bx
     xor bx, bx
 
@@ -470,8 +470,8 @@ pm_start:
     mov ss, ax
     mov esp, 0x90000
 
-    ; Jump to kernel entry (linked at 0x1000)
-    jmp 0x1000
+    ; Jump to kernel entry (linked at 0x10000)
+    jmp 0x10000
 
 ; --- Data ---
 gdt_start:
