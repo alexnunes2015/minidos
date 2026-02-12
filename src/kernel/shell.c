@@ -254,6 +254,7 @@ void shell_execute(char* cmd) {
         shell_out_screen("  mem           - Show system memory\n");
         shell_out_screen("  cd <dir>      - Change directory\n");
         shell_out_screen("  mkdir <dir>   - Create directory\n");
+        shell_out_screen("  rmdir <dir>   - Remove empty directory\n");
         shell_out_screen("  dmesg         - Show debug ring buffer\n");
         shell_out_screen("  boot          - Show boot screen\n");
         shell_out_screen("  help          - This help\n");
@@ -382,7 +383,7 @@ void shell_execute(char* cmd) {
         }
     } else if (mystrcmp(command, "mkdir") == 0) {
         if (args[0] == '\0') {
-            print_string("Usage: mkdir <dirname>\n");
+            shell_out_both("Usage: mkdir <dirname>\n");
         } else {
             if (!fat16_initialized) {
                 fat16_set_drive(drive_get_current());
@@ -397,9 +398,31 @@ void shell_execute(char* cmd) {
             }
 
             if (fat16_mkdir(current_dir_cluster, args)) {
-                print_string("Directory created\n");
+                shell_out_both("Directory created\n");
             } else {
-                print_string("Failed to create directory\n");
+                shell_out_both("Failed to create directory\n");
+            }
+        }
+    } else if (mystrcmp(command, "rmdir") == 0) {
+        if (args[0] == '\0') {
+            shell_out_both("Usage: rmdir <dirname>\n");
+        } else {
+            if (!fat16_initialized) {
+                fat16_set_drive(drive_get_current());
+                fat16_init();
+                fat16_initialized = 1;
+            }
+
+            for (int j = 0; args[j]; j++) {
+                if (args[j] >= 'a' && args[j] <= 'z') {
+                    args[j] = args[j] - 'a' + 'A';
+                }
+            }
+
+            if (fat16_rmdir(current_dir_cluster, args)) {
+                shell_out_both("Directory removed\n");
+            } else {
+                shell_out_both("Failed to remove directory\n");
             }
         }
     } else if (cmd[0] != '\0') {

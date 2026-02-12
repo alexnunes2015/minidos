@@ -61,6 +61,10 @@ case "${1:-help}" in
     dir)
         run_test "Directory Listing C:" "c:" "dir"
         ;;
+
+    rmdir)
+        run_test "Create and Remove Empty Directory" "mkdir TESTDIR" "rmdir TESTDIR"
+        ;;
     
     type)
         run_test "Type File" "c:" "type hello.txt"
@@ -78,6 +82,7 @@ case "${1:-help}" in
         echo "  ver     - Test version command"
         echo "  drives  - Test drives command"
         echo "  dir     - Test directory listing"
+        echo "  rmdir   - Test create/remove empty directory"
         echo "  type    - Test file viewing"
         echo "  shell   - Test multiple commands"
         exit 1

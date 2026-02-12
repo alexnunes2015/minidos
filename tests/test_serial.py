@@ -150,6 +150,11 @@ def main():
             "c:": ["Switched to drive"],
             "d:": ["Switched to drive"],
             "e:": ["Switched to drive"],
+            "C:": ["Switched to drive"],
+            "D:": ["Switched to drive"],
+            "E:": ["Switched to drive"],
+            "mkdir TESTDIR": ["Directory created"],
+            "rmdir TESTDIR": ["Directory removed"],
         }
 
         commands = list(args.commands)

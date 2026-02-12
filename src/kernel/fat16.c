@@ -673,6 +673,130 @@ static int fat16_add_dir_entry(unsigned int dir_cluster, const unsigned char nam
     return 1;
 }
 
+static int fat16_find_entry_in_dir(
+    unsigned int dir_cluster,
+    const char* name,
+    FAT16_DirectoryEntry* out_entry,
+    int* out_sector,
+    int* out_index
+) {
+    if (dir_cluster == 0) {
+        int root_start = get_root_dir_start();
+        int root_sectors = get_root_dir_sectors();
+
+        for (int sector = 0; sector < root_sectors; sector++) {
+            int abs_sector = root_start + sector;
+            if (disk_read_sector(abs_sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+            for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
+                if (entries[i].name[0] == 0x00) return 0;
+                if (entries[i].name[0] == 0xE5) continue;
+                if (entries[i].attributes & FAT16_ATTR_VOLUME_ID) continue;
+                if ((entries[i].attributes & 0x0F) == 0x0F) continue;
+                if (!fat16_match_name(name, &entries[i])) continue;
+
+                if (out_entry) *out_entry = entries[i];
+                if (out_sector) *out_sector = abs_sector;
+                if (out_index) *out_index = (int)i;
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    unsigned int cluster = dir_cluster;
+    int data_start = get_data_start();
+
+    while (cluster >= 2 && cluster < 0xFFF8) {
+        for (int s = 0; s < bpb.sectors_per_cluster; s++) {
+            int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
+            if (disk_read_sector(sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+            for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
+                if (entries[i].name[0] == 0x00) return 0;
+                if (entries[i].name[0] == 0xE5) continue;
+                if (entries[i].attributes & FAT16_ATTR_VOLUME_ID) continue;
+                if ((entries[i].attributes & 0x0F) == 0x0F) continue;
+                if (!fat16_match_name(name, &entries[i])) continue;
+
+                if (out_entry) *out_entry = entries[i];
+                if (out_sector) *out_sector = sector;
+                if (out_index) *out_index = (int)i;
+                return 1;
+            }
+        }
+
+        cluster = fat16_get_next_cluster((unsigned short)cluster);
+    }
+
+    return 0;
+}
+
+static int fat16_is_directory_empty(unsigned short dir_cluster) {
+    if (dir_cluster < 2) {
+        return 0;
+    }
+
+    unsigned int cluster = dir_cluster;
+    int data_start = get_data_start();
+
+    while (cluster >= 2 && cluster < 0xFFF8) {
+        for (int s = 0; s < bpb.sectors_per_cluster; s++) {
+            int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
+            if (disk_read_sector(sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+            for (unsigned int i = 0; i < SECTOR_SIZE / sizeof(FAT16_DirectoryEntry); i++) {
+                if (entries[i].name[0] == 0x00) {
+                    return 1;
+                }
+                if (entries[i].name[0] == 0xE5) continue;
+                if ((entries[i].attributes & 0x0F) == 0x0F) continue;
+                if (entries[i].attributes & FAT16_ATTR_VOLUME_ID) continue;
+                if (fat16_match_name(".", &entries[i])) continue;
+                if (fat16_match_name("..", &entries[i])) continue;
+
+                return 0;
+            }
+        }
+
+        cluster = fat16_get_next_cluster((unsigned short)cluster);
+    }
+
+    return 1;
+}
+
+static int fat16_free_cluster_chain(unsigned short start_cluster) {
+    if (start_cluster < 2) {
+        return 0;
+    }
+
+    unsigned short cluster = start_cluster;
+    unsigned int max_steps = get_total_clusters() + 2;
+
+    while (cluster >= 2 && cluster < 0xFFF8 && max_steps-- > 0) {
+        unsigned short next = fat16_get_next_cluster(cluster);
+        if (!fat16_write_fat_entry(cluster, 0x0000)) {
+            return 0;
+        }
+        if (next == cluster) {
+            break;
+        }
+        cluster = next;
+    }
+
+    return 1;
+}
+
 int fat16_mkdir(unsigned int dir_cluster, const char* name) {
     unsigned char name_83[11];
     if (!fat16_format_name(name, name_83)) {
@@ -698,6 +822,50 @@ int fat16_mkdir(unsigned int dir_cluster, const char* name) {
     }
 
     if (!fat16_add_dir_entry(dir_cluster, name_83, new_cluster, FAT16_ATTR_DIRECTORY)) {
+        return 0;
+    }
+
+    return 1;
+}
+
+int fat16_rmdir(unsigned int dir_cluster, const char* name) {
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '\0') {
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        return 0;
+    }
+
+    FAT16_DirectoryEntry target;
+    int sector = 0;
+    int index = 0;
+    if (!fat16_find_entry_in_dir(dir_cluster, name, &target, &sector, &index)) {
+        return 0;
+    }
+    if (!(target.attributes & FAT16_ATTR_DIRECTORY)) {
+        return 0;
+    }
+    if (target.cluster_low < 2) {
+        return 0;
+    }
+
+    if (!fat16_is_directory_empty(target.cluster_low)) {
+        return 0;
+    }
+
+    if (!fat16_free_cluster_chain(target.cluster_low)) {
+        return 0;
+    }
+
+    if (disk_read_sector(sector, sector_buffer) != 0) {
+        return 0;
+    }
+    FAT16_DirectoryEntry* entries = (FAT16_DirectoryEntry*)sector_buffer;
+    entries[index].name[0] = 0xE5;
+    if (disk_write_sector(sector, sector_buffer) != 0) {
         return 0;
     }
 

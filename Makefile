@@ -74,6 +74,9 @@ test-drives:
 test-dir:
 	./tests/test.sh dir
 
+test-rmdir:
+	./tests/test.sh rmdir
+
 test-runner:
 	./tests/test_runner.sh "ver" "drives"
 
@@ -85,4 +88,4 @@ test-serial:
 
 test: test-help test-ver test-drives
 
-.PHONY: all clean run test test-help test-ver test-drives test-dir test-runner test-interactive test-serial
+.PHONY: all clean run test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
