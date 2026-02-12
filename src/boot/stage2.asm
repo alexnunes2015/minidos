@@ -134,11 +134,22 @@ start:
     call serial_print_string
     
     cli
+
+    mov si, msg_pm_cli
+    call serial_print_string
     
     ; Load GDT (absolute address via ORG 0x7E00)
     lgdt [gdt_desc]
 
+    mov si, msg_pm_lgdt
+    call serial_print_string
+
     ; Set Protected Mode bit
+    mov si, msg_pm_cr0
+    call serial_print_string
+    mov si, msg_before_jump
+    call serial_print_string
+    call serial_wait_tx_empty
     mov eax, cr0
     or eax, 1
     mov cr0, eax
@@ -391,6 +402,14 @@ serial_print_string:
 .done:
     ret
 
+serial_wait_tx_empty:
+    mov dx, 0x3F8 + 5
+.wait:
+    in al, dx
+    test al, 0x40
+    jz .wait
+    ret
+
 ; Read disk sector (LBA if supported, CHS fallback)
 ; AX = LBA sector, CX = 1
 disk_read:
@@ -491,6 +510,9 @@ msg_after_logo: db '[Stage2] Logo displayed', 0x0D, 0x0A, 0
 msg_loading_kernel: db '[Stage2] Loading kernel...', 0x0D, 0x0A, 0
 msg_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
 msg_pm: db '[Stage2] Entering PM...', 0x0D, 0x0A, 0
+msg_pm_cli: db '[Stage2] PM checkpoint 1: CLI', 0x0D, 0x0A, 0
+msg_pm_lgdt: db '[Stage2] PM checkpoint 2: LGDT', 0x0D, 0x0A, 0
+msg_pm_cr0: db '[Stage2] PM checkpoint 3: set CR0.PE', 0x0D, 0x0A, 0
 msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
 
 bar_frame: db 0, 0

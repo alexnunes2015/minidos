@@ -3,6 +3,7 @@
 #include "fat16.h"
 #include "drive.h"
 #include "serial.h"
+#include "logger.h"
 
 static void delay(unsigned int count) {
     for (volatile unsigned int i = 0; i < count; i++) {
@@ -29,6 +30,23 @@ static void show_boot_screen() {
 
     delay(10);
     cls();
+}
+
+static void shell_out_screen(const char* s) {
+    print_string(s);
+}
+
+static void shell_out_both(const char* s) {
+    print_string(s);
+    log_serial_raw(s);
+}
+
+static void shell_out_both_char(char c) {
+    char s[2];
+    s[0] = c;
+    s[1] = '\0';
+    print_char(c);
+    log_serial_raw(s);
 }
 
 static int mystrcmp(const char* s1, const char* s2) {
@@ -170,8 +188,7 @@ static void parse_command(char* cmd, char* command, char* args) {
 
 void shell_init() {
     show_boot_screen();
-    print_string("MiniDOS Shell Ready.\nType 'help' for commands.\n");
-    serial_print("MiniDOS Shell Ready.\nType 'help' for commands.\n");
+    shell_out_both("MiniDOS Shell Ready.\nType 'help' for commands.\n");
     fat16_set_drive(drive_get_current());
 }
 
@@ -214,15 +231,11 @@ void shell_execute(char* cmd) {
             current_dir_cluster = 0;
             path_reset(current_path);
             fat16_initialized = 0;
-            serial_print("Switched to drive ");
-            serial_putchar('A' + drive_letter);
-            serial_print(":\n");
-            print_string("Switched to drive ");
-            print_char('A' + drive_letter);
-            print_string(":\n");
+            shell_out_both("Switched to drive ");
+            shell_out_both_char('A' + drive_letter);
+            shell_out_both(":\n");
         } else {
-            serial_print("Invalid drive\n");
-            print_string("Invalid drive\n");
+            shell_out_both("Invalid drive\n");
         }
         return;
     }
@@ -232,53 +245,46 @@ void shell_execute(char* cmd) {
     parse_command(cmd, command, args);
     
     if (mystrcmp(command, "help") == 0) {
-        serial_print("Available commands:\n");
-        print_string("Available commands:\n");
-        print_string("  dir           - List files\n");
-        print_string("  drives        - List all drives\n");
-        print_string("  type <file>   - View file contents\n");
-        print_string("  cls           - Clear screen\n");
-        print_string("  ver           - Show version\n");
-        print_string("  mem           - Show system memory\n");
-        print_string("  cd <dir>      - Change directory\n");
-        print_string("  mkdir <dir>   - Create directory\n");
-        print_string("  boot          - Show boot screen\n");
-        print_string("  help          - This help\n");
+        shell_out_both("Available commands:\n");
+        shell_out_screen("  dir           - List files\n");
+        shell_out_screen("  drives        - List all drives\n");
+        shell_out_screen("  type <file>   - View file contents\n");
+        shell_out_screen("  cls           - Clear screen\n");
+        shell_out_screen("  ver           - Show version\n");
+        shell_out_screen("  mem           - Show system memory\n");
+        shell_out_screen("  cd <dir>      - Change directory\n");
+        shell_out_screen("  mkdir <dir>   - Create directory\n");
+        shell_out_screen("  dmesg         - Show debug ring buffer\n");
+        shell_out_screen("  boot          - Show boot screen\n");
+        shell_out_screen("  help          - This help\n");
     } else if (mystrcmp(command, "ver") == 0) {
-        serial_print("MiniDOS Version 0.1 (MVP) - FAT16\n");
-        print_string("MiniDOS Version 0.1 (MVP) - FAT16\n");
+        shell_out_both("MiniDOS Version 0.1 (MVP) - FAT16\n");
     } else if (mystrcmp(command, "mem") == 0) {
-        serial_print("System Memory: ");
-        print_string("System Memory: ");
+        shell_out_both("System Memory: ");
         char mem_str[24];
         unsigned int mem = g_memory_kb;
         format_memory(mem, mem_str);
-        serial_print(mem_str);
-        serial_print("\n");
-        print_string(mem_str);
-        print_string("\n");
+        shell_out_both(mem_str);
+        shell_out_both("\n");
     } else if (mystrcmp(command, "cls") == 0) {
         cls();
     } else if (mystrcmp(command, "boot") == 0) {
         show_boot_screen();
     } else if (mystrcmp(command, "drives") == 0) {
         drive_list_all();
+    } else if (mystrcmp(command, "dmesg") == 0) {
+        log_dump_buffer(LOG_DEST_BOTH);
     } else if (mystrcmp(command, "dir") == 0) {
         if (!fat16_initialized) {
             fat16_set_drive(drive_get_current());
             fat16_init();
             fat16_initialized = 1;
         }
-        serial_print("Directory of ");
-        print_string("Directory of ");
-        print_char('A' + drive_get_current());
-        print_string(":");
-        print_string(current_path);
-        print_string("\n\n");
-        serial_putchar('A' + drive_get_current());
-        serial_print(":");
-        serial_print(current_path);
-        serial_print("\n\n");
+        shell_out_both("Directory of ");
+        shell_out_both_char('A' + drive_get_current());
+        shell_out_both(":");
+        shell_out_both(current_path);
+        shell_out_both("\n\n");
         if (current_dir_cluster == 0) {
             fat16_list_root();
         } else {

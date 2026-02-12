@@ -27,7 +27,7 @@ STAGE2_LST="$ROOT_DIR/build/stage2.lst"
 STAGE2_BIN="$ROOT_DIR/build/stage2.bin"
 
 if [ -f "$STAGE2_LST" ] && [ -f "$STAGE2_BIN" ]; then
-    OFFSET_HEX=$(awk '/kernel_sectors:/ {print $1; exit}' "$STAGE2_LST")
+    OFFSET_HEX=$(awk '/kernel_sectors:/ {print $2; exit}' "$STAGE2_LST")
     if [ -n "$OFFSET_HEX" ]; then
         python3 - "$STAGE2_BIN" "$OFFSET_HEX" "$KERNEL_SECTORS" <<'PY'
 import sys

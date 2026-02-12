@@ -6,8 +6,7 @@
 #include "vga.h"
 #include "fat16.h"
 #include "serial.h"
-
-#define SERIAL_SHELL 1
+#include "logger.h"
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
@@ -60,7 +59,8 @@ static void show_boot_logo() {
 void kernel_main() {
     // Initialize serial for debugging FIRST
     serial_init();
-    serial_print("\n\n=== MiniDOS Kernel Starting ===\n");
+    log_init();
+    log_serial_raw("\n\n=== MiniDOS Kernel Starting ===\n");
     
     // Read memory size from BIOS data (stored by bootloader)
     unsigned short* base_mem_ptr = (unsigned short*)0x500;  // Base memory (up to 640KB)
@@ -76,7 +76,7 @@ void kernel_main() {
     }
     
     // Print memory size via serial
-    serial_print("System Memory: ");
+    log_serial_raw("System Memory: ");
     char mem_str[16];
     unsigned int mem = g_memory_kb;
     int idx = 0;
@@ -97,49 +97,50 @@ void kernel_main() {
         }
     }
     mem_str[idx] = '\0';
-    serial_print(mem_str);
-    serial_print(" KB\n");
+    log_serial_raw(mem_str);
+    log_serial_raw(" KB\n");
     
     cls();
-    serial_print("MiniDOS v0.1 Kernel Started\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
     print_string("MiniDOS v0.1 Kernel Started\n");
     print_string("Welcome to your minimalist 16/32-bit OS.\n\n");
     
-    serial_print("Initializing disk driver...\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Initializing disk driver...\n", LOG_DEST_SERIAL);
     disk_init();
-    serial_print("Disk driver initialized\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Disk driver initialized\n", LOG_DEST_SERIAL);
     
-    serial_print("Detecting drives and partitions...\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Detecting drives and partitions...\n", LOG_DEST_SERIAL);
     drive_init();
-    serial_print("Drive detection complete\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Drive detection complete\n", LOG_DEST_SERIAL);
     
-    serial_print("Starting shell...\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
     shell_init();
     
-    serial_print("Entering main loop\n");
+    log_write(LOG_LEVEL_INFO, "kernel", "Entering main loop\n", LOG_DEST_SERIAL);
     while(1) {
         shell_prompt();
         char command[64];
-            int use_serial = 0;
-            for (int i = 0; i < 50000; i++) {
-                if (serial_received()) {
-                    use_serial = 1;
-                    break;
-                }
-                __asm__ volatile ("nop");
+        int use_serial = 0;
+        for (int i = 0; i < 50000; i++) {
+            if (serial_received()) {
+                use_serial = 1;
+                break;
             }
+            __asm__ volatile ("nop");
+        }
 
-            if (use_serial) {
-            serial_print("[serial] ");
+        if (use_serial) {
+            log_write(LOG_LEVEL_DEBUG, "input", "reading command from serial\n", LOG_DEST_SERIAL);
             serial_read_line(command, 64);
-            serial_print("\n");
+            log_serial_raw("\n");
         } else {
+            log_write(LOG_LEVEL_TRACE, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
             keyboard_read_line(command, 64);
         }
         
-        serial_print("Command: ");
-        serial_print(command);
-        serial_print("\n");
+        log_write(LOG_LEVEL_INFO, "shell", "Command: ", LOG_DEST_SERIAL);
+        log_serial_raw(command);
+        log_serial_raw("\n");
         
         shell_execute(command);
     }

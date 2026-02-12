@@ -77,7 +77,7 @@ void serial_read_line(char* buffer, int max_len) {
             break;
         }
         buffer[i++] = c;
-        // Echo to screen/serial for visibility
+        // Echo back on serial only (keeps VGA output untouched)
         serial_putchar(c);
     }
     buffer[i] = '\0';
