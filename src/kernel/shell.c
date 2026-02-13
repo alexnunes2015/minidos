@@ -5,6 +5,11 @@
 #include "serial.h"
 #include "logger.h"
 #include "rtc.h"
+#include "keyboard.h"
+
+static unsigned int current_dir_cluster = 0;
+static char current_path[64] = "\\";
+static int fat16_initialized = 0;
 
 static void delay(unsigned int count) {
     for (volatile unsigned int i = 0; i < count; i++) {
@@ -421,15 +426,139 @@ static int has_wildcards(const char* s) {
     return 0;
 }
 
+typedef struct {
+    void (*puts)(const char* text);
+    char (*get_char)(void);
+} minidos_app_api_t;
+
+static void app_api_puts(const char* text) {
+    if (!text) {
+        return;
+    }
+    shell_out_both(text);
+}
+
+static char app_api_get_char(void) {
+    if (serial_received()) {
+        return serial_getchar();
+    }
+    return keyboard_get_char();
+}
+
+static int has_com_extension(const char* name) {
+    int len = 0;
+    while (name[len] != '\0') {
+        len++;
+    }
+
+    if (len < 4) {
+        return 0;
+    }
+
+    return (name[len - 4] == '.'
+        && name[len - 3] == 'c'
+        && name[len - 2] == 'o'
+        && name[len - 1] == 'm');
+}
+
+static int build_com_filename(const char* command, char* out, int out_size) {
+    int i = 0;
+    if (out_size <= 0) {
+        return 0;
+    }
+
+    while (command[i] != '\0') {
+        if (i >= out_size - 1) {
+            return 0;
+        }
+        out[i] = command[i];
+        i++;
+    }
+    out[i] = '\0';
+
+    if (has_com_extension(out)) {
+        return 1;
+    }
+
+    if (i + 4 >= out_size) {
+        return 0;
+    }
+    out[i++] = '.';
+    out[i++] = 'c';
+    out[i++] = 'o';
+    out[i++] = 'm';
+    out[i] = '\0';
+    return 1;
+}
+
+static int try_execute_com(const char* command, const char* args) {
+    char filename[64];
+    static unsigned char* const load_addr = (unsigned char*)0x200000;
+    static const int max_com_size = 65536;
+    minidos_app_api_t api;
+
+    if (command[0] == '\0') {
+        return 0;
+    }
+
+    if (args[0] != '\0') {
+        return 0;
+    }
+
+    if (!build_com_filename(command, filename, sizeof(filename))) {
+        return 0;
+    }
+
+    if (!fat16_initialized) {
+        fat16_set_drive(drive_get_current());
+        fat16_init();
+        fat16_initialized = 1;
+    }
+
+    str_to_upper(filename);
+
+    int bytes_read = fat16_read_file_from_dir(current_dir_cluster, filename, load_addr, max_com_size);
+    if (bytes_read <= 0) {
+        return 0;
+    }
+
+    shell_out_both("Executing ");
+    shell_out_both(filename);
+    shell_out_both("...\n");
+
+    api.puts = app_api_puts;
+    api.get_char = app_api_get_char;
+
+    typedef int (*com_entry_t)(const minidos_app_api_t* api);
+    com_entry_t entry = (com_entry_t)load_addr;
+    int exit_code = entry(&api);
+
+    shell_out_both("Program returned ");
+    if (exit_code >= 0 && exit_code <= 9) {
+        char d[2];
+        d[0] = (char)('0' + exit_code);
+        d[1] = '\0';
+        shell_out_both(d);
+    } else {
+        char code_str[16];
+        unsigned int value = (unsigned int)((exit_code < 0) ? -exit_code : exit_code);
+        int len = uint_to_dec(value, code_str);
+        code_str[len] = '\0';
+        if (exit_code < 0) {
+            shell_out_both("-");
+        }
+        shell_out_both(code_str);
+    }
+    shell_out_both("\n");
+
+    return 1;
+}
+
 void shell_init() {
     show_boot_screen();
     shell_out_both("MiniDOS Shell Ready.\nType 'help' for commands.\n");
     fat16_set_drive(drive_get_current());
 }
-
-static unsigned int current_dir_cluster = 0;
-static char current_path[64] = "\\";
-static int fat16_initialized = 0;
 
 void shell_prompt() {
     int drive = drive_get_current();
@@ -834,6 +963,9 @@ void shell_execute(char* cmd) {
             }
         }
     } else if (cmd[0] != '\0') {
+        if (try_execute_com(command, args)) {
+            return;
+        }
         print_string("Bad command or file name\n");
     }
 }
