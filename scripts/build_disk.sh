@@ -105,6 +105,9 @@ echo "Welcome to drive A:" > $TMPDIR/README.TXT
 # Add boot logo if it exists
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
     cp "$ROOT_DIR/assets/bootlogo/logo.raw" "$TMPDIR/BOOTLOGO.DAT"
+    if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
+        cp "$ROOT_DIR/assets/bootlogo/logo.pal" "$TMPDIR/BOOTLOGO.PAL"
+    fi
     echo "✓ Boot logo added"
 fi
 
@@ -126,6 +129,9 @@ format_with_mtools() {
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
         mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT
+        if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
+            mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.pal" ::/BOOTLOGO.PAL
+        fi
         echo "✓ Boot logo added"
     fi
 }

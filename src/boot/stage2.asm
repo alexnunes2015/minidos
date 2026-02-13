@@ -5,12 +5,20 @@
 [BITS 16]
 [ORG 0x7E00]
 
-%define PAL_LBA       98
-%define PAL_SECTORS   2
-%define PAL_BUFFER    0x0600
-%define LOGO_LBA      100
-%define LOGO_SECTORS  125
-%define LOGO_BUF_SEG  0x9000
+%define BOOT_VIDEO_FLAG        0x0510
+%define BOOT_VIDEO_WIDTH       0x0512
+%define BOOT_VIDEO_HEIGHT      0x0514
+%define BOOT_VIDEO_PITCH       0x0516
+%define BOOT_VIDEO_BPP         0x0518
+%define BOOT_VIDEO_RED_SIZE    0x0519
+%define BOOT_VIDEO_RED_POS     0x051A
+%define BOOT_VIDEO_GREEN_SIZE  0x051B
+%define BOOT_VIDEO_GREEN_POS   0x051C
+%define BOOT_VIDEO_BLUE_SIZE   0x051D
+%define BOOT_VIDEO_BLUE_POS    0x051E
+%define BOOT_VIDEO_FB          0x0520
+
+%define VBE_MODE_INFO          0x7000
 
 start:
     ; Save drive number from DL
@@ -157,163 +165,83 @@ start:
     ; Far jump to flush prefetch and enter 32-bit mode
     jmp 0x08:pm_start
 
-; Show boot logo in VGA Mode 13h
+; Configure video mode for kernel (prefer VESA LFB, fallback to text mode)
 show_boot_logo:
     pusha
     push ds
     push es
+
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
     cld
-    
-    xor ax, ax
-    mov ds, ax
-    
-    ; Switch to VGA Mode 13h (320x200, 256 colors)
-    mov ax, 0x0013
-    int 0x10
 
-    ; Load palette into low memory buffer
-    xor ax, ax
-    mov es, ax
-    mov bx, PAL_BUFFER
-    mov ax, PAL_LBA
-    mov cx, PAL_SECTORS
-.pal_loop:
-    call disk_read
-    add bx, 512
-    inc ax
-    loop .pal_loop
+    ; Default values for text mode fallback
+    mov byte [BOOT_VIDEO_FLAG], 0
+    mov word [BOOT_VIDEO_WIDTH], 80
+    mov word [BOOT_VIDEO_HEIGHT], 25
+    mov word [BOOT_VIDEO_PITCH], 160
+    mov byte [BOOT_VIDEO_BPP], 0
+    mov dword [BOOT_VIDEO_FB], 0
 
-    ; Program VGA DAC palette (256 * 3 bytes)
-    mov dx, 0x3C8
-    xor al, al
-    out dx, al
-    mov dx, 0x3C9
-    mov si, PAL_BUFFER
-    mov cx, 256*3
-.pal_out:
-    lodsb
-    out dx, al
-    loop .pal_out
+    mov si, vesa_modes
+.try_next_mode:
+    lodsw
+    cmp ax, 0xFFFF
+    je .fallback_text
+    mov [vesa_mode_selected], ax
 
-    ; Pick blue/white indices from the loaded palette for the bar
-    call pick_bar_colors
-    
-    ; Load raw logo from disk into a safe buffer first
-    mov ax, LOGO_BUF_SEG
-    mov es, ax
-    xor bx, bx
-    mov ax, LOGO_LBA
-    mov cx, LOGO_SECTORS
-.logo_loop:
-    call disk_read
-    add bx, 512
-    inc ax
-    loop .logo_loop
-
-    ; Copy logo buffer to VGA memory
-    mov ax, LOGO_BUF_SEG
-    mov ds, ax
-    mov ax, 0xA000
-    mov es, ax
-    xor si, si
-    xor di, di
-    mov cx, 64000
-    rep movsb
-    
-    xor ax, ax
-    mov ds, ax
-
-    ; Animate a 5px bottom blue/white gradient bar for a fixed 5 seconds
-    ; BIOS tick at 0x046C increments ~18.2 times per second
-    mov bx, [0x046C]        ; start tick
-    mov [bar_start_tick], bx
-    mov [bar_last_tick], bx
-    mov word [bar_frame], 0 ; frame offset (0..319)
-.frame_wait:
-    mov ax, [0x046C]
-    cmp ax, [bar_last_tick]
-    je .frame_wait          ; wait for next tick
-    mov [bar_last_tick], ax ; update last tick
-
-    ; Check elapsed ticks (5 seconds ≈ 91 ticks)
     mov cx, ax
-    sub cx, [bar_start_tick]
-    cmp cx, 91
-    jae .frame_done
+    mov ax, 0x4F01
+    mov di, VBE_MODE_INFO
+    int 0x10
+    cmp ax, 0x004F
+    jne .try_next_mode
 
-    ; Compute gradient start for this frame
-    mov ax, [bar_frame]
-    mov bl, al
-    and bl, 0x07
-    mov [bar_xmod_start], bl
-    xor dx, dx
-    mov bx, 5
-    div bx                  ; ax = frame/5, dx = frame%5
-    mov [bar_intensity_start], al
-    mov [bar_step_start], dl
+    mov bx, [VBE_MODE_INFO + 0x00] ; ModeAttributes
+    test bx, 0x0001                ; Mode supported
+    jz .try_next_mode
+    test bx, 0x0080                ; Linear framebuffer supported
+    jz .try_next_mode
 
-    ; Draw 5 rows at y=195..199 (320x200)
-    xor bp, bp              ; row = 0
-.bar_row:
-    mov di, 62400           ; 195 * 320
-    mov ax, bp
-    mov cx, 320
-    mul cx                  ; ax = row * 320
-    add di, ax
+    mov ax, 0x4F02
+    mov bx, [vesa_mode_selected]
+    or bx, 0x4000                  ; request LFB
+    int 0x10
+    cmp ax, 0x004F
+    jne .try_next_mode
 
-    mov si, bayer8x8
-    mov ax, bp
-    and ax, 0x0007
-    shl ax, 3               ; row_base = (row & 7) * 8
-    add si, ax              ; SI = row pointer
+    ; Publish VESA mode metadata for the kernel
+    mov byte [BOOT_VIDEO_FLAG], 1
+    mov ax, [VBE_MODE_INFO + 0x12] ; XResolution
+    mov [BOOT_VIDEO_WIDTH], ax
+    mov ax, [VBE_MODE_INFO + 0x14] ; YResolution
+    mov [BOOT_VIDEO_HEIGHT], ax
+    mov ax, [VBE_MODE_INFO + 0x10] ; BytesPerScanLine
+    mov [BOOT_VIDEO_PITCH], ax
+    mov al, [VBE_MODE_INFO + 0x19] ; BitsPerPixel
+    mov [BOOT_VIDEO_BPP], al
+    mov al, [VBE_MODE_INFO + 0x1F] ; RedMaskSize
+    mov [BOOT_VIDEO_RED_SIZE], al
+    mov al, [VBE_MODE_INFO + 0x20] ; RedFieldPosition
+    mov [BOOT_VIDEO_RED_POS], al
+    mov al, [VBE_MODE_INFO + 0x21] ; GreenMaskSize
+    mov [BOOT_VIDEO_GREEN_SIZE], al
+    mov al, [VBE_MODE_INFO + 0x22] ; GreenFieldPosition
+    mov [BOOT_VIDEO_GREEN_POS], al
+    mov al, [VBE_MODE_INFO + 0x23] ; BlueMaskSize
+    mov [BOOT_VIDEO_BLUE_SIZE], al
+    mov al, [VBE_MODE_INFO + 0x24] ; BlueFieldPosition
+    mov [BOOT_VIDEO_BLUE_POS], al
+    mov eax, [VBE_MODE_INFO + 0x28] ; PhysBasePtr
+    mov [BOOT_VIDEO_FB], eax
+    jmp .done
 
-    mov al, [bar_intensity_start]
-    mov ah, [bar_step_start]
-    xor bx, bx
-    mov bl, [bar_xmod_start]
-    mov cx, 320
-.bar_col:
-    mov dl, [si + bx]       ; bayer value 0..63
-    cmp dl, al
-    jb .bar_white
-    mov dl, [bar_blue_idx]
-    jmp .bar_store
-.bar_white:
-    mov dl, [bar_white_idx]
-.bar_store:
-    mov [es:di], dl
-    inc di
-
-    inc bl
-    and bl, 0x07
-    inc ah
-    cmp ah, 5
-    jb .bar_next
-    xor ah, ah
-    inc al
-    and al, 0x3F
-.bar_next:
-    loop .bar_col
-
-    inc bp
-    cmp bp, 5
-    jb .bar_row
-
-    ; Advance frame offset (wrap at 320)
-    mov ax, [bar_frame]
-    inc ax
-    cmp ax, 320
-    jb .bar_frame_store
-    xor ax, ax
-.bar_frame_store:
-    mov [bar_frame], ax
-    jmp .frame_wait
-.frame_done:
-    
-    ; Return to text mode
+.fallback_text:
     mov ax, 0x0003
     int 0x10
-    
+
+.done:
     pop es
     pop ds
     popa
@@ -336,50 +264,6 @@ serial_init:
     mov dx, 0x3F8 + 3       ; Line control
     mov al, 0x03            ; 8N1
     out dx, al
-    ret
-
-; Pick palette indices for blue and white (from loaded palette at PAL_BUFFER)
-pick_bar_colors:
-    pusha
-    push ds
-    xor ax, ax
-    mov ds, ax
-
-    mov si, PAL_BUFFER
-    xor bx, bx              ; index
-    mov byte [bar_white_score], 0
-    mov byte [bar_white_idx], 0
-    mov byte [bar_blue_score], 0
-    mov byte [bar_blue_idx], 0
-.color_loop:
-    mov al, [si]            ; R
-    mov ah, [si + 1]        ; G
-    mov dl, [si + 2]        ; B
-
-    mov dh, al              ; sum = R+G+B
-    add dh, ah
-    add dh, dl
-    cmp dh, [bar_white_score]
-    jbe .check_blue
-    mov [bar_white_score], dh
-    mov [bar_white_idx], bl
-.check_blue:
-    mov dh, dl              ; score = (B*2) + 128 - R - G
-    add dh, dl
-    add dh, 128
-    sub dh, al
-    sub dh, ah
-    cmp dh, [bar_blue_score]
-    jbe .next_color
-    mov [bar_blue_score], dh
-    mov [bar_blue_idx], bl
-.next_color:
-    add si, 3
-    inc bl
-    jnz .color_loop
-
-    pop ds
-    popa
     ret
 
 serial_print_string:
@@ -515,25 +399,14 @@ msg_pm_lgdt: db '[Stage2] PM checkpoint 2: LGDT', 0x0D, 0x0A, 0
 msg_pm_cr0: db '[Stage2] PM checkpoint 3: set CR0.PE', 0x0D, 0x0A, 0
 msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
 
-bar_frame: db 0, 0
-bar_start_tick: db 0, 0
-bar_last_tick: db 0, 0
-bar_white_idx: db 0
-bar_blue_idx: db 0
-bar_white_score: db 0
-bar_blue_score: db 0
-bar_intensity_start: db 0
-bar_step_start: db 0
-bar_xmod_start: db 0
-
-bayer8x8:
-    db 0, 48, 12, 60, 3, 51, 15, 63
-    db 32, 16, 44, 28, 35, 19, 47, 31
-    db 8, 56, 4, 52, 11, 59, 7, 55
-    db 40, 24, 36, 20, 43, 27, 39, 23
-    db 2, 50, 14, 62, 1, 49, 13, 61
-    db 34, 18, 46, 30, 33, 17, 45, 29
-    db 10, 58, 6, 54, 9, 57, 5, 53
-    db 42, 26, 38, 22, 41, 25, 37, 21
+vesa_mode_selected: dw 0
+vesa_modes:
+    dw 0x112                ; 640x480
+    dw 0x111                ; 640x480
+    dw 0x115                ; 800x600 fallback
+    dw 0x114                ; 800x600 fallback
+    dw 0x118                ; 1024x768 fallback
+    dw 0x117                ; 1024x768 fallback
+    dw 0xFFFF
 
 times 2048-($-$$) db 0      ; Pad to 2048 bytes

@@ -3,13 +3,25 @@
 #include "shell.h"
 #include "disk.h"
 #include "drive.h"
-#include "vga.h"
 #include "fat16.h"
 #include "serial.h"
 #include "logger.h"
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
+static const unsigned int BOOT_LOGO_MS = 5000;
+static const unsigned int BOOT_SPLASH_MS = 1200;
+static const unsigned int PIT_HZ = 1193182;
+
+static inline unsigned char inb(unsigned short port) {
+    unsigned char val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline void outb(unsigned short port, unsigned char val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
 
 // Simple delay function
 static void delay(unsigned int count) {
@@ -20,40 +32,94 @@ static void delay(unsigned int count) {
     }
 }
 
-// Display boot logo
-static void show_boot_logo() {
-    // Switch to VGA Mode 13h
-    vga_mode13h_init();
-    
-    // Try to load logo from disk
-    static unsigned char logo_buffer[64000];  // 320x200 = 64000 bytes
-    
-    // Initialize disk and FAT16
-    disk_init();
-    drive_init();
-    
-    // Try to read BOOTLOGO.DAT from drive A: (drive 0)
-    fat16_set_drive(0);
-    fat16_init();
-    
-    int bytes_read = fat16_read_file("BOOTLOGO.DAT", logo_buffer, sizeof(logo_buffer));
-    
-    if (bytes_read == 64000) {
-        // Display the logo
-        vga_display_image(logo_buffer);
-        
-        // Show for 5 seconds
-        delay(500);  // ~5 seconds
-    } else {
-        // Fallback: show simple text screen
-        vga_clear(1);  // Dark blue background
-        
-        // Just wait a bit
-        delay(500);
+static unsigned short pit_read_counter0(void) {
+    outb(0x43, 0x00); // Latch channel 0 current count
+    unsigned short lo = inb(0x40);
+    unsigned short hi = inb(0x40);
+    return (unsigned short)(lo | (hi << 8));
+}
+
+static void pit_wait_ms(unsigned int ms) {
+    unsigned int target = ms * (PIT_HZ / 1000);
+    unsigned int elapsed = 0;
+    unsigned short prev = pit_read_counter0();
+
+    while (elapsed < target) {
+        unsigned short cur = pit_read_counter0();
+        unsigned short delta;
+        if (prev >= cur) {
+            delta = (unsigned short)(prev - cur);
+        } else {
+            delta = (unsigned short)(prev + (65536 - cur));
+        }
+        elapsed += (unsigned int)delta;
+        prev = cur;
     }
-    
-    // Return to text mode
-    vga_text_mode();
+}
+
+static void wait_boot_logo() {
+    const unsigned int step_ms = 50;
+    unsigned int elapsed = 0;
+    unsigned int frame = 0;
+
+    video_draw_boot_gradient(0);
+    while (elapsed < BOOT_LOGO_MS) {
+        unsigned int next = elapsed + step_ms;
+        if (next > BOOT_LOGO_MS) {
+            next = BOOT_LOGO_MS;
+        }
+
+        pit_wait_ms(next - elapsed);
+        elapsed = next;
+
+        frame++;
+        video_draw_boot_gradient(frame * 6);
+    }
+}
+
+// Display a simple boot splash before entering the shell
+static void show_boot_logo() {
+    if (video_is_graphics()) {
+        static unsigned char logo_pixels[320 * 200];
+        static unsigned char logo_palette[256 * 3];
+
+        disk_init();
+        drive_init();
+        fat16_set_drive(0);
+        fat16_init();
+
+        int logo_bytes = fat16_read_file("BOOTLOGO.DAT", logo_pixels, sizeof(logo_pixels));
+        int pal_bytes = fat16_read_file("BOOTLOGO.PAL", logo_palette, sizeof(logo_palette));
+
+        if (logo_bytes == (int)sizeof(logo_pixels) && pal_bytes == (int)sizeof(logo_palette)) {
+            cls();
+            video_draw_indexed_image_centered(logo_pixels, 320, 200, logo_palette);
+            wait_boot_logo();
+            cls();
+            return;
+        }
+    }
+
+    cls();
+    print_string("\n");
+    print_string("========================================\n");
+    if (video_is_graphics()) {
+        print_string("      MiniDOS VESA Framebuffer Boot     \n");
+    } else {
+        print_string("           MiniDOS Text Boot            \n");
+    }
+    print_string("========================================\n");
+    print_string("\nStarting kernel services...\n\n");
+
+    print_string("[");
+    for (int i = 0; i < 28; i++) {
+        print_char('#');
+        delay(2);
+    }
+    print_string("] READY\n");
+
+    pit_wait_ms(BOOT_SPLASH_MS);
+    cls();
 }
 
 void kernel_main() {
@@ -100,7 +166,7 @@ void kernel_main() {
     log_serial_raw(mem_str);
     log_serial_raw(" KB\n");
     
-    cls();
+    show_boot_logo();
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
     print_string("MiniDOS v0.1 Kernel Started\n");
     print_string("Welcome to your minimalist 16/32-bit OS.\n\n");
