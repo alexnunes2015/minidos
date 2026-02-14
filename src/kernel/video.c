@@ -59,15 +59,21 @@ static inline void outb(unsigned short port, unsigned char val) {
 }
 
 static inline u8 mem8(u32 addr) {
-    return *(volatile u8*)addr;
+    u8 val;
+    __asm__ volatile ("movb (%1), %0" : "=r"(val) : "r"(addr) : "memory");
+    return val;
 }
 
 static inline u16 mem16(u32 addr) {
-    return *(volatile u16*)addr;
+    u16 val;
+    __asm__ volatile ("movw (%1), %0" : "=r"(val) : "r"(addr) : "memory");
+    return val;
 }
 
 static inline u32 mem32(u32 addr) {
-    return *(volatile u32*)addr;
+    u32 val;
+    __asm__ volatile ("movl (%1), %0" : "=r"(val) : "r"(addr) : "memory");
+    return val;
 }
 
 static int min_int(int a, int b) {

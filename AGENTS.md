@@ -42,10 +42,10 @@ Dependencies used by the build/tests include `gcc` (with `-m32`), `ld`, `nasm`, 
 - The OS prints real-time debug output over the serial port (COM1) during boot and runtime. Use QEMU serial output (`-serial stdio`) or the test scripts to capture it.
 
 ## Known Issues & Next Steps
-- A known issue noted in `docs/TEST_SCRIPTS.md`: the kernel may not execute after entering Protected Mode; use serial output to confirm where boot stops.
-- Disk writes are not implemented yet (`disk_write_lba` in `src/kernel/disk.c` returns `-1`).
+- Protected Mode transition currently boots into the kernel in serial smoke tests; keep using serial checkpoints to detect regressions early.
+- Disk write path is implemented (`disk_write_lba` / `disk_write_lba_from_disk` in `src/kernel/disk.c`).
 - ATA access currently supports only the primary master drive (`disk_id` 0).
-- Next steps: stabilize the PM transition, implement write support, and expand drivers/interrupt handling (see `docs/DESIGN.md`).
+- Next steps: expand ATA support beyond `disk_id` 0, strengthen interrupt handling, and continue memory-management evolution (see `docs/DESIGN.md`).
 
 ## Security & Configuration Tips
 - Disk formatting may require `sudo` for loop devices, or use `mtools` instead. See `scripts/build_disk.sh` for the flow.

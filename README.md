@@ -26,6 +26,7 @@ make test-ver
 make test-dir
 make test-drives
 make test-serial
+make phase0-check
 ```
 
 Para rodar comandos personalizados:
@@ -49,7 +50,8 @@ Veja [assets/bootlogo/README.md](assets/bootlogo/README.md) para converter image
 ## Notas úteis
 
 - Saída de debug via serial (COM1). Consulte [docs/TEST_SCRIPTS.md](docs/TEST_SCRIPTS.md).
-- Escrita em disco ainda não implementada (ver [src/kernel/disk.c](src/kernel/disk.c)).
+- Escrita em disco ATA PIO (LBA) está implementada em [src/kernel/disk.c](src/kernel/disk.c).
+- Acesso ATA atualmente limitado ao disco primário master (`disk_id` 0).
 - Próximos passos e decisões em [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Troubleshooting
