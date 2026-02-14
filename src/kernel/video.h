@@ -8,5 +8,6 @@ void update_cursor();
 int video_is_graphics();
 int video_draw_indexed_image_centered(const unsigned char* pixels, int width, int height, const unsigned char* palette);
 void video_draw_boot_gradient(unsigned int frame);
+void video_show_bsod(const char* stop_code, const char* detail);
 
 #endif

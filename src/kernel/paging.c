@@ -1,10 +1,12 @@
 #include "paging.h"
 #include "serial.h"
 #include "logger.h"
+#include "video.h"
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
 #define BOOT_VIDEO_FB_ADDR 0x0520
+#define STOP_PAGE_FAULT "STOP 0x0000000E"
 
 struct idt_entry {
     unsigned short offset_low;
@@ -24,6 +26,16 @@ static unsigned int first_page_table[1024] __attribute__((aligned(4096)));
 static unsigned int fb_page_table[1024] __attribute__((aligned(4096)));
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
+
+static inline unsigned char inb(unsigned short port) {
+    unsigned char value;
+    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+static inline void outb(unsigned short port, unsigned char value) {
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
+}
 
 static inline unsigned int read_cr2(void) {
     unsigned int value;
@@ -67,6 +79,34 @@ static void panic_halt(void) {
     }
 }
 
+static void bsod_wait_key_then_reboot(void) {
+    for (volatile unsigned int i = 0; i < 5000000; i++) {
+        __asm__ volatile ("nop");
+    }
+
+    while (serial_received()) {
+        (void)serial_getchar();
+    }
+    while (inb(0x64) & 0x01) {
+        (void)inb(0x60);
+    }
+
+    while (1) {
+        if (serial_received()) {
+            (void)serial_getchar();
+            break;
+        }
+        if (inb(0x64) & 0x01) {
+            (void)inb(0x60);
+            break;
+        }
+        __asm__ volatile ("nop");
+    }
+
+    outb(0x64, 0xFE);
+    panic_halt();
+}
+
 __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, unsigned int eip) {
     unsigned int cr2 = read_cr2();
 
@@ -78,9 +118,9 @@ __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, 
     log_serial_raw(" eip=");
     serial_print_hex(eip);
     log_serial_raw("\n");
-    log_serial_raw("[paging] panic halt\n");
-
-    panic_halt();
+    video_show_bsod(STOP_PAGE_FAULT, "A PAGE FAULT OCCURRED DURING BOOT.");
+    log_serial_raw("[paging] waiting key for reboot\n");
+    bsod_wait_key_then_reboot();
 }
 
 __attribute__((used, naked)) static void page_fault_isr_stub(void) {
@@ -167,11 +207,16 @@ static void paging_self_test(void) {
     log_serial_raw("paging self-test OK\n");
 }
 
-void paging_init(void) {
+int paging_init(void) {
     log_serial_raw("[paging] init\n");
 
     paging_setup_structures();
     paging_setup_idt();
+
+    if (page_directory[0] == 0 || idt[14].selector == 0) {
+        log_serial_raw("[paging] setup validation failed\n");
+        return -1;
+    }
 
     log_serial_raw("[paging] loading CR3\n");
     load_page_directory(page_directory);
@@ -190,4 +235,6 @@ void paging_init(void) {
         (void)value;
     }
 #endif
+
+    return 0;
 }

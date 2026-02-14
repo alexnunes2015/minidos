@@ -220,3 +220,13 @@ void drive_list_all() {
         print_char('\n');
     }
 }
+
+int drive_get_count() {
+    int count = 0;
+    for (int i = 0; i < MAX_DRIVES; i++) {
+        if (drives[i].valid) {
+            count++;
+        }
+    }
+    return count;
+}

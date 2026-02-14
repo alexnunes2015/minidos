@@ -10,6 +10,39 @@
 static unsigned int current_dir_cluster = 0;
 static char current_path[64] = "\\";
 static int fat16_initialized = 0;
+static const unsigned int PIT_HZ = 1193182;
+
+static inline unsigned char inb(unsigned short port) {
+    unsigned char val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline void outb(unsigned short port, unsigned char val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static unsigned short pit_read_counter0(void) {
+    outb(0x43, 0x00);
+    {
+        unsigned short lo = inb(0x40);
+        unsigned short hi = inb(0x40);
+        return (unsigned short)(lo | (hi << 8));
+    }
+}
+
+static void wait_ms(unsigned int ms) {
+    unsigned int target = ms * (PIT_HZ / 1000);
+    unsigned int elapsed = 0;
+    unsigned short prev = pit_read_counter0();
+
+    while (elapsed < target) {
+        unsigned short cur = pit_read_counter0();
+        unsigned short delta = (prev >= cur) ? (unsigned short)(prev - cur) : (unsigned short)(prev + (65536 - cur));
+        elapsed += (unsigned int)delta;
+        prev = cur;
+    }
+}
 
 static void delay(unsigned int count) {
     for (volatile unsigned int i = 0; i < count; i++) {
@@ -568,6 +601,34 @@ void shell_prompt() {
     print_char('>');
 }
 
+static void shell_trigger_bsod() {
+    video_show_bsod("0E : TEST_BSOD", "Triggered by hidden command BSOD.");
+
+    wait_ms(1000);
+
+    // Flush stale input (e.g. Enter used to submit the BSOD command)
+    while (serial_received()) {
+        (void)serial_getchar();
+    }
+    while (inb(0x64) & 0x01) {
+        (void)inb(0x60);
+    }
+
+    while (1) {
+        if (serial_received()) {
+            (void)serial_getchar();
+            break;
+        }
+        if (inb(0x64) & 0x01) {
+            (void)inb(0x60);
+            break;
+        }
+        __asm__ volatile ("nop");
+    }
+
+    cls();
+}
+
 void shell_execute(char* cmd) {
     // Trim whitespace
     int i = 0;
@@ -962,6 +1023,8 @@ void shell_execute(char* cmd) {
                 shell_out_both("Failed to move file\n");
             }
         }
+    } else if (mystrcmp(command, "bsod") == 0) {
+        shell_trigger_bsod();
     } else if (cmd[0] != '\0') {
         if (try_execute_com(command, args)) {
             return;

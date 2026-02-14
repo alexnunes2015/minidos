@@ -52,5 +52,6 @@ void drive_set_current(int drive_letter);
 
 // Print list of all detected drives
 void drive_list_all();
+int drive_get_count();
 
 #endif

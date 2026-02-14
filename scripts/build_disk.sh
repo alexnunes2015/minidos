@@ -135,23 +135,35 @@ format_with_mtools() {
     A_OFF=$((2048*512))
 
     # NOTE: Do NOT use -F here (it forces FAT32). We need FAT16.
-    mformat -i "$DISK_IMG@@$A_OFF" -v MINIDOS_A ::
+    if ! mformat -i "$DISK_IMG@@$A_OFF" -v MINIDOS_A ::; then
+        echo "ERROR: mformat failed for partition A:" >&2
+        return 1
+    fi
 
-    echo "Welcome to drive A:" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/README.TXT
+    if ! echo "Welcome to drive A:" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/README.TXT; then
+        echo "ERROR: failed to write README.TXT via mtools" >&2
+        return 1
+    fi
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
-        mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT
+        if ! mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT; then
+            echo "ERROR: failed to write BOOTLOGO.DAT via mtools" >&2
+            return 1
+        fi
         if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
-            mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.pal" ::/BOOTLOGO.PAL
+            if ! mcopy -i "$DISK_IMG@@$A_OFF" "$ROOT_DIR/assets/bootlogo/logo.pal" ::/BOOTLOGO.PAL; then
+                echo "ERROR: failed to write BOOTLOGO.PAL via mtools" >&2
+                return 1
+            fi
         fi
         echo "✓ Boot logo added"
     fi
 }
 
-if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+if command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
+    format_with_mtools || exit 1
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     format_with_sudo
-elif command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
-    format_with_mtools
 else
     echo "WARNING: Could not format/mount partitions. Install mtools or run with sudo." >&2
 fi

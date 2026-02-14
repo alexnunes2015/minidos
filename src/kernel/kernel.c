@@ -14,6 +14,11 @@ static const unsigned int BOOT_LOGO_MS = 5000;
 static const unsigned int BOOT_SPLASH_MS = 1200;
 static const unsigned int PIT_HZ = 1193182;
 
+#define STOP_MEMORY_INVALID "STOP 0x00000001"
+#define STOP_PAGING_INIT    "STOP 0x00000002"
+#define STOP_DISK_READ      "STOP 0x00000003"
+#define STOP_DRIVE_DETECT   "STOP 0x00000004"
+
 static inline unsigned char inb(unsigned short port) {
     unsigned char val;
     __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
@@ -82,6 +87,47 @@ static void wait_boot_logo() {
         frame++;
         video_draw_boot_gradient(frame * 6);
     }
+}
+
+static void bsod_wait_key_then_reboot() {
+    pit_wait_ms(1000);
+
+    while (serial_received()) {
+        (void)serial_getchar();
+    }
+    while (inb(0x64) & 0x01) {
+        (void)inb(0x60);
+    }
+
+    while (1) {
+        if (serial_received()) {
+            (void)serial_getchar();
+            break;
+        }
+        if (inb(0x64) & 0x01) {
+            (void)inb(0x60);
+            break;
+        }
+        __asm__ volatile ("nop");
+    }
+
+    outb(0x64, 0xFE);
+    __asm__ volatile ("cli");
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+static void boot_panic_bsod(const char* stop_code, const char* detail) {
+    log_serial_raw("[boot] critical failure: ");
+    if (detail) {
+        log_serial_raw(detail);
+    } else {
+        log_serial_raw("unknown error");
+    }
+    log_serial_raw("\n");
+    video_show_bsod(stop_code, detail);
+    bsod_wait_key_then_reboot();
 }
 
 // Display a simple boot splash before entering the shell
@@ -171,7 +217,13 @@ void kernel_main() {
     log_serial_raw(mem_str);
     log_serial_raw(" KB\n");
 
-    paging_init();
+    if (g_memory_kb == 0) {
+        boot_panic_bsod(STOP_MEMORY_INVALID, "INVALID MEMORY SIZE REPORTED BY BIOS.");
+    }
+
+    if (paging_init() != 0) {
+        boot_panic_bsod(STOP_PAGING_INIT, "FAILED TO INITIALIZE PAGING.");
+    }
     
     show_boot_logo();
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
@@ -180,10 +232,19 @@ void kernel_main() {
     
     log_write(LOG_LEVEL_INFO, "kernel", "Initializing disk driver...\n", LOG_DEST_SERIAL);
     disk_init();
+    {
+        unsigned char probe[512];
+        if (disk_read_lba(0, probe) != 0) {
+            boot_panic_bsod(STOP_DISK_READ, "FAILED TO READ BOOT DISK (LBA 0).");
+        }
+    }
     log_write(LOG_LEVEL_INFO, "kernel", "Disk driver initialized\n", LOG_DEST_SERIAL);
     
     log_write(LOG_LEVEL_INFO, "kernel", "Detecting drives and partitions...\n", LOG_DEST_SERIAL);
     drive_init();
+    if (drive_get_count() <= 0) {
+        boot_panic_bsod(STOP_DRIVE_DETECT, "NO VALID DRIVE DETECTED.");
+    }
     log_write(LOG_LEVEL_INFO, "kernel", "Drive detection complete\n", LOG_DEST_SERIAL);
     
     log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
