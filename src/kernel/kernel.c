@@ -6,6 +6,7 @@
 #include "fat16.h"
 #include "serial.h"
 #include "logger.h"
+#include "paging.h"
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
@@ -21,6 +22,12 @@ static inline unsigned char inb(unsigned short port) {
 
 static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline unsigned short read_phys_u16(unsigned int addr) {
+    unsigned short val;
+    __asm__ volatile ("movw (%1), %0" : "=r"(val) : "r"(addr) : "memory");
+    return val;
 }
 
 // Simple delay function
@@ -129,10 +136,8 @@ void kernel_main() {
     log_serial_raw("\n\n=== MiniDOS Kernel Starting ===\n");
     
     // Read memory size from BIOS data (stored by bootloader)
-    unsigned short* base_mem_ptr = (unsigned short*)0x500;  // Base memory (up to 640KB)
-    unsigned short* ext_mem_ptr = (unsigned short*)0x502;   // Extended memory (above 1MB)
-    unsigned int base_mem = *base_mem_ptr;
-    unsigned int ext_mem = *ext_mem_ptr;
+    unsigned int base_mem = read_phys_u16(0x500); // Base memory (up to 640KB)
+    unsigned int ext_mem = read_phys_u16(0x502);  // Extended memory (above 1MB)
     
     // Total memory = base + extended (extended is above 1MB, so add 1024KB)
     if (ext_mem > 0) {
@@ -165,6 +170,8 @@ void kernel_main() {
     mem_str[idx] = '\0';
     log_serial_raw(mem_str);
     log_serial_raw(" KB\n");
+
+    paging_init();
     
     show_boot_logo();
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);

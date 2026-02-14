@@ -57,6 +57,20 @@ Alternativa mais simples para testes rápidos.
 ./tests/test_auto.sh "comando"
 ```
 
+### 4. `tests/test_paging.py` - Validação de Paging
+Valida o boot com paging ativo e o teste negativo de `#PF`.
+
+**Uso:**
+```bash
+python3 tests/test_paging.py
+python3 tests/test_paging.py --expect-fault
+```
+
+**Atalho via Makefile:**
+```bash
+make test-paging
+```
+
 ## Características
 
 ✅ **Captura de Output** - Todos os comandos capturam a saída completa
@@ -110,8 +124,11 @@ Todos os testes mostram a saída serial que inclui:
 - `[Stage2] Loading kernel...` - Kernel sendo carregado
 - `[Stage2] Kernel loaded` - Kernel pronto
 - `[Stage2] Entering PM...` - Transição para modo protegido
+- `[paging] init` / `[paging] enabled` - Sequência de ativação de paging
+- `paging self-test OK` - Self-test de mapeamento concluído
+- `[paging] #PF detected` + `CR2=...` - Diagnóstico de page fault (teste negativo)
 
-**Nota:** Atualmente o kernel não executa após PM (bug conhecido), mas a boot logo mostra corretamente!
+**Nota:** O kernel está executando após a transição para Protected Mode nos testes seriais atuais. Se houver regressão, use os checkpoints PM no serial (`CLI`, `LGDT`, `CR0.PE`, `Before far jump`) para localizar onde o boot para.
 
 ## Troubleshooting
 

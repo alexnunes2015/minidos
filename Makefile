@@ -3,7 +3,8 @@
 CC = gcc
 LD = ld
 AS = nasm
-CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -Isrc/kernel
+CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -Isrc/kernel
+CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
 LDFLAGS = -m elf_i386 -T src/kernel/kernel.ld
 
 BOOT_DIR = src/boot
@@ -18,7 +19,7 @@ KERNEL_ASM = $(BUILD_DIR)/entry.o
 
 # Ensure drive.o is included
 
-.PHONY: all clean run
+.PHONY: all clean run phase0-check test-paging
 
 all: minidos.img
 
@@ -83,9 +84,24 @@ test-runner:
 test-interactive:
 	./tests/test_interactive.sh
 
-test-serial:
+test-serial: minidos.img
 	python3 tests/test_serial.py "ver" "drives"
 
 test: test-help test-ver test-drives
 
-.PHONY: all clean run test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+phase0-check:
+	$(MAKE) clean
+	$(MAKE) all
+	$(MAKE) test-serial
+
+test-paging:
+	$(MAKE) clean
+	$(MAKE) all
+	python3 tests/test_paging.py
+	$(MAKE) clean
+	$(MAKE) EXTRA_CFLAGS=-DPAGING_TEST_PF all
+	python3 tests/test_paging.py --expect-fault
+	$(MAKE) clean
+	$(MAKE) all
+
+.PHONY: all clean run phase0-check test-paging test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

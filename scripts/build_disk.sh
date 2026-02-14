@@ -6,16 +6,28 @@ DISK_IMG="$ROOT_DIR/minidos.img"
 
 echo "=== Building MiniDOS with partitions ==="
 
+# Clean stale partitioning processes from interrupted runs
+pkill -f "sfdisk .*minidos.img" >/dev/null 2>&1 || true
+
 # Create empty 256MB disk
 echo "Creating disk..."
 dd if=/dev/zero of="$DISK_IMG" bs=1M count=256 status=none
 
 # Create MBR partition table
 echo "Creating partition table (A:)..."
-sfdisk "$DISK_IMG" << 'EOF' >/dev/null 2>&1
+if ! timeout 10s sfdisk --force --no-reread --no-tell-kernel --wipe always "$DISK_IMG" >/dev/null 2>&1 << 'EOF'
 unit: sectors
 /dev/sda1: start=2048, size=522240, Id=6
 EOF
+then
+    echo "ERROR: sfdisk timed out while creating partition table." >&2
+    echo "Diagnostic command:" >&2
+    echo "  timeout 8s sfdisk --force --no-reread --no-tell-kernel --wipe always minidos.img << 'EOF'" >&2
+    echo "  unit: sectors" >&2
+    echo "  /dev/sda1: start=2048, size=522240, Id=6" >&2
+    echo "  EOF" >&2
+    exit 1
+fi
 
 # Write bootloader and kernel
 echo "Writing bootloader, stage2, and kernel..."
