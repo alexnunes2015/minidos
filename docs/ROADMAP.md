@@ -129,9 +129,26 @@ Critério de pronto:
 
 Objetivo: preparar base técnica para scheduler simples.
 
+Status: em andamento desde 15/02/2026.
+
 - Isolar melhor contexto kernel/user.
 - Definir estrutura de processo (PID, estado, stack user/kernel).
 - Planejar round-robin inicial com timer.
+
+Entregas iniciais:
+- Estrutura de processo adicionada (`process_t`) com PID, estado e contexto mínimo salvo (`ESP`).
+- Protótipo de troca de contexto cooperativa no kernel (`scheduler_phase5_self_test`) validado via serial.
+- Timer PIT configurado e IRQ0 habilitado para base de round-robin (coleta de ticks em `scheduler_on_timer_tick`).
+- Quantum de preempção conectado ao retorno de IRQ0 (dispatcher pode retornar `ESP` de próximo contexto).
+- Registro de processos de runtime integrado (tarefas kernel de demonstração) para round-robin fora do self-test.
+- Documento técnico da fase criado em `docs/SCHEDULER_PHASE5.md`.
+
+Checklist crítico de validação (Fase 5):
+- [x] Estrutura de processo mínima (PID + estado + contexto) integrada ao kernel.
+- [x] Self-test de troca de contexto executado no boot com confirmação em log serial.
+- [x] IRQ0 habilitada com PIT configurado sem regressão de boot/shell.
+- [x] Quantum de preempção conectado ao caminho de retorno de interrupção.
+- [ ] Separação completa de stack kernel/user por processo.
 
 Critério de pronto:
 - Documento de design técnico fechado e protótipo de troca de contexto validado.

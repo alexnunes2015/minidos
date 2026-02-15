@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "video.h"
 #include "keyboard.h"
+#include "scheduler.h"
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
@@ -34,26 +35,6 @@ static unsigned int fb_page_table[1024] __attribute__((aligned(4096)));
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 static int interrupt_handlers_ready = 0;
-
-struct isr_frame {
-    unsigned int gs;
-    unsigned int fs;
-    unsigned int es;
-    unsigned int ds;
-    unsigned int edi;
-    unsigned int esi;
-    unsigned int ebp;
-    unsigned int esp;
-    unsigned int ebx;
-    unsigned int edx;
-    unsigned int ecx;
-    unsigned int eax;
-    unsigned int vector;
-    unsigned int error_code;
-    unsigned int eip;
-    unsigned int cs;
-    unsigned int eflags;
-};
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char value;
@@ -180,7 +161,7 @@ __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, 
     bsod_wait_key_then_reboot();
 }
 
-static void exception_panic(const struct isr_frame* frame) {
+static void exception_panic(const irq_frame_t* frame) {
     static const char* exception_names[32] = {
         "Divide Error", "Debug", "NMI", "Breakpoint",
         "Overflow", "BOUND Range", "Invalid Opcode", "Device Not Available",
@@ -217,7 +198,7 @@ static void exception_panic(const struct isr_frame* frame) {
     bsod_wait_key_then_reboot();
 }
 
-__attribute__((used)) static void interrupt_dispatch_c(struct isr_frame* frame) {
+__attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* frame) {
     if (!frame) {
         panic_halt();
     }
@@ -225,21 +206,29 @@ __attribute__((used)) static void interrupt_dispatch_c(struct isr_frame* frame) 
     if (frame->vector < 32) {
         if (frame->vector == 14) {
             page_fault_handler_c(frame->error_code, frame->eip);
-            return;
+            return 0;
         }
         exception_panic(frame);
-        return;
+        return 0;
     }
 
     if (frame->vector == 33) {
         keyboard_handle_irq();
         pic_send_eoi(1);
-        return;
+        return 0;
+    }
+
+    if (frame->vector == 32) {
+        irq_frame_t* next_frame = scheduler_on_timer_tick(frame);
+        pic_send_eoi(0);
+        return next_frame;
     }
 
     if (frame->vector >= 32 && frame->vector <= 47) {
         pic_send_eoi(frame->vector - 32);
     }
+
+    return 0;
 }
 
 __attribute__((used, naked)) static void interrupt_common_stub(void) {
@@ -257,6 +246,10 @@ __attribute__((used, naked)) static void interrupt_common_stub(void) {
         "push %esp\n"
         "call interrupt_dispatch_c\n"
         "add $4, %esp\n"
+        "test %eax, %eax\n"
+        "jz 1f\n"
+        "mov %eax, %esp\n"
+        "1:\n"
         "pop %gs\n"
         "pop %fs\n"
         "pop %es\n"
@@ -470,9 +463,10 @@ void interrupts_init(void) {
 
     keyboard_init();
     keyboard_set_irq_mode(1);
+    scheduler_init_timer(100);
     pic_remap();
-    pic_set_mask(0xFD, 0xFF);
+    pic_set_mask(0xFC, 0xFF);
     interrupt_handlers_ready = 1;
-    log_serial_raw("[int] IDT active, PIC remapped, IRQ1 enabled\n");
+    log_serial_raw("[int] IDT active, PIC remapped, IRQ0/IRQ1 enabled\n");
     __asm__ volatile ("sti");
 }

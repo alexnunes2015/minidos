@@ -123,6 +123,23 @@ static char keyboard_process_scancode(unsigned char scancode) {
         return 0;
     }
 
+    if (extended_code && !break_code) {
+        if (scancode == 0x48 || scancode == 0x75) {
+            extended_code = 0;
+            if (scancode_set2) {
+                break_code = 0;
+            }
+            return 0x11; // KEY_UP
+        }
+        if (scancode == 0x50 || scancode == 0x72) {
+            extended_code = 0;
+            if (scancode_set2) {
+                break_code = 0;
+            }
+            return 0x12; // KEY_DOWN
+        }
+    }
+
     if (!(scancode & 0x80) && !break_code) {
         char c = scancode_to_char(scancode, shift_pressed);
         c = apply_caps(c, shift_pressed, caps_lock);

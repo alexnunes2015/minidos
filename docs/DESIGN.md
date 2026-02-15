@@ -18,6 +18,7 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 - **32-bit Protected Mode (Current)**: The stage2 bootloader performs the PM transition before transferring control to `kernel_main`. The kernel is built with `-m32 -ffreestanding`.
 - **Paging (Current)**: Minimal paging is active. The kernel installs an identity map for boot-critical low memory plus the VESA framebuffer region, then enables `CR0.PG` after serial/log init.
 - **Interrupt Handling (Current)**: A runtime IDT/ISR path is active for CPU exceptions (`0-31`) and PIC IRQs (`32-47`), with serial diagnostics and controlled panic behavior for kernel exceptions.
+- **Scheduler Prep (Current)**: A phase-5 scheduler base is present with process metadata (`PID`, state, saved `ESP`), PIT setup on IRQ0, cooperative context-switch self-test at boot, and an initial IRQ-return preemption hook driven by quantum ticks.
 
 ### 3. Drivers
 - **Video**: Direct memory access to `0xB8000` is used. This is faster and more flexible than BIOS calls once outside of the bootloader.
@@ -32,7 +33,9 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 
 ## Current Limitations
 - ELF loader is intentionally minimal (ELF32 `ET_EXEC`, fixed low-memory window, no relocations/dynamic linking).
+- Preemption hook is active, but runtime process population is still minimal (kernel-only path by default), and user/kernel stack split is not enabled yet.
 
 ## Next Technical Steps
 - Expand syscall surface and isolate user/kernel memory domains as preparation for multitasking.
+- Evolve phase-5 scheduler from cooperative validation to preemptive round-robin driven by IRQ0 quantum.
 - Strengthen interrupt diagnostics and add targeted automated tests for exception/IRQ regressions.

@@ -10,6 +10,9 @@
 static unsigned int current_dir_cluster = 0;
 static char current_path[64] = "\\";
 static int fat16_initialized = 0;
+static unsigned int app_clip_src_cluster = 0;
+static char app_clip_name[64];
+static int app_clip_mode = 0; /* 0 none, 1 copy, 2 move */
 static const unsigned int PIT_HZ = 1193182;
 
 static inline unsigned char inb(unsigned short port) {
@@ -488,7 +491,39 @@ enum {
     APP_SYSCALL_PUTS = 1,
     APP_SYSCALL_GET_CHAR = 2,
     APP_SYSCALL_FILE_SIZE = 3,
+    APP_SYSCALL_LIST_ENTRY = 4,
+    APP_SYSCALL_COPY_FILE = 5,
+    APP_SYSCALL_MOVE_FILE = 6,
+    APP_SYSCALL_GFX_CLEAR = 7,
+    APP_SYSCALL_GFX_RECT = 8,
+    APP_SYSCALL_GFX_TEXT = 9,
+    APP_SYSCALL_GFX_SIZE = 10,
+    APP_SYSCALL_CHDIR = 11,
+    APP_SYSCALL_MKDIR = 12,
+    APP_SYSCALL_RMDIR = 13,
+    APP_SYSCALL_DELETE_ENTRY = 14,
+    APP_SYSCALL_RENAME_ENTRY = 15,
+    APP_SYSCALL_COPY_TO_DIR = 16,
+    APP_SYSCALL_MOVE_TO_DIR = 17,
+    APP_SYSCALL_CLIP_SET = 18,
+    APP_SYSCALL_CLIP_PASTE = 19,
 };
+
+typedef struct {
+    int x;
+    int y;
+    int w;
+    int h;
+    unsigned int color;
+} app_gfx_rect_t;
+
+typedef struct {
+    int x;
+    int y;
+    const char* text;
+    unsigned int fg;
+    unsigned int bg;
+} app_gfx_text_t;
 
 typedef int (*app_syscall_t)(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2);
 
@@ -511,9 +546,6 @@ static char app_api_get_char(void) {
 }
 
 static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
-    (void)a1;
-    (void)a2;
-
     if (num == APP_SYSCALL_PUTS) {
         app_api_puts((const char*)a0);
         return 0;
@@ -544,6 +576,308 @@ static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, u
             return -1;
         }
         return (int)entry.file_size;
+    }
+
+    if (num == APP_SYSCALL_LIST_ENTRY) {
+        unsigned int index = a0;
+        char* out_name = (char*)a1;
+        int* out_is_dir = (int*)a2;
+        unsigned int file_size = 0;
+        if (!out_name) {
+            return 0;
+        }
+        return fat16_get_entry_by_index(current_dir_cluster, index, out_name, 13, out_is_dir, &file_size);
+    }
+
+    if (num == APP_SYSCALL_COPY_FILE) {
+        const char* src = (const char*)a0;
+        const char* dst = (const char*)a1;
+        if (!src || !dst || src[0] == '\0' || dst[0] == '\0') {
+            return 0;
+        }
+        return fat16_copy_file(current_dir_cluster, src, dst);
+    }
+
+    if (num == APP_SYSCALL_MOVE_FILE) {
+        const char* src = (const char*)a0;
+        const char* dst = (const char*)a1;
+        FAT16_DirectoryEntry entry;
+        if (!src || !dst || src[0] == '\0' || dst[0] == '\0') {
+            return 0;
+        }
+        if (!fat16_find_entry(current_dir_cluster, src, &entry, 0, 0)) {
+            return 0;
+        }
+        if (entry.attributes & FAT16_ATTR_DIRECTORY) {
+            return 0;
+        }
+        return fat16_update_entry(current_dir_cluster, src, dst, entry.cluster_low, entry.file_size, entry.attributes);
+    }
+
+    if (num == APP_SYSCALL_GFX_CLEAR) {
+        video_clear_color(a0);
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_GFX_RECT) {
+        const app_gfx_rect_t* rect = (const app_gfx_rect_t*)a0;
+        if (!rect) {
+            return 0;
+        }
+        video_fill_rect(rect->x, rect->y, rect->w, rect->h, rect->color);
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_GFX_TEXT) {
+        const app_gfx_text_t* text = (const app_gfx_text_t*)a0;
+        if (!text || !text->text) {
+            return 0;
+        }
+        video_draw_text_at(text->x, text->y, text->text, text->fg, text->bg);
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_GFX_SIZE) {
+        int* out_w = (int*)a0;
+        int* out_h = (int*)a1;
+        if (!out_w || !out_h) {
+            return 0;
+        }
+        *out_w = video_get_width();
+        *out_h = video_get_height();
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_CHDIR) {
+        char dir[64];
+        const char* input = (const char*)a0;
+        int i = 0;
+        if (!input || input[0] == '\0') {
+            return 0;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(dir) - 1) {
+            dir[i] = input[i];
+            i++;
+        }
+        dir[i] = '\0';
+
+        if (dir[0] == '\\' || dir[0] == '/') {
+            current_dir_cluster = 0;
+            path_reset(current_path);
+            return 1;
+        }
+        if (dir[0] == '.' && dir[1] == '.' && dir[2] == '\0') {
+            unsigned int parent_cluster = 0;
+            if (fat16_get_parent_cluster(current_dir_cluster, &parent_cluster)) {
+                current_dir_cluster = parent_cluster;
+                path_pop(current_path);
+                return 1;
+            }
+            return 0;
+        }
+        if (dir[0] == '.' && dir[1] == '\0') {
+            return 1;
+        }
+
+        str_to_upper(dir);
+        unsigned int next_cluster = 0;
+        if (!fat16_find_dir_cluster(current_dir_cluster, dir, &next_cluster)) {
+            return 0;
+        }
+        if (!path_push(current_path, (int)sizeof(current_path), dir)) {
+            return 0;
+        }
+        current_dir_cluster = next_cluster;
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_MKDIR) {
+        char name[64];
+        const char* input = (const char*)a0;
+        int i = 0;
+        if (!input || input[0] == '\0') {
+            return 0;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(name) - 1) {
+            name[i] = input[i];
+            i++;
+        }
+        name[i] = '\0';
+        str_to_upper(name);
+        return fat16_mkdir(current_dir_cluster, name);
+    }
+
+    if (num == APP_SYSCALL_RMDIR) {
+        char name[64];
+        const char* input = (const char*)a0;
+        int i = 0;
+        if (!input || input[0] == '\0') {
+            return 0;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(name) - 1) {
+            name[i] = input[i];
+            i++;
+        }
+        name[i] = '\0';
+        str_to_upper(name);
+        return fat16_rmdir(current_dir_cluster, name);
+    }
+
+    if (num == APP_SYSCALL_DELETE_ENTRY) {
+        char name[64];
+        FAT16_DirectoryEntry entry;
+        const char* input = (const char*)a0;
+        int i = 0;
+        if (!input || input[0] == '\0') {
+            return 0;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(name) - 1) {
+            name[i] = input[i];
+            i++;
+        }
+        name[i] = '\0';
+        str_to_upper(name);
+        if (!fat16_find_entry(current_dir_cluster, name, &entry, 0, 0)) {
+            return 0;
+        }
+        if (entry.attributes & FAT16_ATTR_DIRECTORY) {
+            return fat16_rmdir(current_dir_cluster, name);
+        }
+        return fat16_delete_entry(current_dir_cluster, name, 1);
+    }
+
+    if (num == APP_SYSCALL_RENAME_ENTRY) {
+        char old_name[64];
+        char new_name[64];
+        FAT16_DirectoryEntry entry;
+        const char* old_input = (const char*)a0;
+        const char* new_input = (const char*)a1;
+        int i = 0;
+        if (!old_input || !new_input || old_input[0] == '\0' || new_input[0] == '\0') {
+            return 0;
+        }
+        while (old_input[i] != '\0' && i < (int)sizeof(old_name) - 1) {
+            old_name[i] = old_input[i];
+            i++;
+        }
+        old_name[i] = '\0';
+        i = 0;
+        while (new_input[i] != '\0' && i < (int)sizeof(new_name) - 1) {
+            new_name[i] = new_input[i];
+            i++;
+        }
+        new_name[i] = '\0';
+
+        str_to_upper(old_name);
+        str_to_upper(new_name);
+        if (!fat16_find_entry(current_dir_cluster, old_name, &entry, 0, 0)) {
+            return 0;
+        }
+        return fat16_update_entry(current_dir_cluster, old_name, new_name, entry.cluster_low, entry.file_size, entry.attributes);
+    }
+
+    if (num == APP_SYSCALL_COPY_TO_DIR || num == APP_SYSCALL_MOVE_TO_DIR) {
+        char src_name[64];
+        char dst_dir_name[64];
+        unsigned int dst_dir_cluster = 0;
+        const char* src_input = (const char*)a0;
+        const char* dst_dir_input = (const char*)a1;
+        int i = 0;
+        if (!src_input || !dst_dir_input || src_input[0] == '\0' || dst_dir_input[0] == '\0') {
+            return 0;
+        }
+        while (src_input[i] != '\0' && i < (int)sizeof(src_name) - 1) {
+            src_name[i] = src_input[i];
+            i++;
+        }
+        src_name[i] = '\0';
+        i = 0;
+        while (dst_dir_input[i] != '\0' && i < (int)sizeof(dst_dir_name) - 1) {
+            dst_dir_name[i] = dst_dir_input[i];
+            i++;
+        }
+        dst_dir_name[i] = '\0';
+        str_to_upper(src_name);
+        str_to_upper(dst_dir_name);
+
+        if (!fat16_find_dir_cluster(current_dir_cluster, dst_dir_name, &dst_dir_cluster)) {
+            return 0;
+        }
+        if (!fat16_copy_file_between_dirs(current_dir_cluster, src_name, dst_dir_cluster, src_name)) {
+            return 0;
+        }
+        if (num == APP_SYSCALL_MOVE_TO_DIR) {
+            if (!fat16_delete_entry(current_dir_cluster, src_name, 1)) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_CLIP_SET) {
+        char src_name[64];
+        FAT16_DirectoryEntry entry;
+        const char* src_input = (const char*)a0;
+        int mode = (int)a1;
+        int i = 0;
+        if (!src_input || src_input[0] == '\0') {
+            return 0;
+        }
+        while (src_input[i] != '\0' && i < (int)sizeof(src_name) - 1) {
+            src_name[i] = src_input[i];
+            i++;
+        }
+        src_name[i] = '\0';
+        str_to_upper(src_name);
+        if (!fat16_find_entry(current_dir_cluster, src_name, &entry, 0, 0)) {
+            return 0;
+        }
+        if (entry.attributes & FAT16_ATTR_DIRECTORY) {
+            return 0;
+        }
+        app_clip_src_cluster = current_dir_cluster;
+        for (i = 0; i < (int)sizeof(app_clip_name) - 1 && src_name[i] != '\0'; i++) {
+            app_clip_name[i] = src_name[i];
+        }
+        app_clip_name[i] = '\0';
+        app_clip_mode = (mode == 2) ? 2 : 1;
+        return 1;
+    }
+
+    if (num == APP_SYSCALL_CLIP_PASTE) {
+        char dst_dir_name[64];
+        unsigned int dst_dir_cluster = current_dir_cluster;
+        const char* dst_input = (const char*)a0;
+        int i = 0;
+
+        if (app_clip_mode == 0 || app_clip_name[0] == '\0') {
+            return 0;
+        }
+
+        if (dst_input && dst_input[0] != '\0') {
+            while (dst_input[i] != '\0' && i < (int)sizeof(dst_dir_name) - 1) {
+                dst_dir_name[i] = dst_input[i];
+                i++;
+            }
+            dst_dir_name[i] = '\0';
+            str_to_upper(dst_dir_name);
+            if (!fat16_find_dir_cluster(current_dir_cluster, dst_dir_name, &dst_dir_cluster)) {
+                return 0;
+            }
+        }
+
+        if (!fat16_copy_file_between_dirs(app_clip_src_cluster, app_clip_name, dst_dir_cluster, app_clip_name)) {
+            return 0;
+        }
+
+        if (app_clip_mode == 2) {
+            if (!fat16_delete_entry(app_clip_src_cluster, app_clip_name, 1)) {
+                return 0;
+            }
+            app_clip_mode = 0;
+            app_clip_name[0] = '\0';
+        }
+        return 1;
     }
 
     return -1;
@@ -980,7 +1314,8 @@ void shell_execute(char* cmd) {
     }
     
     // Convert to lowercase for command comparison (but preserve drive letters)
-    int is_drive_cmd = (cmd[0] >= 'A' && cmd[0] <= 'Z' && cmd[1] == ':' && cmd[2] == '\0');
+    int is_drive_cmd = (((cmd[0] >= 'A' && cmd[0] <= 'Z') || (cmd[0] >= 'a' && cmd[0] <= 'z')) &&
+                        cmd[1] == ':' && cmd[2] == '\0');
     if (!is_drive_cmd) {
         for (int j = 0; cmd[j] && cmd[j] != ' '; j++) {
             if (cmd[j] >= 'A' && cmd[j] <= 'Z') {
@@ -989,9 +1324,14 @@ void shell_execute(char* cmd) {
         }
     }
     
-    // Check if command is drive letter (e.g., "A:")
-    if (cmd[0] >= 'A' && cmd[0] <= 'Z' && cmd[1] == ':' && cmd[2] == '\0') {
-        int drive_letter = cmd[0] - 'A';
+    // Check if command is drive letter (e.g., "A:" or "a:")
+    if ((((cmd[0] >= 'A' && cmd[0] <= 'Z') || (cmd[0] >= 'a' && cmd[0] <= 'z')) &&
+         cmd[1] == ':' && cmd[2] == '\0')) {
+        char drive_char = cmd[0];
+        if (drive_char >= 'a' && drive_char <= 'z') {
+            drive_char = (char)(drive_char - 'a' + 'A');
+        }
+        int drive_letter = drive_char - 'A';
         if (drive_get_info(drive_letter)) {
             drive_set_current(drive_letter);
             fat16_set_drive(drive_letter);

@@ -55,6 +55,8 @@ int fat16_update_entry(unsigned int dir_cluster, const char* old_name, const cha
 int fat16_delete_entry(unsigned int dir_cluster, const char* name, int free_cluster_chain);
 int fat16_delete_matching(unsigned int dir_cluster, const char* pattern, int free_cluster_chain, int* deleted_count);
 int fat16_copy_file(unsigned int dir_cluster, const char* src_name, const char* dst_name);
+int fat16_copy_file_between_dirs(unsigned int src_dir_cluster, const char* src_name, unsigned int dst_dir_cluster, const char* dst_name);
+int fat16_get_entry_by_index(unsigned int dir_cluster, unsigned int index, char* out_name, int out_name_size, int* out_is_dir, unsigned int* out_file_size);
 int fat16_alloc_cluster(unsigned short* out_cluster);
 int fat16_free_cluster_chain(unsigned short start_cluster);
 int fat16_mkdir(unsigned int dir_cluster, const char* name);

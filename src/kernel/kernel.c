@@ -7,6 +7,7 @@
 #include "serial.h"
 #include "logger.h"
 #include "paging.h"
+#include "scheduler.h"
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
@@ -223,6 +224,12 @@ void kernel_main() {
         boot_panic_bsod(STOP_PAGING_INIT, "FAILED TO INITIALIZE PAGING.");
     }
     interrupts_init();
+
+    if (scheduler_phase5_self_test() != 0) {
+        boot_panic_bsod("STOP 0x00000006", "PHASE5 CONTEXT SWITCH SELF-TEST FAILED.");
+    }
+    scheduler_start_runtime_demo();
+    scheduler_enable_preemption(5);
     
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
     print_string("MiniDOS v0.1 Kernel Started\n");
