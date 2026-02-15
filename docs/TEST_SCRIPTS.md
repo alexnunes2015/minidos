@@ -71,6 +71,19 @@ python3 tests/test_paging.py --expect-fault
 make test-paging
 ```
 
+### 5. `tests/test_keyboard_irq.py` - Validação de teclado por IRQ1
+Valida entrada de teclado real via IRQ1 (sem enviar comando pela serial), injetando teclas pelo monitor QMP (`sendkey`) e confirmando que o comando chega ao shell sem duplicação.
+
+**Uso:**
+```bash
+python3 tests/test_keyboard_irq.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-keyboard
+```
+
 ## Características
 
 ✅ **Captura de Output** - Todos os comandos capturam a saída completa

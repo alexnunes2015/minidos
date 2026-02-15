@@ -224,6 +224,7 @@ void kernel_main() {
     if (paging_init() != 0) {
         boot_panic_bsod(STOP_PAGING_INIT, "FAILED TO INITIALIZE PAGING.");
     }
+    interrupts_init();
     
     show_boot_logo();
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);

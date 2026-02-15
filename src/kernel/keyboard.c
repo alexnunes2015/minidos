@@ -15,6 +15,10 @@ static int caps_lock = 0;
 static int break_code = 0;
 static int extended_code = 0;
 static int scancode_set2 = 0;
+static int irq_mode = 0;
+static char key_buffer[128];
+static int key_head = 0;
+static int key_tail = 0;
 
 // Scancode to ASCII mapping (lowercase)
 static const char scancode_map_lower[] = {
@@ -52,80 +56,134 @@ static char apply_caps(char c, int shift, int caps) {
     return c;
 }
 
-char keyboard_get_char() {
-    while (1) {
-        if (inb(0x64) & 0x01) { // Data available
-            unsigned char scancode = inb(0x60);
+static void push_char(char c) {
+    int next = (key_head + 1) % (int)sizeof(key_buffer);
+    if (next == key_tail) {
+        return;
+    }
+    key_buffer[key_head] = c;
+    key_head = next;
+}
 
-            // Extended scancode prefix
-            if (scancode == 0xE0) {
-                extended_code = 1;
-                continue;
-            }
+static int pop_char(char* out) {
+    if (key_tail == key_head) {
+        return 0;
+    }
+    *out = key_buffer[key_tail];
+    key_tail = (key_tail + 1) % (int)sizeof(key_buffer);
+    return 1;
+}
 
-            // Break code prefix (set 2)
-            if (scancode == 0xF0) {
-                scancode_set2 = 1;
-                break_code = 1;
-                continue;
-            }
-            
-            // Handle special keys (scancodes > 0x80 are key releases)
-            if (scancode == 0x2A || scancode == 0x36) {  // Left or Right Shift pressed (set 1)
-                shift_pressed = 1;
-                continue;
-            }
-            if (scancode == 0xAA || scancode == 0xB6) {  // Left or Right Shift released (set 1)
-                shift_pressed = 0;
-                continue;
-            }
+static char keyboard_process_scancode(unsigned char scancode) {
+    if (scancode == 0xE0) {
+        extended_code = 1;
+        return 0;
+    }
 
-            // Shift in set 2 (make/break)
-            if (scancode_set2 && (scancode == 0x12 || scancode == 0x59)) {
-                if (break_code) {
-                    shift_pressed = 0;
-                } else {
-                    shift_pressed = 1;
-                }
-                break_code = 0;
-                extended_code = 0;
-                continue;
-            }
-            if (scancode == 0x1D) {  // Left Ctrl pressed
-                ctrl_pressed = 1;
-                continue;
-            }
-            if (scancode == 0x9D) {  // Left Ctrl released
-                ctrl_pressed = 0;
-                continue;
-            }
+    if (scancode == 0xF0) {
+        scancode_set2 = 1;
+        break_code = 1;
+        return 0;
+    }
 
-            // Caps Lock toggle (set 1 / set 2)
-            if ((scancode == 0x3A) || (scancode_set2 && scancode == 0x58)) {
-                // Only toggle on key press (not release)
-                if (!break_code && !(scancode & 0x80)) {
-                    caps_lock = !caps_lock;
-                }
-                break_code = 0;
-                extended_code = 0;
-                continue;
-            }
-            
-            // Regular key press (not release)
-            if (!(scancode & 0x80) && !break_code) {
-                char c = scancode_to_char(scancode, shift_pressed);
-                c = apply_caps(c, shift_pressed, caps_lock);
-                if (c) {
-                    extended_code = 0;
-                    return c;
-                }
-            }
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_pressed = 1;
+        return 0;
+    }
+    if (scancode == 0xAA || scancode == 0xB6) {
+        shift_pressed = 0;
+        return 0;
+    }
 
+    if (scancode_set2 && (scancode == 0x12 || scancode == 0x59)) {
+        if (break_code) {
+            shift_pressed = 0;
+        } else {
+            shift_pressed = 1;
+        }
+        break_code = 0;
+        extended_code = 0;
+        return 0;
+    }
+    if (scancode == 0x1D) {
+        ctrl_pressed = 1;
+        return 0;
+    }
+    if (scancode == 0x9D) {
+        ctrl_pressed = 0;
+        return 0;
+    }
+
+    if ((scancode == 0x3A) || (scancode_set2 && scancode == 0x58)) {
+        if (!break_code && !(scancode & 0x80)) {
+            caps_lock = !caps_lock;
+        }
+        break_code = 0;
+        extended_code = 0;
+        return 0;
+    }
+
+    if (!(scancode & 0x80) && !break_code) {
+        char c = scancode_to_char(scancode, shift_pressed);
+        c = apply_caps(c, shift_pressed, caps_lock);
+        if (c) {
+            extended_code = 0;
             if (scancode_set2) {
                 break_code = 0;
             }
-            extended_code = 0;
+            return c;
         }
+    }
+
+    if (scancode_set2) {
+        break_code = 0;
+    }
+    extended_code = 0;
+    return 0;
+}
+
+void keyboard_init(void) {
+    shift_pressed = 0;
+    ctrl_pressed = 0;
+    caps_lock = 0;
+    break_code = 0;
+    extended_code = 0;
+    scancode_set2 = 0;
+    irq_mode = 0;
+    key_head = 0;
+    key_tail = 0;
+}
+
+void keyboard_set_irq_mode(int enabled) {
+    irq_mode = enabled ? 1 : 0;
+}
+
+void keyboard_handle_irq(void) {
+    if (inb(0x64) & 0x01) {
+        unsigned char scancode = inb(0x60);
+        char c = keyboard_process_scancode(scancode);
+        if (c) {
+            push_char(c);
+        }
+    }
+}
+
+char keyboard_get_char() {
+    char c;
+    while (1) {
+        if (pop_char(&c)) {
+            return c;
+        }
+
+        if (!irq_mode && (inb(0x64) & 0x01)) {
+            unsigned char scancode = inb(0x60);
+            c = keyboard_process_scancode(scancode);
+            if (c) {
+                return c;
+            }
+        }
+
+        __asm__ volatile ("nop");
     }
 }
 

@@ -2,5 +2,6 @@
 #define PAGING_H
 
 int paging_init();
+void interrupts_init();
 
 #endif

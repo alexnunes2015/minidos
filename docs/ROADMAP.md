@@ -64,6 +64,8 @@ Referência de execução detalhada:
 
 ## Fase 2 - Interrupções e Robustez de Kernel (1 a 2 semanas)
 
+Status: concluída em 15/02/2026.
+
 Objetivo: reduzir dependência de polling e melhorar resiliência.
 
 - Consolidar IDT/ISR como caminho padrão de exceções.
