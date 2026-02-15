@@ -251,6 +251,29 @@ char keyboard_get_char() {
     }
 }
 
+int keyboard_try_get_char(char* out) {
+    char c;
+    if (!out) {
+        return 0;
+    }
+
+    if (pop_char(&c)) {
+        *out = c;
+        return 1;
+    }
+
+    if (!irq_mode && (inb(0x64) & 0x01)) {
+        unsigned char scancode = inb(0x60);
+        c = keyboard_process_scancode(scancode);
+        if (c) {
+            *out = c;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 void keyboard_read_line(char* buffer, int max_len) {
     int i = 0;
     while (i < max_len - 1) {

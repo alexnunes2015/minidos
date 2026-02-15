@@ -28,6 +28,8 @@ enum {
     MINIDOS_SYSCALL_RANDOM = 20,
     MINIDOS_SYSCALL_FILE_READ = 21,
     MINIDOS_SYSCALL_FILE_WRITE = 22,
+    MINIDOS_SYSCALL_GET_CHAR_NONBLOCK = 23,
+    MINIDOS_SYSCALL_GET_TICKS = 24,
 };
 
 typedef struct {
@@ -63,6 +65,19 @@ static inline char app_get_char(const minidos_app_api_t* api) {
         return 0;
     }
     return (char)c;
+}
+
+static inline int app_get_char_nonblock(const minidos_app_api_t* api, char* out) {
+    int c;
+    if (!out) {
+        return 0;
+    }
+    c = app_syscall(api, MINIDOS_SYSCALL_GET_CHAR_NONBLOCK, 0, 0, 0);
+    if (c < 0) {
+        return 0;
+    }
+    *out = (char)c;
+    return 1;
 }
 
 static inline int app_file_size(const minidos_app_api_t* api, const char* path) {
@@ -143,6 +158,10 @@ static inline int app_file_read(const minidos_app_api_t* api, const char* name, 
 
 static inline int app_file_write(const minidos_app_api_t* api, const char* name, const unsigned char* buffer, int size) {
     return app_syscall(api, MINIDOS_SYSCALL_FILE_WRITE, (unsigned int)name, (unsigned int)buffer, (unsigned int)size);
+}
+
+static inline unsigned int app_get_ticks(const minidos_app_api_t* api) {
+    return (unsigned int)app_syscall(api, MINIDOS_SYSCALL_GET_TICKS, 0, 0, 0);
 }
 
 #endif

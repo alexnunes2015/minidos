@@ -25,5 +25,6 @@ void scheduler_init_timer(unsigned int hz);
 void scheduler_enable_preemption(unsigned int quantum_ticks);
 irq_frame_t* scheduler_on_timer_tick(irq_frame_t* frame);
 int scheduler_phase5_self_test(void);
+unsigned int scheduler_get_ticks(void);
 
 #endif

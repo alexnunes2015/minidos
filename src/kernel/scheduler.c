@@ -235,3 +235,7 @@ int scheduler_phase5_self_test(void) {
     sched_runtime_reset();
     return 0;
 }
+
+unsigned int scheduler_get_ticks(void) {
+    return g_ticks;
+}

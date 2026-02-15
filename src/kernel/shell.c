@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "rtc.h"
 #include "keyboard.h"
+#include "scheduler.h"
 
 static unsigned int current_dir_cluster = 0;
 static char current_path[64] = "\\";
@@ -622,6 +623,8 @@ enum {
     APP_SYSCALL_RANDOM = 20,
     APP_SYSCALL_FILE_READ = 21,
     APP_SYSCALL_FILE_WRITE = 22,
+    APP_SYSCALL_GET_CHAR_NONBLOCK = 23,
+    APP_SYSCALL_GET_TICKS = 24,
 };
 
 typedef struct {
@@ -660,6 +663,17 @@ static char app_api_get_char(void) {
     return keyboard_get_char();
 }
 
+static int app_api_get_char_nonblock(char* out) {
+    if (!out) {
+        return 0;
+    }
+    if (serial_received()) {
+        *out = serial_getchar();
+        return 1;
+    }
+    return keyboard_try_get_char(out);
+}
+
 static unsigned int app_rng_state = 0xA5F21C3Du;
 
 static unsigned int app_api_random_u32(void) {
@@ -684,6 +698,18 @@ static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, u
 
     if (num == APP_SYSCALL_GET_CHAR) {
         return (int)(unsigned char)app_api_get_char();
+    }
+
+    if (num == APP_SYSCALL_GET_CHAR_NONBLOCK) {
+        char c = 0;
+        if (app_api_get_char_nonblock(&c)) {
+            return (int)(unsigned char)c;
+        }
+        return -1;
+    }
+
+    if (num == APP_SYSCALL_GET_TICKS) {
+        return (int)scheduler_get_ticks();
     }
 
     if (num == APP_SYSCALL_RANDOM) {
