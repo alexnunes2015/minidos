@@ -502,6 +502,94 @@ static int parse_single_arg(const char* args, char* out, int out_size) {
     return args[i] == '\0';
 }
 
+static int parse_uint_arg(const char* s, unsigned int* out) {
+    unsigned int value = 0;
+    int i = 0;
+    int base = 10;
+    int digits = 0;
+
+    if (!s || !out) {
+        return 0;
+    }
+
+    while (s[i] == ' ' || s[i] == '\t') {
+        i++;
+    }
+
+    if (s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X')) {
+        base = 16;
+        i += 2;
+    }
+
+    while (s[i] != '\0') {
+        unsigned int d;
+        char c = s[i];
+        if (c >= '0' && c <= '9') {
+            d = (unsigned int)(c - '0');
+        } else if (base == 16 && c >= 'a' && c <= 'f') {
+            d = 10u + (unsigned int)(c - 'a');
+        } else if (base == 16 && c >= 'A' && c <= 'F') {
+            d = 10u + (unsigned int)(c - 'A');
+        } else {
+            break;
+        }
+        value = value * (unsigned int)base + d;
+        i++;
+        digits++;
+    }
+
+    while (s[i] == ' ' || s[i] == '\t') {
+        i++;
+    }
+
+    if (digits == 0 || s[i] != '\0') {
+        return 0;
+    }
+
+    *out = value;
+    return 1;
+}
+
+static int parse_n_uints(const char* args, unsigned int* out, int count, const char** rest) {
+    int i = 0;
+
+    if (!args || !out || count <= 0) {
+        return 0;
+    }
+
+    for (int n = 0; n < count; n++) {
+        char tok[32];
+        int j = 0;
+
+        while (args[i] == ' ' || args[i] == '\t') {
+            i++;
+        }
+        if (args[i] == '\0') {
+            return 0;
+        }
+
+        while (args[i] != '\0' && args[i] != ' ' && args[i] != '\t') {
+            if (j >= (int)sizeof(tok) - 1) {
+                return 0;
+            }
+            tok[j++] = args[i++];
+        }
+        tok[j] = '\0';
+
+        if (!parse_uint_arg(tok, &out[n])) {
+            return 0;
+        }
+    }
+
+    while (args[i] == ' ' || args[i] == '\t') {
+        i++;
+    }
+    if (rest) {
+        *rest = &args[i];
+    }
+    return 1;
+}
+
 static int has_wildcards(const char* s) {
     for (int i = 0; s[i]; i++) {
         if (s[i] == '*' || s[i] == '?') {
@@ -1598,6 +1686,12 @@ void shell_execute(char* cmd) {
         shell_out_screen("  run <app>     - Execute ELF app\n");
         shell_out_screen("  dmesg         - Show debug ring buffer\n");
         shell_out_screen("  boot          - Show boot screen\n");
+        shell_out_screen("  sleep <ms>    - Pause script execution\n");
+        shell_out_screen("  color <rgb>   - Clear screen with color (0xRRGGBB)\n");
+        shell_out_screen("  rect <x> <y> <w> <h> <rgb> - Fill rectangle\n");
+        shell_out_screen("  box <x> <y> <w> <h> <rgb>  - Draw rectangle border\n");
+        shell_out_screen("  text <x> <y> <fg> <bg> <msg> - Draw text\n");
+        shell_out_screen("  window <x> <y> <w> <h> <title> - Draw simple window\n");
         shell_out_screen("  help          - This help\n");
     } else if (mystrcmp(command, "echo") == 0) {
         shell_out_both(args);
@@ -1691,6 +1785,72 @@ void shell_execute(char* cmd) {
         cls();
     } else if (mystrcmp(command, "boot") == 0) {
         show_boot_screen();
+    } else if (mystrcmp(command, "sleep") == 0) {
+        unsigned int ms = 0;
+        if (!parse_uint_arg(args, &ms)) {
+            shell_out_both("Usage: sleep <ms>\n");
+            return;
+        }
+        wait_ms(ms);
+    } else if (mystrcmp(command, "color") == 0) {
+        unsigned int rgb = 0;
+        if (!parse_uint_arg(args, &rgb)) {
+            shell_out_both("Usage: color <rgb>\n");
+            return;
+        }
+        video_clear_color(rgb & 0x00FFFFFFu);
+    } else if (mystrcmp(command, "rect") == 0) {
+        unsigned int v[5];
+        const char* rest = 0;
+        if (!parse_n_uints(args, v, 5, &rest) || (rest && rest[0] != '\0')) {
+            shell_out_both("Usage: rect <x> <y> <w> <h> <rgb>\n");
+            return;
+        }
+        video_fill_rect((int)v[0], (int)v[1], (int)v[2], (int)v[3], v[4] & 0x00FFFFFFu);
+    } else if (mystrcmp(command, "box") == 0) {
+        unsigned int v[5];
+        const char* rest = 0;
+        if (!parse_n_uints(args, v, 5, &rest) || (rest && rest[0] != '\0')) {
+            shell_out_both("Usage: box <x> <y> <w> <h> <rgb>\n");
+            return;
+        }
+        if (v[2] == 0 || v[3] == 0) {
+            return;
+        }
+        video_fill_rect((int)v[0], (int)v[1], (int)v[2], 1, v[4] & 0x00FFFFFFu);
+        if (v[3] > 1) {
+            video_fill_rect((int)v[0], (int)(v[1] + v[3] - 1), (int)v[2], 1, v[4] & 0x00FFFFFFu);
+        }
+        if (v[3] > 2) {
+            video_fill_rect((int)v[0], (int)(v[1] + 1), 1, (int)(v[3] - 2), v[4] & 0x00FFFFFFu);
+            if (v[2] > 1) {
+                video_fill_rect((int)(v[0] + v[2] - 1), (int)(v[1] + 1), 1, (int)(v[3] - 2), v[4] & 0x00FFFFFFu);
+            }
+        }
+    } else if (mystrcmp(command, "text") == 0) {
+        unsigned int v[4];
+        const char* rest = 0;
+        if (!parse_n_uints(args, v, 4, &rest) || !rest || rest[0] == '\0') {
+            shell_out_both("Usage: text <x> <y> <fg> <bg> <message>\n");
+            return;
+        }
+        video_draw_text_at((int)v[0], (int)v[1], rest, v[2] & 0x00FFFFFFu, v[3] & 0x00FFFFFFu);
+    } else if (mystrcmp(command, "window") == 0) {
+        unsigned int v[4];
+        const char* title = 0;
+        if (!parse_n_uints(args, v, 4, &title) || !title || title[0] == '\0') {
+            shell_out_both("Usage: window <x> <y> <w> <h> <title>\n");
+            return;
+        }
+        if (v[2] < 16 || v[3] < 16) {
+            shell_out_both("window: minimum size is 16x16\n");
+            return;
+        }
+        video_fill_rect((int)v[0], (int)v[1], (int)v[2], (int)v[3], 0xC0C0C0u);
+        video_fill_rect((int)v[0] + 1, (int)v[1] + 1, (int)v[2] - 2, (int)v[3] - 2, 0x000080u);
+        video_fill_rect((int)v[0] + 3, (int)v[1] + 3, (int)v[2] - 6, 14, 0xC0C0C0u);
+        video_fill_rect((int)v[0] + 3, (int)v[1] + 19, (int)v[2] - 6, (int)v[3] - 22, 0xFFFFFFu);
+        video_draw_text_at((int)v[0] + 8, (int)v[1] + 6, title, 0x000000u, 0xC0C0C0u);
     } else if (mystrcmp(command, "drives") == 0) {
         drive_list_all();
     } else if (mystrcmp(command, "dmesg") == 0) {
