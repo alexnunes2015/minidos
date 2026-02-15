@@ -507,6 +507,7 @@ enum {
     APP_SYSCALL_MOVE_TO_DIR = 17,
     APP_SYSCALL_CLIP_SET = 18,
     APP_SYSCALL_CLIP_PASTE = 19,
+    APP_SYSCALL_RANDOM = 20,
 };
 
 typedef struct {
@@ -545,6 +546,22 @@ static char app_api_get_char(void) {
     return keyboard_get_char();
 }
 
+static unsigned int app_rng_state = 0xA5F21C3Du;
+
+static unsigned int app_api_random_u32(void) {
+    unsigned int pit = (unsigned int)pit_read_counter0();
+    unsigned int mix = pit ^ (pit << 16);
+
+    app_rng_state ^= mix;
+    app_rng_state ^= (app_rng_state << 13);
+    app_rng_state ^= (app_rng_state >> 17);
+    app_rng_state ^= (app_rng_state << 5);
+    if (app_rng_state == 0) {
+        app_rng_state = 0x6D2B79F5u ^ mix;
+    }
+    return app_rng_state;
+}
+
 static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
     if (num == APP_SYSCALL_PUTS) {
         app_api_puts((const char*)a0);
@@ -553,6 +570,15 @@ static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, u
 
     if (num == APP_SYSCALL_GET_CHAR) {
         return (int)(unsigned char)app_api_get_char();
+    }
+
+    if (num == APP_SYSCALL_RANDOM) {
+        unsigned int limit = a0;
+        unsigned int value = app_api_random_u32() & 0x7FFFFFFFu;
+        if (limit > 0) {
+            value %= limit;
+        }
+        return (int)value;
     }
 
     if (num == APP_SYSCALL_FILE_SIZE) {

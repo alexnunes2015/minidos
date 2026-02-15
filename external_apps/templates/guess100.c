@@ -26,14 +26,11 @@ static void put_uint(const minidos_app_api_t* api, unsigned int value) {
     }
 }
 
-static int read_line(const minidos_app_api_t* api, char* out, int max_len, unsigned int* seed) {
+static int read_line(const minidos_app_api_t* api, char* out, int max_len) {
     int len = 0;
 
     while (1) {
         char c = app_get_char(api);
-        if (seed) {
-            *seed = (*seed * 1664525u) + (unsigned int)(unsigned char)c + 1013904223u;
-        }
 
         if (c == '\r' || c == '\n') {
             put_char(api, '\n');
@@ -92,7 +89,6 @@ static int parse_guess(const char* text, int* out_value) {
 }
 
 int app_main(const minidos_app_api_t* api) {
-    unsigned int seed = 0xC0DEF00Du;
     int target;
     int attempts = 0;
     char line[16];
@@ -101,13 +97,15 @@ int app_main(const minidos_app_api_t* api) {
     app_puts(api, "Try to guess a number between 0 and 100.\n");
     app_puts(api, "Type 'exit' to quit.\n\n");
 
-    seed ^= (unsigned int)(unsigned long)api;
-    target = (int)(seed % 101u);
+    target = app_random(api, 101);
+    if (target < 0 || target > 100) {
+        target = 50;
+    }
 
     while (1) {
         int guess = 0;
         app_puts(api, "Your guess (0-100): ");
-        read_line(api, line, (int)sizeof(line), &seed);
+        read_line(api, line, (int)sizeof(line));
 
         if (streq(line, "exit")) {
             app_puts(api, "Leaving game.\n");

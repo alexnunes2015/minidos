@@ -25,6 +25,7 @@ enum {
     MINIDOS_SYSCALL_MOVE_TO_DIR = 17,
     MINIDOS_SYSCALL_CLIP_SET = 18,
     MINIDOS_SYSCALL_CLIP_PASTE = 19,
+    MINIDOS_SYSCALL_RANDOM = 20,
 };
 
 typedef struct {
@@ -128,6 +129,10 @@ static inline int app_clip_set(const minidos_app_api_t* api, const char* src_nam
 
 static inline int app_clip_paste(const minidos_app_api_t* api, const char* dst_dir_name_or_empty) {
     return app_syscall(api, MINIDOS_SYSCALL_CLIP_PASTE, (unsigned int)dst_dir_name_or_empty, 0, 0);
+}
+
+static inline int app_random(const minidos_app_api_t* api, unsigned int limit) {
+    return app_syscall(api, MINIDOS_SYSCALL_RANDOM, limit, 0, 0);
 }
 
 #endif
