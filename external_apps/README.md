@@ -1,17 +1,16 @@
 # MiniDOS External Apps
 
 This folder documents how to build external programs for MiniDOS and place
-them in drive `A:` as `.COM` files.
+them in drive `A:` as `.ELF` files.
 
 Important:
-- These `.COM` files are **not** DOS real-mode `.COM` files.
-- They are 32-bit flat binaries executed by the MiniDOS kernel in protected mode.
+- These `.ELF` files are 32-bit executables loaded by the MiniDOS ELF loader.
+- They are executed by the MiniDOS kernel in protected mode.
 
 ## Requirements
 
 - `gcc` with 32-bit output support (`-m32`)
 - `ld`
-- `objcopy`
 - `nasm`
 - `mtools` (`mcopy`)
 - `minidos.img` already created (`make`)
@@ -21,8 +20,9 @@ Important:
 - Implement `int app_main(const minidos_app_api_t* api)` in C.
 - No libc: do not use `printf`, `malloc`, or system headers that need runtime.
 - Return an integer exit code; the shell prints it after execution.
-- Use `api->puts` / `app_puts(api, "...")` for output.
-- Use `api->get_char` / `app_get_char(api)` for single-char input.
+- Use `app_puts(api, "...")` for output.
+- Use `app_get_char(api)` for single-char input.
+- Use `app_file_size(api, "FILE.ELF")` for basic file stat.
 - Keep programs simple for now (no command-line arguments yet).
 
 ## Build and install utility
@@ -41,8 +41,8 @@ Examples:
 ```
 
 The utility will:
-1. Build a 32-bit `.COM` binary.
-2. Copy it to `A:` inside `minidos.img`.
+1. Build a 32-bit ELF app.
+2. Copy it to `A:` inside `minidos.img` as `.ELF`.
 
 After booting MiniDOS, execute by typing:
 
@@ -53,7 +53,7 @@ hello
 or (equivalent):
 
 ```text
-hello.com
+run hello
 ```
 
 ## Manual flow (reference)
@@ -67,6 +67,5 @@ gcc -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie
     -Iexternal_apps/runtime -c my_app.c -o build/external_apps/app.o
 ld -m elf_i386 -T external_apps/runtime/app.ld -o build/external_apps/app.elf \
     build/external_apps/entry.o build/external_apps/app.o
-objcopy -O binary build/external_apps/app.elf build/external_apps/MYAPP.COM
-mcopy -o -i minidos.img@@1048576 build/external_apps/MYAPP.COM ::/MYAPP.COM
+mcopy -o -i minidos.img@@1048576 build/external_apps/app.elf ::/MYAPP.ELF
 ```

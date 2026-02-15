@@ -108,9 +108,19 @@ Critério de pronto:
 
 Objetivo: executar apps externas com contrato mínimo estável.
 
+Status: concluída em 15/02/2026.
+
 - Fechar ABI de syscalls (conjunto mínimo para I/O, arquivo e saída de processo).
 - Integrar fluxo completo de build e carga ELF usando `external_apps/`.
 - Adicionar comandos de shell para listar e executar binários ELF.
+
+Entregas concluídas:
+- ABI mínima para apps externas via `minidos_app_api_t.syscall` (`puts`, `get_char`, `file_size`).
+- Loader ELF32 no shell (`PT_LOAD`) com validações básicas de cabeçalho e segmentos.
+- Execução de apps ELF por comando direto (`hello_elf`) e por `run <app>`, com retorno ao kernel.
+- Comando `elfls` para listar apps ELF no diretório atual.
+- Fluxo `external_apps/add_app.sh` atualizado para instalar `.ELF`.
+- Novo teste de regressão da fase: `tests/test_phase4.py` + alvo `make test-phase4`.
 
 Critério de pronto:
 - `hello_elf` e `stat_elf` executam pelo shell com retorno controlado ao kernel.

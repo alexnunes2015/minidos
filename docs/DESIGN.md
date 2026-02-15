@@ -24,14 +24,15 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 - **Keyboard**: IRQ1-driven input is enabled (PIC remapped + unmask IRQ1), with temporary fallback polling in the keyboard path for transitional robustness.
 - **File System**: FAT16 is implemented. It reads the root directory and directories, and loads files using cluster chains.
 - **ATA Disk**: PIO LBA read/write paths are implemented for `disk_id` 0..3 (primary/secondary, master/slave).
+- **Userland (Current)**: External ELF32 apps are loaded from FAT16 and executed in protected mode with a minimal syscall ABI (`puts`, `get_char`, `file_size`) exposed by the shell runtime contract.
 
 ## Trade-offs
 - **Polling vs Interrupts**: The kernel now uses interrupts as default runtime path. A small polling fallback remains in keyboard input as a compatibility bridge while IRQ-first behavior is stabilized.
 - **Real Mode BIOS vs PM I/O**: The kernel code is structured to be extensible. Using Port I/O for keyboard allows it to work in Protected Mode, while the disk driver still expects a sector-reading bridge.
 
 ## Current Limitations
-- FAT16 write-path validation is still expanding and needs broader regression coverage (edge cases and stress sequences).
+- ELF loader is intentionally minimal (ELF32 `ET_EXEC`, fixed low-memory window, no relocations/dynamic linking).
 
 ## Next Technical Steps
-- Expand FAT16 write/read regression coverage (including content update flows and failure-injection cases).
+- Expand syscall surface and isolate user/kernel memory domains as preparation for multitasking.
 - Strengthen interrupt diagnostics and add targeted automated tests for exception/IRQ regressions.

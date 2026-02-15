@@ -450,6 +450,31 @@ static int parse_two_args(const char* args, char* first, int first_size, char* s
     return args[i] == '\0';
 }
 
+static int parse_single_arg(const char* args, char* out, int out_size) {
+    int i = 0;
+    int j = 0;
+
+    while (args[i] == ' ' || args[i] == '\t') {
+        i++;
+    }
+    if (args[i] == '\0') {
+        return 0;
+    }
+
+    while (args[i] && args[i] != ' ' && args[i] != '\t') {
+        if (j >= out_size - 1) {
+            return 0;
+        }
+        out[j++] = args[i++];
+    }
+    out[j] = '\0';
+
+    while (args[i] == ' ' || args[i] == '\t') {
+        i++;
+    }
+    return args[i] == '\0';
+}
+
 static int has_wildcards(const char* s) {
     for (int i = 0; s[i]; i++) {
         if (s[i] == '*' || s[i] == '?') {
@@ -459,9 +484,16 @@ static int has_wildcards(const char* s) {
     return 0;
 }
 
+enum {
+    APP_SYSCALL_PUTS = 1,
+    APP_SYSCALL_GET_CHAR = 2,
+    APP_SYSCALL_FILE_SIZE = 3,
+};
+
+typedef int (*app_syscall_t)(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2);
+
 typedef struct {
-    void (*puts)(const char* text);
-    char (*get_char)(void);
+    app_syscall_t syscall;
 } minidos_app_api_t;
 
 static void app_api_puts(const char* text) {
@@ -478,6 +510,45 @@ static char app_api_get_char(void) {
     return keyboard_get_char();
 }
 
+static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
+    (void)a1;
+    (void)a2;
+
+    if (num == APP_SYSCALL_PUTS) {
+        app_api_puts((const char*)a0);
+        return 0;
+    }
+
+    if (num == APP_SYSCALL_GET_CHAR) {
+        return (int)(unsigned char)app_api_get_char();
+    }
+
+    if (num == APP_SYSCALL_FILE_SIZE) {
+        FAT16_DirectoryEntry entry;
+        char file_name[64];
+        int i = 0;
+        const char* input = (const char*)a0;
+        if (!input || input[0] == '\0') {
+            return -1;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(file_name) - 1) {
+            file_name[i] = input[i];
+            i++;
+        }
+        file_name[i] = '\0';
+        str_to_upper(file_name);
+        if (!fat16_find_entry(current_dir_cluster, file_name, &entry, 0, 0)) {
+            return -1;
+        }
+        if (entry.attributes & FAT16_ATTR_DIRECTORY) {
+            return -1;
+        }
+        return (int)entry.file_size;
+    }
+
+    return -1;
+}
+
 static int has_com_extension(const char* name) {
     int len = 0;
     while (name[len] != '\0') {
@@ -488,10 +559,16 @@ static int has_com_extension(const char* name) {
         return 0;
     }
 
+    char c1 = name[len - 3];
+    char c2 = name[len - 2];
+    char c3 = name[len - 1];
+    if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 - 'A' + 'a');
+    if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 - 'A' + 'a');
+    if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 - 'A' + 'a');
     return (name[len - 4] == '.'
-        && name[len - 3] == 'c'
-        && name[len - 2] == 'o'
-        && name[len - 1] == 'm');
+        && c1 == 'c'
+        && c2 == 'o'
+        && c3 == 'm');
 }
 
 static int build_com_filename(const char* command, char* out, int out_size) {
@@ -522,6 +599,185 @@ static int build_com_filename(const char* command, char* out, int out_size) {
     out[i++] = 'm';
     out[i] = '\0';
     return 1;
+}
+
+static int has_elf_extension(const char* name) {
+    int len = 0;
+    while (name[len] != '\0') {
+        len++;
+    }
+
+    if (len < 4) {
+        return 0;
+    }
+
+    char c1 = name[len - 3];
+    char c2 = name[len - 2];
+    char c3 = name[len - 1];
+    if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 - 'A' + 'a');
+    if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 - 'A' + 'a');
+    if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 - 'A' + 'a');
+    return (name[len - 4] == '.'
+        && c1 == 'e'
+        && c2 == 'l'
+        && c3 == 'f');
+}
+
+static int build_file_with_extension(const char* command, const char* ext, char* out, int out_size) {
+    int i = 0;
+    int ext_len = 0;
+    if (out_size <= 0) {
+        return 0;
+    }
+
+    while (command[i] != '\0') {
+        if (i >= out_size - 1) {
+            return 0;
+        }
+        out[i] = command[i];
+        i++;
+    }
+    out[i] = '\0';
+
+    while (ext[ext_len] != '\0') {
+        ext_len++;
+    }
+
+    if (i + ext_len >= out_size) {
+        return 0;
+    }
+
+    for (int j = 0; j < ext_len; j++) {
+        out[i++] = ext[j];
+    }
+    out[i] = '\0';
+    return 1;
+}
+
+static void normalize_app_name(const char* input, char* out, int out_size) {
+    int j = 0;
+    for (int i = 0; input[i] != '\0' && j < out_size - 1; i++) {
+        char c = input[i];
+        if (c == '.') {
+            break;
+        }
+        if (c == '_' || c == ' ' || c == '\t') {
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        out[j++] = c;
+        if (j >= 8) {
+            break;
+        }
+    }
+    out[j] = '\0';
+}
+
+typedef struct {
+    unsigned char ident[16];
+    unsigned short type;
+    unsigned short machine;
+    unsigned int version;
+    unsigned int entry;
+    unsigned int phoff;
+    unsigned int shoff;
+    unsigned int flags;
+    unsigned short ehsize;
+    unsigned short phentsize;
+    unsigned short phnum;
+    unsigned short shentsize;
+    unsigned short shnum;
+    unsigned short shstrndx;
+} __attribute__((packed)) elf32_header_t;
+
+typedef struct {
+    unsigned int type;
+    unsigned int offset;
+    unsigned int vaddr;
+    unsigned int paddr;
+    unsigned int filesz;
+    unsigned int memsz;
+    unsigned int flags;
+    unsigned int align;
+} __attribute__((packed)) elf32_program_header_t;
+
+static void mem_copy(unsigned char* dst, const unsigned char* src, unsigned int size) {
+    for (unsigned int i = 0; i < size; i++) {
+        dst[i] = src[i];
+    }
+}
+
+static void mem_zero(unsigned char* dst, unsigned int size) {
+    for (unsigned int i = 0; i < size; i++) {
+        dst[i] = 0;
+    }
+}
+
+static int load_elf_and_run(const unsigned char* elf_data, int elf_size, const minidos_app_api_t* api) {
+    const elf32_header_t* ehdr;
+    typedef int (*app_entry_t)(const minidos_app_api_t* api);
+    app_entry_t entry;
+
+    if (elf_size < (int)sizeof(elf32_header_t)) {
+        return -1;
+    }
+
+    ehdr = (const elf32_header_t*)elf_data;
+    if (ehdr->ident[0] != 0x7F || ehdr->ident[1] != 'E' || ehdr->ident[2] != 'L' || ehdr->ident[3] != 'F') {
+        return -1;
+    }
+    if (ehdr->ident[4] != 1 || ehdr->ident[5] != 1 || ehdr->version != 1) {
+        return -1;
+    }
+    if (ehdr->type != 2 || ehdr->machine != 3) {
+        return -1;
+    }
+    if (ehdr->phentsize != sizeof(elf32_program_header_t)) {
+        return -1;
+    }
+    if (ehdr->phnum == 0 || ehdr->phnum > 16) {
+        return -1;
+    }
+    if ((int)ehdr->phoff + (int)(ehdr->phnum * ehdr->phentsize) > elf_size) {
+        return -1;
+    }
+
+    for (unsigned int i = 0; i < ehdr->phnum; i++) {
+        const elf32_program_header_t* phdr = (const elf32_program_header_t*)(elf_data + ehdr->phoff + i * ehdr->phentsize);
+        unsigned char* dst;
+        const unsigned char* src;
+        if (phdr->type != 1) {
+            continue;
+        }
+        if (phdr->memsz == 0) {
+            continue;
+        }
+        if (phdr->memsz < phdr->filesz) {
+            return -1;
+        }
+        if ((int)phdr->offset + (int)phdr->filesz > elf_size) {
+            return -1;
+        }
+        if (phdr->vaddr < 0x200000 || (phdr->vaddr + phdr->memsz) > 0x300000) {
+            return -1;
+        }
+
+        dst = (unsigned char*)phdr->vaddr;
+        src = elf_data + phdr->offset;
+        mem_copy(dst, src, phdr->filesz);
+        if (phdr->memsz > phdr->filesz) {
+            mem_zero(dst + phdr->filesz, phdr->memsz - phdr->filesz);
+        }
+    }
+
+    if (ehdr->entry < 0x200000 || ehdr->entry >= 0x300000) {
+        return -1;
+    }
+
+    entry = (app_entry_t)ehdr->entry;
+    return entry(api);
 }
 
 static int try_execute_com(const char* command, const char* args) {
@@ -561,8 +817,7 @@ static int try_execute_com(const char* command, const char* args) {
     shell_out_both(filename);
     shell_out_both("...\n");
 
-    api.puts = app_api_puts;
-    api.get_char = app_api_get_char;
+    api.syscall = app_api_syscall;
 
     typedef int (*com_entry_t)(const minidos_app_api_t* api);
     com_entry_t entry = (com_entry_t)load_addr;
@@ -586,6 +841,81 @@ static int try_execute_com(const char* command, const char* args) {
     }
     shell_out_both("\n");
 
+    return 1;
+}
+
+static int try_execute_elf(const char* command, const char* args) {
+    char normalized[64];
+    char filename[64];
+    static unsigned char* const elf_buffer = (unsigned char*)0x300000;
+    static const int max_elf_size = 262144;
+    minidos_app_api_t api;
+
+    if (command[0] == '\0') {
+        return 0;
+    }
+
+    if (args[0] != '\0') {
+        return 0;
+    }
+
+    normalize_app_name(command, normalized, sizeof(normalized));
+    if (normalized[0] == '\0') {
+        return 0;
+    }
+
+    if (has_elf_extension(normalized)) {
+        if (!build_file_with_extension(normalized, "", filename, sizeof(filename))) {
+            return 0;
+        }
+    } else {
+        if (!build_file_with_extension(normalized, ".elf", filename, sizeof(filename))) {
+            return 0;
+        }
+    }
+
+    if (!fat16_initialized) {
+        fat16_set_drive(drive_get_current());
+        fat16_initialized = fat16_init();
+    }
+    if (!fat16_initialized) {
+        return 0;
+    }
+
+    str_to_upper(filename);
+    int bytes_read = fat16_read_file_from_dir(current_dir_cluster, filename, elf_buffer, max_elf_size);
+    if (bytes_read <= 0) {
+        return 0;
+    }
+
+    shell_out_both("Executing ");
+    shell_out_both(filename);
+    shell_out_both("...\n");
+
+    api.syscall = app_api_syscall;
+    int exit_code = load_elf_and_run(elf_buffer, bytes_read, &api);
+    if (exit_code == -1) {
+        shell_out_both("Invalid ELF or load error\n");
+        return 1;
+    }
+
+    shell_out_both("Program returned ");
+    if (exit_code >= 0 && exit_code <= 9) {
+        char d[2];
+        d[0] = (char)('0' + exit_code);
+        d[1] = '\0';
+        shell_out_both(d);
+    } else {
+        char code_str[16];
+        unsigned int value = (unsigned int)((exit_code < 0) ? -exit_code : exit_code);
+        int len = uint_to_dec(value, code_str);
+        code_str[len] = '\0';
+        if (exit_code < 0) {
+            shell_out_both("-");
+        }
+        shell_out_both(code_str);
+    }
+    shell_out_both("\n");
     return 1;
 }
 
@@ -697,6 +1027,8 @@ void shell_execute(char* cmd) {
         shell_out_screen("  del <file>    - Delete file\n");
         shell_out_screen("  copy <a> <b>  - Copy file\n");
         shell_out_screen("  move <a> <b>  - Rename file\n");
+        shell_out_screen("  elfls         - List ELF apps in current dir\n");
+        shell_out_screen("  run <app>     - Execute ELF app\n");
         shell_out_screen("  dmesg         - Show debug ring buffer\n");
         shell_out_screen("  boot          - Show boot screen\n");
         shell_out_screen("  help          - This help\n");
@@ -1027,10 +1359,35 @@ void shell_execute(char* cmd) {
                 shell_out_both("Failed to move file\n");
             }
         }
+    } else if (mystrcmp(command, "elfls") == 0) {
+        if (!ensure_fat16_ready()) {
+            shell_out_both("No disk or FAT16 partition found on current drive\n");
+            return;
+        }
+        shell_out_both("ELF apps in ");
+        shell_out_both_char('A' + drive_get_current());
+        shell_out_both(":");
+        shell_out_both(current_path);
+        shell_out_both("\n\n");
+        if (current_dir_cluster == 0) {
+            fat16_list_root_filtered("*.ELF");
+        } else {
+            fat16_list_dir_filtered(current_dir_cluster, "*.ELF");
+        }
+    } else if (mystrcmp(command, "run") == 0) {
+        char app_name[64];
+        if (!parse_single_arg(args, app_name, sizeof(app_name))) {
+            shell_out_both("Usage: run <app>\n");
+            return;
+        }
+        str_to_upper(app_name);
+        if (!try_execute_elf(app_name, "")) {
+            shell_out_both("ELF app not found or failed to load\n");
+        }
     } else if (mystrcmp(command, "bsod") == 0) {
         shell_trigger_bsod();
     } else if (cmd[0] != '\0') {
-        if (try_execute_com(command, args)) {
+        if (try_execute_elf(command, args) || try_execute_com(command, args)) {
             return;
         }
         print_string("Bad command or file name\n");

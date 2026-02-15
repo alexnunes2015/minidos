@@ -3,8 +3,35 @@
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISK_IMG="$ROOT_DIR/minidos.img"
+GUESS_APP_NAME="GUESS100"
+GUESS_APP_DIR="$ROOT_DIR/build/external_apps/$GUESS_APP_NAME"
+GUESS_APP_ELF="$GUESS_APP_DIR/$GUESS_APP_NAME.ELF"
 
 echo "=== Building MiniDOS with partitions ==="
+
+build_guess_game() {
+    mkdir -p "$GUESS_APP_DIR"
+
+    if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
+        echo "ERROR: Missing toolchain for default games (gcc/ld/nasm)." >&2
+        exit 1
+    fi
+
+    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$GUESS_APP_DIR/entry.o"
+    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
+        -fno-stack-protector -fno-pic -fno-pie -fno-common \
+        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
+        -I"$ROOT_DIR/external_apps/runtime" \
+        -c "$ROOT_DIR/external_apps/templates/guess100.c" -o "$GUESS_APP_DIR/app.o"
+    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$GUESS_APP_ELF" "$GUESS_APP_DIR/entry.o" "$GUESS_APP_DIR/app.o"
+
+    if [ ! -s "$GUESS_APP_ELF" ]; then
+        echo "ERROR: Failed to build default game app: $GUESS_APP_ELF" >&2
+        exit 1
+    fi
+}
+
+build_guess_game
 
 # Clean stale partitioning processes from interrupted runs
 pkill -f "sfdisk .*minidos.img" >/dev/null 2>&1 || true
@@ -113,6 +140,8 @@ trap "losetup -d $LOOP1 2>/dev/null; rm -rf $TMPDIR" EXIT
 # Add files to A:
 mount "$LOOP1" "$TMPDIR"
 echo "Welcome to drive A:" > $TMPDIR/README.TXT
+mkdir -p "$TMPDIR/GAMES"
+cp "$GUESS_APP_ELF" "$TMPDIR/GAMES/$GUESS_APP_NAME.ELF"
 
 # Add boot logo if it exists
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
@@ -142,6 +171,14 @@ format_with_mtools() {
 
     if ! echo "Welcome to drive A:" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/README.TXT; then
         echo "ERROR: failed to write README.TXT via mtools" >&2
+        return 1
+    fi
+    if ! mmd -i "$DISK_IMG@@$A_OFF" ::/GAMES; then
+        echo "ERROR: failed to create GAMES directory via mtools" >&2
+        return 1
+    fi
+    if ! mcopy -o -i "$DISK_IMG@@$A_OFF" "$GUESS_APP_ELF" "::/GAMES/$GUESS_APP_NAME.ELF"; then
+        echo "ERROR: failed to write $GUESS_APP_NAME.ELF via mtools" >&2
         return 1
     fi
 

@@ -19,7 +19,7 @@ KERNEL_ASM = $(BUILD_DIR)/entry.o
 
 # Ensure drive.o is included
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3
+.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4
 
 all: minidos.img
 
@@ -93,6 +93,9 @@ test-keyboard: minidos.img
 test-phase3: minidos.img
 	python3 tests/test_phase3.py
 
+test-phase4: minidos.img
+	python3 tests/test_phase4.py
+
 test: test-help test-ver test-drives
 
 phase0-check:
@@ -110,4 +113,4 @@ test-paging:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4 test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

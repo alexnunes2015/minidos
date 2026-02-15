@@ -52,7 +52,6 @@ fi
 
 need_cmd gcc
 need_cmd ld
-need_cmd objcopy
 need_cmd nasm
 need_cmd mcopy
 
@@ -67,7 +66,7 @@ APP_BUILD_DIR="$BUILD_DIR/$APP_BASE"
 ENTRY_OBJ="$APP_BUILD_DIR/entry.o"
 APP_OBJ="$APP_BUILD_DIR/app.o"
 APP_ELF="$APP_BUILD_DIR/$APP_BASE.elf"
-APP_COM="$APP_BUILD_DIR/$APP_BASE.COM"
+APP_DST="$APP_BUILD_DIR/$APP_BASE.ELF"
 
 echo "Building $APP_BASE from $SRC_PATH..."
 
@@ -80,16 +79,15 @@ gcc -m32 -ffreestanding -O2 -Wall -Wextra \
     -c "$SRC_PATH" -o "$APP_OBJ"
 
 ld -m elf_i386 -T "$TOOLS_DIR/app.ld" -o "$APP_ELF" "$ENTRY_OBJ" "$APP_OBJ"
-objcopy -O binary "$APP_ELF" "$APP_COM"
-
-if [[ ! -s "$APP_COM" ]]; then
-    echo "ERROR: Generated file is empty: $APP_COM" >&2
+if [[ ! -s "$APP_ELF" ]]; then
+    echo "ERROR: Generated file is empty: $APP_ELF" >&2
     exit 1
 fi
 
-echo "Copying $(basename "$APP_COM") to A: in minidos.img..."
-mcopy -o -i "$IMG_PATH@@$A_OFFSET" "$APP_COM" "::/$APP_BASE.COM"
+cp "$APP_ELF" "$APP_DST"
+echo "Copying $(basename "$APP_DST") to A: in minidos.img..."
+mcopy -o -i "$IMG_PATH@@$A_OFFSET" "$APP_DST" "::/$APP_BASE.ELF"
 
 echo "Done."
-echo "App installed as A:\\$APP_BASE.COM"
-echo "In MiniDOS, execute by typing: ${APP_BASE,,}"
+echo "App installed as A:\\$APP_BASE.ELF"
+echo "In MiniDOS, execute by typing: ${APP_BASE,,} or run ${APP_BASE,,}"
