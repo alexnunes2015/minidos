@@ -9,6 +9,16 @@ static unsigned char sector_buffer[SECTOR_SIZE];
 static int current_drive_letter = 0;  // A:
 static int fat16_debug_enabled = 1;
 
+static int fat16_alloc_cluster_internal(unsigned short* out_cluster);
+static int fat16_free_cluster_chain_internal(unsigned short start_cluster);
+static int fat16_find_entry_internal(
+    unsigned int dir_cluster,
+    const char* name,
+    FAT16_DirectoryEntry* out_entry,
+    int* out_sector,
+    int* out_index
+);
+
 static void print_both_char(char c) {
     print_char(c);
     serial_putchar(c);
@@ -396,6 +406,123 @@ void fat16_list_dir_filtered(unsigned int dir_cluster, const char* pattern) {
 
 int fat16_read_file(const char* filename, unsigned char* buffer, int max_size) {
     return fat16_read_file_from_dir(0, filename, buffer, max_size);
+}
+
+int fat16_write_file(const char* filename, const unsigned char* buffer, int size) {
+    return fat16_write_file_from_dir(0, filename, buffer, size);
+}
+
+int fat16_write_file_from_dir(unsigned int dir_cluster, const char* filename, const unsigned char* buffer, int size) {
+    FAT16_DirectoryEntry existing;
+    unsigned short old_first_cluster = 0;
+    unsigned short new_first_cluster = 0;
+    unsigned short write_cluster = 0;
+    unsigned short prev_cluster = 0;
+    unsigned int remaining = 0;
+    unsigned int max_steps = 0;
+    int cluster_bytes = (int)bpb.sectors_per_cluster * SECTOR_SIZE;
+    int offset = 0;
+    int exists = 0;
+
+    if (!filename || filename[0] == '\0' || size < 0) {
+        return 0;
+    }
+    if (size > 0 && !buffer) {
+        return 0;
+    }
+    if (cluster_bytes <= 0) {
+        return 0;
+    }
+
+    exists = fat16_find_entry_internal(dir_cluster, filename, &existing, 0, 0);
+    if (exists) {
+        if (existing.attributes & FAT16_ATTR_DIRECTORY) {
+            return 0;
+        }
+        old_first_cluster = existing.cluster_low;
+    }
+
+    remaining = (unsigned int)size;
+    max_steps = get_total_clusters() + 2;
+
+    while (remaining > 0 && max_steps-- > 0) {
+        int cluster_sector_base;
+
+        if (!fat16_alloc_cluster_internal(&write_cluster)) {
+            if (new_first_cluster >= 2) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+            }
+            return 0;
+        }
+        if (new_first_cluster == 0) {
+            new_first_cluster = write_cluster;
+        }
+        if (prev_cluster >= 2) {
+            if (!fat16_write_fat_entry(prev_cluster, write_cluster)) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+                return 0;
+            }
+            if (!fat16_write_fat_entry(write_cluster, 0xFFFF)) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+                return 0;
+            }
+        }
+        prev_cluster = write_cluster;
+
+        cluster_sector_base = get_data_start() + (write_cluster - 2) * bpb.sectors_per_cluster;
+        for (int s = 0; s < bpb.sectors_per_cluster; s++) {
+            unsigned int chunk = remaining > SECTOR_SIZE ? SECTOR_SIZE : remaining;
+            for (int i = 0; i < SECTOR_SIZE; i++) {
+                sector_buffer[i] = 0;
+            }
+            if (chunk > 0) {
+                for (unsigned int i = 0; i < chunk; i++) {
+                    sector_buffer[i] = buffer[offset + (int)i];
+                }
+                offset += (int)chunk;
+                remaining -= chunk;
+            }
+            if (disk_write_sector(cluster_sector_base + s, sector_buffer) != 0) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+                return 0;
+            }
+            if (remaining == 0) {
+                // keep writing zeroed sectors for this cluster (already zero-filled)
+            }
+        }
+    }
+
+    if (remaining != 0) {
+        if (new_first_cluster >= 2) {
+            fat16_free_cluster_chain_internal(new_first_cluster);
+        }
+        return 0;
+    }
+
+    if (exists) {
+        if (!fat16_update_entry(dir_cluster, filename, filename, new_first_cluster, (unsigned int)size,
+                                (unsigned char)((existing.attributes & FAT16_ATTR_READ_ONLY) | FAT16_ATTR_ARCHIVE))) {
+            if (new_first_cluster >= 2) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+            }
+            return 0;
+        }
+    } else {
+        if (!fat16_create_entry(dir_cluster, filename, new_first_cluster, (unsigned int)size, FAT16_ATTR_ARCHIVE)) {
+            if (new_first_cluster >= 2) {
+                fat16_free_cluster_chain_internal(new_first_cluster);
+            }
+            return 0;
+        }
+    }
+
+    if (old_first_cluster >= 2 && old_first_cluster != new_first_cluster) {
+        if (!fat16_free_cluster_chain_internal(old_first_cluster)) {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, unsigned char* buffer, int max_size) {

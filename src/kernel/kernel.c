@@ -19,6 +19,9 @@ static const unsigned int PIT_HZ = 1193182;
 #define STOP_PAGING_INIT    "STOP 0x00000002"
 #define STOP_DISK_READ      "STOP 0x00000003"
 #define STOP_DRIVE_DETECT   "STOP 0x00000004"
+#define AUTO_SCRIPT_NAME    "AUTOEXEC.AUT"
+#define AUTO_SCRIPT_MAX     2048
+#define AUTO_LINE_MAX       64
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char val;
@@ -174,6 +177,95 @@ static void show_boot_logo() {
     cls();
 }
 
+static int is_space(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static char to_upper_char(char c) {
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - ('a' - 'A'));
+    }
+    return c;
+}
+
+static int is_rem_line(const char* line) {
+    char a = to_upper_char(line[0]);
+    char b = to_upper_char(line[1]);
+    char c = to_upper_char(line[2]);
+    if (a == 'R' && b == 'E' && c == 'M') {
+        char next = line[3];
+        if (next == '\0' || is_space(next)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void run_auto_script() {
+    static unsigned char script[AUTO_SCRIPT_MAX + 1];
+    char line[AUTO_LINE_MAX];
+    int bytes_read;
+    int i;
+
+    fat16_set_drive(drive_get_current());
+    if (!fat16_init()) {
+        log_write(LOG_LEVEL_DEBUG, "autoexec", "FAT16 not ready, skipping AUTOEXEC.AUT\n", LOG_DEST_SERIAL);
+        return;
+    }
+
+    bytes_read = fat16_read_file(AUTO_SCRIPT_NAME, script, AUTO_SCRIPT_MAX);
+    if (bytes_read <= 0) {
+        log_write(LOG_LEVEL_DEBUG, "autoexec", "AUTOEXEC.AUT not found\n", LOG_DEST_SERIAL);
+        return;
+    }
+
+    script[bytes_read] = '\0';
+    log_write(LOG_LEVEL_INFO, "autoexec", "Running AUTOEXEC.AUT\n", LOG_DEST_SERIAL);
+
+    i = 0;
+    while (i < bytes_read) {
+        int line_len = 0;
+        int start;
+        int end;
+
+        while (i < bytes_read && script[i] != '\n') {
+            if (script[i] != '\r' && line_len < (AUTO_LINE_MAX - 1)) {
+                line[line_len++] = (char)script[i];
+            }
+            i++;
+        }
+        if (i < bytes_read && script[i] == '\n') {
+            i++;
+        }
+
+        line[line_len] = '\0';
+
+        start = 0;
+        while (line[start] != '\0' && is_space(line[start])) {
+            start++;
+        }
+
+        end = line_len;
+        while (end > start && is_space(line[end - 1])) {
+            end--;
+        }
+        line[end] = '\0';
+
+        if (line[start] == '\0') {
+            continue;
+        }
+
+        if (is_rem_line(&line[start])) {
+            continue;
+        }
+
+        log_write(LOG_LEVEL_INFO, "autoexec", "Command: ", LOG_DEST_SERIAL);
+        log_serial_raw(&line[start]);
+        log_serial_raw("\n");
+        shell_execute(&line[start]);
+    }
+}
+
 void kernel_main() {
     // Initialize serial for debugging FIRST
     serial_init();
@@ -228,7 +320,6 @@ void kernel_main() {
     if (scheduler_phase5_self_test() != 0) {
         boot_panic_bsod("STOP 0x00000006", "PHASE5 CONTEXT SWITCH SELF-TEST FAILED.");
     }
-    scheduler_start_runtime_demo();
     scheduler_enable_preemption(5);
     
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
@@ -256,6 +347,7 @@ void kernel_main() {
     
     log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
     shell_init();
+    run_auto_script();
     
     log_write(LOG_LEVEL_INFO, "kernel", "Entering main loop\n", LOG_DEST_SERIAL);
     while(1) {

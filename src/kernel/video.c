@@ -510,10 +510,6 @@ void print_char(char c) {
     init_video_once();
 
     if (graphics_mode) {
-        if (c >= 'a' && c <= 'z') {
-            c = (char)(c - 'a' + 'A');
-        }
-
         if (c == '\n') {
             cursor_x = 0;
             cursor_y++;

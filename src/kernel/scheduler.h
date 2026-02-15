@@ -24,7 +24,6 @@ typedef struct {
 void scheduler_init_timer(unsigned int hz);
 void scheduler_enable_preemption(unsigned int quantum_ticks);
 irq_frame_t* scheduler_on_timer_tick(irq_frame_t* frame);
-void scheduler_start_runtime_demo(void);
 int scheduler_phase5_self_test(void);
 
 #endif

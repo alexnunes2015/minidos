@@ -412,6 +412,30 @@ static void str_to_upper(char* s) {
     }
 }
 
+static void str_copy_upper(const char* src, char* dst, int dst_size) {
+    int i = 0;
+    if (dst_size <= 0) {
+        return;
+    }
+    while (src[i] && i < dst_size - 1) {
+        char c = src[i];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        dst[i] = c;
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static void str_to_lower(char* s) {
+    for (int i = 0; s[i]; i++) {
+        if (s[i] >= 'A' && s[i] <= 'Z') {
+            s[i] = (char)(s[i] - 'A' + 'a');
+        }
+    }
+}
+
 static int parse_two_args(const char* args, char* first, int first_size, char* second, int second_size) {
     int i = 0;
     int j = 0;
@@ -508,6 +532,8 @@ enum {
     APP_SYSCALL_CLIP_SET = 18,
     APP_SYSCALL_CLIP_PASTE = 19,
     APP_SYSCALL_RANDOM = 20,
+    APP_SYSCALL_FILE_READ = 21,
+    APP_SYSCALL_FILE_WRITE = 22,
 };
 
 typedef struct {
@@ -602,6 +628,42 @@ static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, u
             return -1;
         }
         return (int)entry.file_size;
+    }
+
+    if (num == APP_SYSCALL_FILE_READ) {
+        char file_name[64];
+        unsigned char* out_buffer = (unsigned char*)a1;
+        int max_size = (int)a2;
+        int i = 0;
+        const char* input = (const char*)a0;
+        if (!input || !out_buffer || max_size <= 0) {
+            return -1;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(file_name) - 1) {
+            file_name[i] = input[i];
+            i++;
+        }
+        file_name[i] = '\0';
+        str_to_upper(file_name);
+        return fat16_read_file_from_dir(current_dir_cluster, file_name, out_buffer, max_size);
+    }
+
+    if (num == APP_SYSCALL_FILE_WRITE) {
+        char file_name[64];
+        const unsigned char* in_buffer = (const unsigned char*)a1;
+        int size = (int)a2;
+        int i = 0;
+        const char* input = (const char*)a0;
+        if (!input || (!in_buffer && size > 0) || size < 0) {
+            return 0;
+        }
+        while (input[i] != '\0' && i < (int)sizeof(file_name) - 1) {
+            file_name[i] = input[i];
+            i++;
+        }
+        file_name[i] = '\0';
+        str_to_upper(file_name);
+        return fat16_write_file_from_dir(current_dir_cluster, file_name, in_buffer, size);
     }
 
     if (num == APP_SYSCALL_LIST_ENTRY) {
@@ -931,6 +993,28 @@ static int has_com_extension(const char* name) {
         && c3 == 'm');
 }
 
+static int has_aut_extension(const char* name) {
+    int len = 0;
+    while (name[len] != '\0') {
+        len++;
+    }
+
+    if (len < 4) {
+        return 0;
+    }
+
+    char c1 = name[len - 3];
+    char c2 = name[len - 2];
+    char c3 = name[len - 1];
+    if (c1 >= 'A' && c1 <= 'Z') c1 = (char)(c1 - 'A' + 'a');
+    if (c2 >= 'A' && c2 <= 'Z') c2 = (char)(c2 - 'A' + 'a');
+    if (c3 >= 'A' && c3 <= 'Z') c3 = (char)(c3 - 'A' + 'a');
+    return (name[len - 4] == '.'
+        && c1 == 'a'
+        && c2 == 'u'
+        && c3 == 't');
+}
+
 static int build_com_filename(const char* command, char* out, int out_size) {
     int i = 0;
     if (out_size <= 0) {
@@ -957,6 +1041,36 @@ static int build_com_filename(const char* command, char* out, int out_size) {
     out[i++] = 'c';
     out[i++] = 'o';
     out[i++] = 'm';
+    out[i] = '\0';
+    return 1;
+}
+
+static int build_aut_filename(const char* command, char* out, int out_size) {
+    int i = 0;
+    if (out_size <= 0) {
+        return 0;
+    }
+
+    while (command[i] != '\0') {
+        if (i >= out_size - 1) {
+            return 0;
+        }
+        out[i] = command[i];
+        i++;
+    }
+    out[i] = '\0';
+
+    if (has_aut_extension(out)) {
+        return 1;
+    }
+
+    if (i + 4 >= out_size) {
+        return 0;
+    }
+    out[i++] = '.';
+    out[i++] = 'a';
+    out[i++] = 'u';
+    out[i++] = 't';
     out[i] = '\0';
     return 1;
 }
@@ -1279,6 +1393,102 @@ static int try_execute_elf(const char* command, const char* args) {
     return 1;
 }
 
+static int script_is_space(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static int script_is_rem_line(const char* line) {
+    char a = line[0];
+    char b = line[1];
+    char c = line[2];
+    if (a >= 'a' && a <= 'z') a = (char)(a - ('a' - 'A'));
+    if (b >= 'a' && b <= 'z') b = (char)(b - ('a' - 'A'));
+    if (c >= 'a' && c <= 'z') c = (char)(c - ('a' - 'A'));
+    if (a == 'R' && b == 'E' && c == 'M') {
+        char next = line[3];
+        if (next == '\0' || script_is_space(next)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int try_execute_aut(const char* command, const char* args) {
+    char filename[64];
+    static unsigned char script_buffer[2049];
+    char line[65];
+    int bytes_read;
+    int i;
+
+    if (command[0] == '\0') {
+        return 0;
+    }
+    if (args[0] != '\0') {
+        return 0;
+    }
+    if (!build_aut_filename(command, filename, sizeof(filename))) {
+        return 0;
+    }
+
+    if (!fat16_initialized) {
+        fat16_set_drive(drive_get_current());
+        fat16_initialized = fat16_init();
+    }
+    if (!fat16_initialized) {
+        return 0;
+    }
+
+    str_to_upper(filename);
+    bytes_read = fat16_read_file_from_dir(current_dir_cluster, filename, script_buffer, 2048);
+    if (bytes_read <= 0) {
+        return 0;
+    }
+
+    script_buffer[bytes_read] = '\0';
+    shell_out_both("Running ");
+    shell_out_both(filename);
+    shell_out_both("...\n");
+
+    i = 0;
+    while (i < bytes_read) {
+        int line_len = 0;
+        int start;
+        int end;
+
+        while (i < bytes_read && script_buffer[i] != '\n') {
+            if (script_buffer[i] != '\r' && line_len < (int)sizeof(line) - 1) {
+                line[line_len++] = (char)script_buffer[i];
+            }
+            i++;
+        }
+        if (i < bytes_read && script_buffer[i] == '\n') {
+            i++;
+        }
+        line[line_len] = '\0';
+
+        start = 0;
+        while (line[start] != '\0' && script_is_space(line[start])) {
+            start++;
+        }
+        end = line_len;
+        while (end > start && script_is_space(line[end - 1])) {
+            end--;
+        }
+        line[end] = '\0';
+
+        if (line[start] == '\0') {
+            continue;
+        }
+        if (script_is_rem_line(&line[start])) {
+            continue;
+        }
+
+        shell_execute(&line[start]);
+    }
+
+    return 1;
+}
+
 void shell_init() {
     show_boot_screen();
     shell_out_both("MiniDOS Shell Ready.\nType 'help' for commands.\n");
@@ -1339,17 +1549,6 @@ void shell_execute(char* cmd) {
         cmd[--i] = '\0';
     }
     
-    // Convert to lowercase for command comparison (but preserve drive letters)
-    int is_drive_cmd = (((cmd[0] >= 'A' && cmd[0] <= 'Z') || (cmd[0] >= 'a' && cmd[0] <= 'z')) &&
-                        cmd[1] == ':' && cmd[2] == '\0');
-    if (!is_drive_cmd) {
-        for (int j = 0; cmd[j] && cmd[j] != ' '; j++) {
-            if (cmd[j] >= 'A' && cmd[j] <= 'Z') {
-                cmd[j] = cmd[j] - 'A' + 'a';
-            }
-        }
-    }
-    
     // Check if command is drive letter (e.g., "A:" or "a:")
     if ((((cmd[0] >= 'A' && cmd[0] <= 'Z') || (cmd[0] >= 'a' && cmd[0] <= 'z')) &&
          cmd[1] == ':' && cmd[2] == '\0')) {
@@ -1376,12 +1575,14 @@ void shell_execute(char* cmd) {
     // Parse command and arguments
     char command[64], args[64];
     parse_command(cmd, command, args);
+    str_to_lower(command);
     
     if (mystrcmp(command, "help") == 0) {
         shell_out_both("Available commands:\n");
         shell_out_screen("  dir           - List files\n");
         shell_out_screen("  drives        - List all drives\n");
         shell_out_screen("  type <file>   - View file contents\n");
+        shell_out_screen("  echo <text>   - Print text\n");
         shell_out_screen("  cls           - Clear screen\n");
         shell_out_screen("  ver           - Show version\n");
         shell_out_screen("  time [HH:MM[:SS]] - Show/set clock\n");
@@ -1398,6 +1599,9 @@ void shell_execute(char* cmd) {
         shell_out_screen("  dmesg         - Show debug ring buffer\n");
         shell_out_screen("  boot          - Show boot screen\n");
         shell_out_screen("  help          - This help\n");
+    } else if (mystrcmp(command, "echo") == 0) {
+        shell_out_both(args);
+        shell_out_both("\n");
     } else if (mystrcmp(command, "ver") == 0) {
         shell_out_both("MiniDOS Version 0.1 (MVP) - FAT16\n");
     } else if (mystrcmp(command, "time") == 0) {
@@ -1501,9 +1705,10 @@ void shell_execute(char* cmd) {
         shell_out_both(":");
         shell_out_both(current_path);
         if (args[0] != '\0') {
+            char filter_upper[64];
+            str_copy_upper(args, filter_upper, sizeof(filter_upper));
             shell_out_both(" [");
-            str_to_upper(args);
-            shell_out_both(args);
+            shell_out_both(filter_upper);
             shell_out_both("]");
         }
         shell_out_both("\n\n");
@@ -1511,13 +1716,17 @@ void shell_execute(char* cmd) {
             if (args[0] == '\0') {
                 fat16_list_root();
             } else {
-                fat16_list_root_filtered(args);
+                char filter_upper[64];
+                str_copy_upper(args, filter_upper, sizeof(filter_upper));
+                fat16_list_root_filtered(filter_upper);
             }
         } else {
             if (args[0] == '\0') {
                 fat16_list_dir(current_dir_cluster);
             } else {
-                fat16_list_dir_filtered(current_dir_cluster, args);
+                char filter_upper[64];
+                str_copy_upper(args, filter_upper, sizeof(filter_upper));
+                fat16_list_dir_filtered(current_dir_cluster, filter_upper);
             }
         }
     } else if (mystrcmp(command, "cd") == 0) {
@@ -1545,15 +1754,12 @@ void shell_execute(char* cmd) {
             } else if (args[0] == '.' && args[1] == '\0') {
                 // Stay in current directory
             } else {
-                for (int j = 0; args[j]; j++) {
-                    if (args[j] >= 'a' && args[j] <= 'z') {
-                        args[j] = args[j] - 'a' + 'A';
-                    }
-                }
+                char dir_upper[64];
+                str_copy_upper(args, dir_upper, sizeof(dir_upper));
 
                 unsigned int next_cluster = 0;
-                if (fat16_find_dir_cluster(current_dir_cluster, args, &next_cluster)) {
-                    if (path_push(current_path, (int)sizeof(current_path), args)) {
+                if (fat16_find_dir_cluster(current_dir_cluster, dir_upper, &next_cluster)) {
+                    if (path_push(current_path, (int)sizeof(current_path), dir_upper)) {
                         current_dir_cluster = next_cluster;
                     } else {
                         print_string("Path too long\n");
@@ -1571,15 +1777,15 @@ void shell_execute(char* cmd) {
                 shell_out_both("No disk or FAT16 partition found on current drive\n");
                 return;
             }
-            // Convert to uppercase for FAT16 (which is case-insensitive)
-            str_to_upper(args);
+            char file_upper[64];
+            str_copy_upper(args, file_upper, sizeof(file_upper));
             
             static unsigned char file_buffer[8192];
-            int bytes_read = fat16_read_file_from_dir(current_dir_cluster, args, file_buffer, sizeof(file_buffer));
+            int bytes_read = fat16_read_file_from_dir(current_dir_cluster, file_upper, file_buffer, sizeof(file_buffer));
             
             if (bytes_read > 0) {
                 print_string("--- ");
-                print_string(args);
+                print_string(file_upper);
                 print_string(" ---\n");
                 // Print file contents
                 for (int j = 0; j < bytes_read; j++) {
@@ -1600,7 +1806,7 @@ void shell_execute(char* cmd) {
                 print_string("\n--- End of file ---\n");
             } else {
                 print_string("File not found: ");
-                print_string(args);
+                print_string(file_upper);
                 print_char('\n');
             }
         }
@@ -1613,9 +1819,10 @@ void shell_execute(char* cmd) {
                 return;
             }
 
-            str_to_upper(args);
+            char name_upper[64];
+            str_copy_upper(args, name_upper, sizeof(name_upper));
 
-            if (fat16_mkdir(current_dir_cluster, args)) {
+            if (fat16_mkdir(current_dir_cluster, name_upper)) {
                 shell_out_both("Directory created\n");
             } else {
                 shell_out_both("Failed to create directory\n");
@@ -1630,9 +1837,10 @@ void shell_execute(char* cmd) {
                 return;
             }
 
-            str_to_upper(args);
+            char name_upper[64];
+            str_copy_upper(args, name_upper, sizeof(name_upper));
 
-            if (fat16_rmdir(current_dir_cluster, args)) {
+            if (fat16_rmdir(current_dir_cluster, name_upper)) {
                 shell_out_both("Directory removed\n");
             } else {
                 shell_out_both("Failed to remove directory\n");
@@ -1647,11 +1855,12 @@ void shell_execute(char* cmd) {
                 return;
             }
 
-            str_to_upper(args);
+            char pattern_upper[64];
+            str_copy_upper(args, pattern_upper, sizeof(pattern_upper));
 
-            if (has_wildcards(args)) {
+            if (has_wildcards(pattern_upper)) {
                 int deleted_count = 0;
-                if (fat16_delete_matching(current_dir_cluster, args, 1, &deleted_count)) {
+                if (fat16_delete_matching(current_dir_cluster, pattern_upper, 1, &deleted_count)) {
                     if (deleted_count > 0) {
                         shell_out_both("Deleted ");
                         if (deleted_count < 10) {
@@ -1672,7 +1881,7 @@ void shell_execute(char* cmd) {
                 } else {
                     shell_out_both("Failed to delete files\n");
                 }
-            } else if (fat16_delete_entry(current_dir_cluster, args, 1)) {
+            } else if (fat16_delete_entry(current_dir_cluster, pattern_upper, 1)) {
                 shell_out_both("File deleted\n");
             } else {
                 shell_out_both("Failed to delete file\n");
@@ -1753,7 +1962,7 @@ void shell_execute(char* cmd) {
     } else if (mystrcmp(command, "bsod") == 0) {
         shell_trigger_bsod();
     } else if (cmd[0] != '\0') {
-        if (try_execute_elf(command, args) || try_execute_com(command, args)) {
+        if (try_execute_elf(command, args) || try_execute_com(command, args) || try_execute_aut(command, args)) {
             return;
         }
         print_string("Bad command or file name\n");

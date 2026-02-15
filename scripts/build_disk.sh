@@ -9,6 +9,9 @@ GUESS_APP_ELF="$GUESS_APP_DIR/$GUESS_APP_NAME.ELF"
 DOSSHELL_APP_NAME="DOSSHELL"
 DOSSHELL_APP_DIR="$ROOT_DIR/build/external_apps/$DOSSHELL_APP_NAME"
 DOSSHELL_APP_ELF="$DOSSHELL_APP_DIR/$DOSSHELL_APP_NAME.ELF"
+EDIT_APP_NAME="EDIT"
+EDIT_APP_DIR="$ROOT_DIR/build/external_apps/$EDIT_APP_NAME"
+EDIT_APP_ELF="$EDIT_APP_DIR/$EDIT_APP_NAME.ELF"
 
 echo "=== Building MiniDOS with partitions ==="
 
@@ -56,8 +59,31 @@ build_dosshell_app() {
     fi
 }
 
+build_edit_app() {
+    mkdir -p "$EDIT_APP_DIR"
+
+    if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
+        echo "ERROR: Missing toolchain for EDIT app (gcc/ld/nasm)." >&2
+        exit 1
+    fi
+
+    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$EDIT_APP_DIR/entry.o"
+    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
+        -fno-stack-protector -fno-pic -fno-pie -fno-common \
+        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
+        -I"$ROOT_DIR/external_apps/runtime" \
+        -c "$ROOT_DIR/external_apps/templates/edit.c" -o "$EDIT_APP_DIR/app.o"
+    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$EDIT_APP_ELF" "$EDIT_APP_DIR/entry.o" "$EDIT_APP_DIR/app.o"
+
+    if [ ! -s "$EDIT_APP_ELF" ]; then
+        echo "ERROR: Failed to build EDIT app: $EDIT_APP_ELF" >&2
+        exit 1
+    fi
+}
+
 build_guess_game
 build_dosshell_app
+build_edit_app
 
 # Clean stale partitioning processes from interrupted runs
 pkill -f "sfdisk .*minidos.img" >/dev/null 2>&1 || true
@@ -166,9 +192,11 @@ trap "losetup -d $LOOP1 2>/dev/null; rm -rf $TMPDIR" EXIT
 # Add files to A:
 mount "$LOOP1" "$TMPDIR"
 echo "Welcome to drive A:" > $TMPDIR/README.TXT
+echo "ECHO I'm the AUTOEXEC.AUT" > $TMPDIR/AUTOEXEC.AUT
 mkdir -p "$TMPDIR/GAMES"
 cp "$GUESS_APP_ELF" "$TMPDIR/GAMES/$GUESS_APP_NAME.ELF"
 cp "$DOSSHELL_APP_ELF" "$TMPDIR/$DOSSHELL_APP_NAME.ELF"
+cp "$EDIT_APP_ELF" "$TMPDIR/$EDIT_APP_NAME.ELF"
 
 # Add boot logo if it exists
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
@@ -200,6 +228,10 @@ format_with_mtools() {
         echo "ERROR: failed to write README.TXT via mtools" >&2
         return 1
     fi
+    if ! printf "ECHO I'm the AUTOEXEC.AUT\n" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/AUTOEXEC.AUT; then
+        echo "ERROR: failed to write AUTOEXEC.AUT via mtools" >&2
+        return 1
+    fi
     if ! mmd -i "$DISK_IMG@@$A_OFF" ::/GAMES; then
         echo "ERROR: failed to create GAMES directory via mtools" >&2
         return 1
@@ -210,6 +242,10 @@ format_with_mtools() {
     fi
     if ! mcopy -o -i "$DISK_IMG@@$A_OFF" "$DOSSHELL_APP_ELF" "::/$DOSSHELL_APP_NAME.ELF"; then
         echo "ERROR: failed to write $DOSSHELL_APP_NAME.ELF via mtools" >&2
+        return 1
+    fi
+    if ! mcopy -o -i "$DISK_IMG@@$A_OFF" "$EDIT_APP_ELF" "::/$EDIT_APP_NAME.ELF"; then
+        echo "ERROR: failed to write $EDIT_APP_NAME.ELF via mtools" >&2
         return 1
     fi
 

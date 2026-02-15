@@ -11,6 +11,7 @@ static inline unsigned char inb(unsigned short port) {
 // Keyboard state
 static int shift_pressed = 0;
 static int ctrl_pressed = 0;
+static int alt_pressed = 0;
 static int caps_lock = 0;
 static int break_code = 0;
 static int extended_code = 0;
@@ -52,6 +53,13 @@ static char apply_caps(char c, int shift, int caps) {
     if (c >= 'A' && c <= 'Z') {
         if (caps && shift) return (char)(c - 'A' + 'a');
         return c;
+    }
+    return c;
+}
+
+static char to_lower_char(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 'a');
     }
     return c;
 }
@@ -113,6 +121,24 @@ static char keyboard_process_scancode(unsigned char scancode) {
         ctrl_pressed = 0;
         return 0;
     }
+    if (!scancode_set2 && scancode == 0x38) {
+        alt_pressed = 1;
+        return 0x14; // KEY_ALT_TOGGLE
+    }
+    if (!scancode_set2 && scancode == 0xB8) {
+        alt_pressed = 0;
+        return 0;
+    }
+    if (scancode_set2 && scancode == 0x11) {
+        if (break_code) {
+            alt_pressed = 0;
+        } else {
+            alt_pressed = 1;
+        }
+        break_code = 0;
+        extended_code = 0;
+        return 0;
+    }
 
     if ((scancode == 0x3A) || (scancode_set2 && scancode == 0x58)) {
         if (!break_code && !(scancode & 0x80)) {
@@ -138,12 +164,32 @@ static char keyboard_process_scancode(unsigned char scancode) {
             }
             return 0x12; // KEY_DOWN
         }
+        if (scancode == 0x4B || scancode == 0x6B) {
+            extended_code = 0;
+            if (scancode_set2) {
+                break_code = 0;
+            }
+            return 0x15; // KEY_LEFT
+        }
+        if (scancode == 0x4D || scancode == 0x74) {
+            extended_code = 0;
+            if (scancode_set2) {
+                break_code = 0;
+            }
+            return 0x16; // KEY_RIGHT
+        }
     }
 
     if (!(scancode & 0x80) && !break_code) {
         char c = scancode_to_char(scancode, shift_pressed);
         c = apply_caps(c, shift_pressed, caps_lock);
         if (c) {
+            if (alt_pressed) {
+                char lower = to_lower_char(c);
+                if (lower >= 'a' && lower <= 'z') {
+                    c = (char)(0x80 | lower);
+                }
+            }
             extended_code = 0;
             if (scancode_set2) {
                 break_code = 0;
@@ -162,6 +208,7 @@ static char keyboard_process_scancode(unsigned char scancode) {
 void keyboard_init(void) {
     shift_pressed = 0;
     ctrl_pressed = 0;
+    alt_pressed = 0;
     caps_lock = 0;
     break_code = 0;
     extended_code = 0;

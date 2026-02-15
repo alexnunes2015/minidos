@@ -47,6 +47,8 @@ void fat16_list_root_filtered(const char* pattern);
 void fat16_list_dir_filtered(unsigned int dir_cluster, const char* pattern);
 int fat16_read_file(const char* filename, unsigned char* buffer, int max_size);
 int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, unsigned char* buffer, int max_size);
+int fat16_write_file(const char* filename, const unsigned char* buffer, int size);
+int fat16_write_file_from_dir(unsigned int dir_cluster, const char* filename, const unsigned char* buffer, int size);
 int fat16_find_dir_cluster(unsigned int dir_cluster, const char* name, unsigned int* out_cluster);
 int fat16_get_parent_cluster(unsigned int dir_cluster, unsigned int* out_cluster);
 int fat16_find_entry(unsigned int dir_cluster, const char* name, FAT16_DirectoryEntry* out_entry, int* out_sector, int* out_index);

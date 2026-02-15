@@ -26,6 +26,8 @@ enum {
     MINIDOS_SYSCALL_CLIP_SET = 18,
     MINIDOS_SYSCALL_CLIP_PASTE = 19,
     MINIDOS_SYSCALL_RANDOM = 20,
+    MINIDOS_SYSCALL_FILE_READ = 21,
+    MINIDOS_SYSCALL_FILE_WRITE = 22,
 };
 
 typedef struct {
@@ -133,6 +135,14 @@ static inline int app_clip_paste(const minidos_app_api_t* api, const char* dst_d
 
 static inline int app_random(const minidos_app_api_t* api, unsigned int limit) {
     return app_syscall(api, MINIDOS_SYSCALL_RANDOM, limit, 0, 0);
+}
+
+static inline int app_file_read(const minidos_app_api_t* api, const char* name, unsigned char* buffer, int max_size) {
+    return app_syscall(api, MINIDOS_SYSCALL_FILE_READ, (unsigned int)name, (unsigned int)buffer, (unsigned int)max_size);
+}
+
+static inline int app_file_write(const minidos_app_api_t* api, const char* name, const unsigned char* buffer, int size) {
+    return app_syscall(api, MINIDOS_SYSCALL_FILE_WRITE, (unsigned int)name, (unsigned int)buffer, (unsigned int)size);
 }
 
 #endif
