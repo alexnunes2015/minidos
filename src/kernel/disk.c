@@ -2,7 +2,9 @@
 
 // ATA PIO ports
 #define ATA_PRIMARY_IO      0x1F0
-#define ATA_PRIMARY_DCR_AS  0x3F6
+#define ATA_PRIMARY_CTRL    0x3F6
+#define ATA_SECONDARY_IO    0x170
+#define ATA_SECONDARY_CTRL  0x376
 
 #define ATA_DATA        0
 #define ATA_ERROR       1
@@ -23,6 +25,7 @@
 #define ATA_SR_DRDY     0x40
 #define ATA_SR_DRQ      0x08
 #define ATA_SR_ERR      0x01
+#define ATA_DCR_SRST    0x04
 
 static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -50,30 +53,47 @@ static inline void io_wait() {
     outb(0x80, 0);
 }
 
-static int ata_has_error() {
-    return (inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_ERR) != 0;
+typedef struct {
+    unsigned short io_base;
+    unsigned short ctrl_base;
+    unsigned char drive_sel;
+} ata_target_t;
+
+static int ata_decode_target(unsigned char disk_id, ata_target_t* target) {
+    if (!target || disk_id > 3) {
+        return -1;
+    }
+
+    target->io_base = (disk_id < 2) ? ATA_PRIMARY_IO : ATA_SECONDARY_IO;
+    target->ctrl_base = (disk_id < 2) ? ATA_PRIMARY_CTRL : ATA_SECONDARY_CTRL;
+    target->drive_sel = (disk_id & 1) ? 0x10 : 0x00; // Slave bit
+    return 0;
 }
 
-static int ata_wait_bsy() {
+static int ata_has_error(const ata_target_t* target) {
+    return (inb(target->io_base + ATA_STATUS) & ATA_SR_ERR) != 0;
+}
+
+static int ata_wait_bsy(const ata_target_t* target) {
     unsigned int timeout = 1000000;
-    while ((inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_BSY) && timeout > 0) {
+    while ((inb(target->io_base + ATA_STATUS) & ATA_SR_BSY) && timeout > 0) {
         timeout--;
     }
     return timeout > 0 ? 0 : -1;
 }
 
-static int ata_wait_drdy() {
+static int ata_wait_drdy(const ata_target_t* target) {
     unsigned int timeout = 1000000;
-    while (!(inb(ATA_PRIMARY_IO + ATA_STATUS) & ATA_SR_DRDY) && timeout > 0) {
+    while (!(inb(target->io_base + ATA_STATUS) & ATA_SR_DRDY) && timeout > 0) {
         timeout--;
     }
     return timeout > 0 ? 0 : -1;
 }
 
-static int ata_wait_drq() {
+static int ata_wait_drq(const ata_target_t* target) {
     unsigned int timeout = 1000000;
     while (timeout > 0) {
-        unsigned char status = inb(ATA_PRIMARY_IO + ATA_STATUS);
+        unsigned char status = inb(target->io_base + ATA_STATUS);
         if (status & ATA_SR_ERR) {
             return -1;
         }
@@ -85,123 +105,152 @@ static int ata_wait_drq() {
     return -1;
 }
 
+static void ata_soft_reset(const ata_target_t* target) {
+    if (!target) return;
+    outb(target->ctrl_base, ATA_DCR_SRST);
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+    outb(target->ctrl_base, 0x00);
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+}
+
+static int disk_read_lba_internal(const ata_target_t* target, unsigned int lba, unsigned char* buffer) {
+    if (!buffer || !target) {
+        return -1;
+    }
+
+    // Select target drive first; previous probe may have left another device selected.
+    outb(target->io_base + ATA_DRIVE, (unsigned char)(0xE0 | target->drive_sel | ((lba >> 24) & 0x0F)));
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+
+    if (ata_wait_bsy(target) != 0) {
+        return -1;
+    }
+    if (ata_wait_drdy(target) != 0) {
+        return -1;
+    }
+
+    outb(target->io_base + ATA_SECCOUNT, 1);
+    outb(target->io_base + ATA_LBALO, (unsigned char)(lba & 0xFF));
+    outb(target->io_base + ATA_LBAMID, (unsigned char)((lba >> 8) & 0xFF));
+    outb(target->io_base + ATA_LBAHI, (unsigned char)((lba >> 16) & 0xFF));
+    outb(target->io_base + ATA_COMMAND, ATA_CMD_READ_PIO);
+    io_wait();
+
+    if (ata_wait_drq(target) != 0) {
+        return -1;
+    }
+    if (ata_has_error(target)) {
+        return -1;
+    }
+
+    insw(target->io_base + ATA_DATA, (unsigned short*)buffer, 256);
+    return 0;
+}
+
+static int disk_write_lba_internal(const ata_target_t* target, unsigned int lba, unsigned char* buffer) {
+    if (!buffer || !target) {
+        return -1;
+    }
+
+    // Select target drive first; previous probe may have left another device selected.
+    outb(target->io_base + ATA_DRIVE, (unsigned char)(0xE0 | target->drive_sel | ((lba >> 24) & 0x0F)));
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+
+    if (ata_wait_bsy(target) != 0) {
+        return -1;
+    }
+    if (ata_wait_drdy(target) != 0) {
+        return -1;
+    }
+
+    outb(target->io_base + ATA_SECCOUNT, 1);
+    outb(target->io_base + ATA_LBALO, (unsigned char)(lba & 0xFF));
+    outb(target->io_base + ATA_LBAMID, (unsigned char)((lba >> 8) & 0xFF));
+    outb(target->io_base + ATA_LBAHI, (unsigned char)((lba >> 16) & 0xFF));
+    outb(target->io_base + ATA_COMMAND, ATA_CMD_WRITE_PIO);
+    io_wait();
+
+    if (ata_wait_drq(target) != 0) {
+        return -1;
+    }
+    if (ata_has_error(target)) {
+        return -1;
+    }
+
+    outsw(target->io_base + ATA_DATA, (const unsigned short*)buffer, 256);
+    outb(target->io_base + ATA_COMMAND, ATA_CMD_CACHE_FLUSH);
+
+    if (ata_wait_bsy(target) != 0) {
+        return -1;
+    }
+    if (ata_wait_drdy(target) != 0) {
+        return -1;
+    }
+    if (ata_has_error(target)) {
+        return -1;
+    }
+
+    return 0;
+}
+
 void disk_init() {
-    // Simple initialization - select master drive
-    outb(ATA_PRIMARY_IO + ATA_DRIVE, 0xE0);
+    ata_target_t primary_master;
+    ata_target_t secondary_master;
+
+    if (ata_decode_target(0, &primary_master) == 0) {
+        outb(primary_master.io_base + ATA_DRIVE, 0xE0);
+        io_wait();
+    }
+    if (ata_decode_target(2, &secondary_master) == 0) {
+        outb(secondary_master.io_base + ATA_DRIVE, 0xE0);
+        io_wait();
+    }
 }
 
 int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
-    // For now, only support primary master (disk 0)
-    // disk_id: 0=primary master, 1=primary slave, 2=secondary master, 3=secondary slave
-    if (disk_id != 0) {
-        return -1;  // Only primary master supported for now
+    ata_target_t target;
+    if (ata_decode_target(disk_id, &target) != 0) {
+        return -1;
     }
-    return disk_read_lba(lba, buffer);
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (disk_read_lba_internal(&target, lba, buffer) == 0) {
+            return 0;
+        }
+        ata_soft_reset(&target);
+    }
+    return -1;
 }
 
 int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
-    if (disk_id != 0) {
+    ata_target_t target;
+    if (ata_decode_target(disk_id, &target) != 0) {
         return -1;
     }
-    return disk_write_lba(lba, buffer);
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (disk_write_lba_internal(&target, lba, buffer) == 0) {
+            return 0;
+        }
+        ata_soft_reset(&target);
+    }
+    return -1;
 }
 
 int disk_read_lba(unsigned int lba, unsigned char* buffer) {
-    if (!buffer) {
-        return -1;
-    }
-
-    // Wait for drive to be ready
-    if (ata_wait_bsy() != 0) {
-        return -1;
-    }
-    if (ata_wait_drdy() != 0) {
-        return -1;
-    }
-    
-    // Select drive (master, LBA mode)
-    outb(ATA_PRIMARY_IO + ATA_DRIVE, 0xE0 | ((lba >> 24) & 0x0F));
-    io_wait();
-    io_wait();
-    io_wait();
-    io_wait();
-    
-    // Send sector count (1 sector)
-    outb(ATA_PRIMARY_IO + ATA_SECCOUNT, 1);
-    
-    // Send LBA
-    outb(ATA_PRIMARY_IO + ATA_LBALO, (unsigned char)(lba & 0xFF));
-    outb(ATA_PRIMARY_IO + ATA_LBAMID, (unsigned char)((lba >> 8) & 0xFF));
-    outb(ATA_PRIMARY_IO + ATA_LBAHI, (unsigned char)((lba >> 16) & 0xFF));
-    
-    // Send READ command
-    outb(ATA_PRIMARY_IO + ATA_COMMAND, ATA_CMD_READ_PIO);
-    io_wait();
-    
-    // Wait for data ready
-    if (ata_wait_drq() != 0) {
-        return -1;
-    }
-    
-    // Check for errors
-    if (ata_has_error()) {
-        return -1;
-    }
-    
-    // Read 256 words (512 bytes)
-    insw(ATA_PRIMARY_IO + ATA_DATA, (unsigned short*)buffer, 256);
-    
-    return 0;
+    return disk_read_lba_from_disk(0, lba, buffer);
 }
 
 int disk_write_lba(unsigned int lba, unsigned char* buffer) {
-    if (!buffer) {
-        return -1;
-    }
-
-    if (ata_wait_bsy() != 0) {
-        return -1;
-    }
-    if (ata_wait_drdy() != 0) {
-        return -1;
-    }
-
-    outb(ATA_PRIMARY_IO + ATA_DRIVE, 0xE0 | ((lba >> 24) & 0x0F));
-    io_wait();
-    io_wait();
-    io_wait();
-    io_wait();
-
-    outb(ATA_PRIMARY_IO + ATA_SECCOUNT, 1);
-
-    outb(ATA_PRIMARY_IO + ATA_LBALO, (unsigned char)(lba & 0xFF));
-    outb(ATA_PRIMARY_IO + ATA_LBAMID, (unsigned char)((lba >> 8) & 0xFF));
-    outb(ATA_PRIMARY_IO + ATA_LBAHI, (unsigned char)((lba >> 16) & 0xFF));
-
-    outb(ATA_PRIMARY_IO + ATA_COMMAND, ATA_CMD_WRITE_PIO);
-    io_wait();
-
-    if (ata_wait_drq() != 0) {
-        return -1;
-    }
-
-    if (ata_has_error()) {
-        return -1;
-    }
-
-    outsw(ATA_PRIMARY_IO + ATA_DATA, (const unsigned short*)buffer, 256);
-
-    outb(ATA_PRIMARY_IO + ATA_COMMAND, ATA_CMD_CACHE_FLUSH);
-    if (ata_wait_bsy() != 0) {
-        return -1;
-    }
-    if (ata_wait_drdy() != 0) {
-        return -1;
-    }
-
-    if (ata_has_error()) {
-        return -1;
-    }
-
-    return 0;
+    return disk_write_lba_from_disk(0, lba, buffer);
 }

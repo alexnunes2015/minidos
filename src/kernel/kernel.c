@@ -136,20 +136,18 @@ static void show_boot_logo() {
         static unsigned char logo_pixels[320 * 200];
         static unsigned char logo_palette[256 * 3];
 
-        disk_init();
-        drive_init();
-        fat16_set_drive(0);
-        fat16_init();
+        fat16_set_drive(drive_get_current());
+        if (fat16_init()) {
+            int logo_bytes = fat16_read_file("BOOTLOGO.DAT", logo_pixels, sizeof(logo_pixels));
+            int pal_bytes = fat16_read_file("BOOTLOGO.PAL", logo_palette, sizeof(logo_palette));
 
-        int logo_bytes = fat16_read_file("BOOTLOGO.DAT", logo_pixels, sizeof(logo_pixels));
-        int pal_bytes = fat16_read_file("BOOTLOGO.PAL", logo_palette, sizeof(logo_palette));
-
-        if (logo_bytes == (int)sizeof(logo_pixels) && pal_bytes == (int)sizeof(logo_palette)) {
-            cls();
-            video_draw_indexed_image_centered(logo_pixels, 320, 200, logo_palette);
-            wait_boot_logo();
-            cls();
-            return;
+            if (logo_bytes == (int)sizeof(logo_pixels) && pal_bytes == (int)sizeof(logo_palette)) {
+                cls();
+                video_draw_indexed_image_centered(logo_pixels, 320, 200, logo_palette);
+                wait_boot_logo();
+                cls();
+                return;
+            }
         }
     }
 
@@ -226,7 +224,6 @@ void kernel_main() {
     }
     interrupts_init();
     
-    show_boot_logo();
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
     print_string("MiniDOS v0.1 Kernel Started\n");
     print_string("Welcome to your minimalist 16/32-bit OS.\n\n");
@@ -247,6 +244,8 @@ void kernel_main() {
         boot_panic_bsod(STOP_DRIVE_DETECT, "NO VALID DRIVE DETECTED.");
     }
     log_write(LOG_LEVEL_INFO, "kernel", "Drive detection complete\n", LOG_DEST_SERIAL);
+
+    show_boot_logo();
     
     log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
     shell_init();

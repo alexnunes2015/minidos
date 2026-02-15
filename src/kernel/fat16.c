@@ -7,6 +7,7 @@ static FAT16_BPB bpb;
 static unsigned char sector_buffer[SECTOR_SIZE];
 
 static int current_drive_letter = 0;  // A:
+static int fat16_debug_enabled = 1;
 
 static void print_both_char(char c) {
     print_char(c);
@@ -53,16 +54,30 @@ void fat16_set_drive(int drive_letter) {
     current_drive_letter = drive_letter;
 }
 
-void fat16_init() {
+int fat16_init() {
+    if (fat16_debug_enabled) {
+        serial_print("[FAT16] init drive=");
+        serial_putchar((char)('A' + current_drive_letter));
+        serial_print(" lba=0\n");
+    }
+
     // Read boot sector to get BPB
     if (disk_read_sector(0, sector_buffer) != 0) {
         print_string("[FAT16] Warning: No disk or FAT16 partition found\n");
-        return;
+        if (fat16_debug_enabled) {
+            serial_print("[FAT16] read sector 0 failed\n");
+        }
+        return 0;
     }
 
     if (sector_buffer[510] != 0x55 || sector_buffer[511] != 0xAA) {
         print_string("[FAT16] Warning: Invalid boot sector signature\n");
-        return;
+        if (fat16_debug_enabled) {
+            serial_print("[FAT16] bad sig: ");
+            serial_print_hex((unsigned int)((sector_buffer[511] << 8) | sector_buffer[510]));
+            serial_print("\n");
+        }
+        return 0;
     }
     
     // Copy BPB (starts at offset 11 in boot sector)
@@ -82,7 +97,29 @@ void fat16_init() {
 
     if (bpb.bytes_per_sector == 0 || bpb.sectors_per_fat == 0 || bpb.root_entries == 0) {
         print_string("[FAT16] Warning: Invalid BPB values\n");
+        if (fat16_debug_enabled) {
+            serial_print("[FAT16] invalid bpb: bps=");
+            serial_print_hex(bpb.bytes_per_sector);
+            serial_print(" spf=");
+            serial_print_hex(bpb.sectors_per_fat);
+            serial_print(" root=");
+            serial_print_hex(bpb.root_entries);
+            serial_print("\n");
+        }
+        return 0;
     }
+
+    if (fat16_debug_enabled) {
+        serial_print("[FAT16] ok bps=");
+        serial_print_hex(bpb.bytes_per_sector);
+        serial_print(" spf=");
+        serial_print_hex(bpb.sectors_per_fat);
+        serial_print(" root=");
+        serial_print_hex(bpb.root_entries);
+        serial_print("\n");
+    }
+
+    return 1;
 }
 
 static int get_root_dir_start() {
@@ -523,6 +560,8 @@ int fat16_get_parent_cluster(unsigned int dir_cluster, unsigned int* out_cluster
 }
 
 static int fat16_format_name(const char* input, unsigned char out_name[11]) {
+    const char* invalid_chars = "\"*/:<>?\\|+;,=[]";
+
     for (int i = 0; i < 11; i++) {
         out_name[i] = ' ';
     }
@@ -538,6 +577,9 @@ static int fat16_format_name(const char* input, unsigned char out_name[11]) {
         char c = input[i];
         if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
         if (c == ' ') return 0;
+        for (int k = 0; invalid_chars[k] != '\0'; k++) {
+            if (c == invalid_chars[k]) return 0;
+        }
         out_name[name_pos++] = (unsigned char)c;
         i++;
     }
@@ -550,6 +592,9 @@ static int fat16_format_name(const char* input, unsigned char out_name[11]) {
             char c = input[i];
             if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
             if (c == ' ') return 0;
+            for (int k = 0; invalid_chars[k] != '\0'; k++) {
+                if (c == invalid_chars[k]) return 0;
+            }
             out_name[ext_pos++] = (unsigned char)c;
             i++;
         }

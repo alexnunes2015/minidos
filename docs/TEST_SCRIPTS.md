@@ -84,12 +84,35 @@ python3 tests/test_keyboard_irq.py
 make test-keyboard
 ```
 
+### 6. `tests/test_phase3.py` - Regressão crítica de disco/FAT16 (Fase 3)
+Executa um cenário multi-disco/multi-partição crítico. O próprio teste:
+- cria discos virtuais de dados;
+- cria partições FAT16 com conteúdos distintos;
+- faz attach de vários discos IDE no QEMU;
+- valida enumeração de múltiplas letras de drive;
+- valida operações de gestão de ficheiros e isolamento entre volumes.
+
+**Uso:**
+```bash
+python3 tests/test_phase3.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-phase3
+```
+
+**Dependências adicionais do host:**
+- `sfdisk`
+- `mtools` (`mformat`, `mcopy`)
+
 ## Características
 
 ✅ **Captura de Output** - Todos os comandos capturam a saída completa
 ✅ **Timeout** - Proteção contra hang infinito (10-15 segundos)
 ✅ **Serial Debug** - Via COM1 a 38400 baud
 ✅ **Boot Logo** - Mostra boot logo VGA Mode 13h antes do shell
+✅ **Phase 3 Stress** - Cobertura de multi-disco/multi-volume com validações negativas
 
 ## Exemplo de Teste Completo
 
@@ -129,6 +152,7 @@ Test completed!
 - `dir` - Lista diretório
 - `type <file>` - Mostra conteúdo de arquivo
 - `c:`, `d:`, `e:` - Muda de drive
+- `mkdir`, `rmdir`, `copy`, `ren`, `del` - Gestão de ficheiros/diretórios FAT16
 
 ## Saída de Debug Serial
 
@@ -150,3 +174,4 @@ Se os scripts não funcionar:
 2. Executar `make clean && make` para recompilação
 3. Verificar permissões: `chmod +x tests/test*.sh`
 4. Verificar se QEMU está instalado: `which qemu-system-i386`
+5. Para `test_phase3.py`, verificar `sfdisk`, `mformat` e `mcopy` no `PATH`

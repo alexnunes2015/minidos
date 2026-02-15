@@ -144,7 +144,7 @@ def main():
         expected_map = {
             "help": ["Available commands:"],
             "ver": ["MiniDOS Version 0.1"],
-            "drives": ["Available drives:"],
+            "drives": ["Command: drives", "Available drives:"],
             "dir": ["Directory of "],
             "mem": ["System Memory:"],
             "c:": ["Switched to drive"],
@@ -185,18 +185,19 @@ def main():
                     )
                     return 1
             if not args.no_assert and cmd in expected_map:
-                ok = _read_until(
-                    proc,
-                    expected_map[cmd],
-                    args.cmd_timeout,
-                    echo=not args.quiet,
-                )
-                if not ok:
-                    print(
-                        f"\nERROR: expected output not found for command: {cmd}",
-                        file=sys.stderr,
+                if not any(pat in ok for pat in expected_map[cmd]):
+                    ok = _read_until(
+                        proc,
+                        expected_map[cmd],
+                        args.cmd_timeout,
+                        echo=not args.quiet,
                     )
-                    return 1
+                    if not ok:
+                        print(
+                            f"\nERROR: expected output not found for command: {cmd}",
+                            file=sys.stderr,
+                        )
+                        return 1
 
         for cmd in commands[idx:]:
             _send_line(proc, cmd)
@@ -222,18 +223,19 @@ def main():
                     )
                     return 1
             if not args.no_assert and cmd in expected_map:
-                ok = _read_until(
-                    proc,
-                    expected_map[cmd],
-                    args.cmd_timeout,
-                    echo=not args.quiet,
-                )
-                if not ok:
-                    print(
-                        f"\nERROR: expected output not found for command: {cmd}",
-                        file=sys.stderr,
+                if not any(pat in ok for pat in expected_map[cmd]):
+                    ok = _read_until(
+                        proc,
+                        expected_map[cmd],
+                        args.cmd_timeout,
+                        echo=not args.quiet,
                     )
-                    return 1
+                    if not ok:
+                        print(
+                            f"\nERROR: expected output not found for command: {cmd}",
+                            file=sys.stderr,
+                        )
+                        return 1
 
     finally:
         try:

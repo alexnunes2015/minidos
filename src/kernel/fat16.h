@@ -39,7 +39,7 @@ typedef struct {
     unsigned int   total_sectors_32;
 } __attribute__((packed)) FAT16_BPB;
 
-void fat16_init();
+int fat16_init();
 void fat16_set_drive(int drive_letter);
 void fat16_list_root();
 void fat16_list_dir(unsigned int dir_cluster);

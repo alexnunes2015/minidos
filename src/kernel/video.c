@@ -590,7 +590,7 @@ void video_show_bsod(const char* stop_code, const char* detail) {
         clear_graphics(bg);
         draw_string_centered_custom(3, " MINI DOS ", bg, 0xB8B8B8u);
         draw_string_custom(4, 6, "AN ERROR HAS OCCURRED. TO CONTINUE:", fg, bg);
-        draw_string_custom(4, 8, "PRESS ENTER TO RETURN TO WINDOWS, OR", fg, bg);
+        draw_string_custom(4, 8, "PRESS ENTER TO RETURN TO SHELL, OR", fg, bg);
         draw_string_custom(4, 10, "PRESS CTRL+ALT+DEL TO RESTART YOUR COMPUTER. IF YOU DO THIS,", fg, bg);
         draw_string_custom(4, 11, "YOU WILL LOSE ANY UNSAVED INFORMATION IN ALL OPEN APPLICATIONS.", fg, bg);
         draw_string_custom(4, 13, "ERROR: ", fg, bg);
@@ -617,7 +617,7 @@ void video_show_bsod(const char* stop_code, const char* detail) {
             "",
             " AN ERROR HAS OCCURRED. TO CONTINUE:",
             "",
-            " PRESS ENTER TO RETURN TO WINDOWS, OR",
+            " PRESS ENTER TO RETURN TO SHELL, OR",
             "",
             " PRESS CTRL+ALT+DEL TO RESTART YOUR COMPUTER. IF YOU DO THIS,",
             " YOU WILL LOSE ANY UNSAVED INFORMATION IN ALL OPEN APPLICATIONS.",

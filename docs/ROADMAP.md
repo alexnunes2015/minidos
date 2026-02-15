@@ -80,12 +80,26 @@ Critério de pronto:
 
 Objetivo: evoluir de MVP de disco para base utilizável.
 
+Status: em andamento desde 15/02/2026.
+
 - Expandir ATA além de `disk_id` 0.
 - Validar leitura/escrita em múltiplos discos/canais suportados.
 - Criar testes automatizados para operações FAT16 de escrita:
 - Criar arquivo.
 - Atualizar conteúdo.
 - Remover arquivo/diretório.
+
+Entregas iniciais:
+- Driver ATA PIO atualizado para `disk_id` 0..3 (primário/segundário, master/slave) em `src/kernel/disk.c`.
+- Novo teste de regressão da fase (`tests/test_phase3.py`) com criação dinâmica de múltiplos discos/partições e attach automático no QEMU.
+- Novo alvo `make test-phase3`.
+
+Checklist crítico de validação (Fase 3):
+- [x] Teste cria discos virtuais de dados durante a execução (sem depender de imagem secundária pré-pronta).
+- [x] Teste valida enumeração de múltiplas letras de drive oriundas de múltiplas partições (`A:`..`C:` no cenário atual, com negativo em `D:`).
+- [x] Teste executa operações de escrita FAT16 em mais de um volume (`copy`, `ren`, `mkdir`, `rmdir`, `del`).
+- [x] Teste verifica isolamento entre volumes (arquivo criado em um drive não aparece em outro).
+- [x] Teste cobre caso negativo de operação cross-drive inválida e drive inexistente.
 
 Critério de pronto:
 - Testes de escrita e leitura passando em sequência, sem corrupção detectável.

@@ -165,7 +165,9 @@ if command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
 elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     format_with_sudo
 else
-    echo "WARNING: Could not format/mount partitions. Install mtools or run with sudo." >&2
+    echo "ERROR: Could not format partition A:. Install mtools (mformat/mcopy) or configure passwordless sudo." >&2
+    echo "ERROR: Aborting image build to avoid booting with an invalid FAT filesystem." >&2
+    exit 1
 fi
 
 echo ""

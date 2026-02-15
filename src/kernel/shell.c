@@ -544,8 +544,10 @@ static int try_execute_com(const char* command, const char* args) {
 
     if (!fat16_initialized) {
         fat16_set_drive(drive_get_current());
-        fat16_init();
-        fat16_initialized = 1;
+        fat16_initialized = fat16_init();
+    }
+    if (!fat16_initialized) {
+        return 0;
     }
 
     str_to_upper(filename);
@@ -591,6 +593,16 @@ void shell_init() {
     show_boot_screen();
     shell_out_both("MiniDOS Shell Ready.\nType 'help' for commands.\n");
     fat16_set_drive(drive_get_current());
+}
+
+static int ensure_fat16_ready() {
+    if (!fat16_initialized) {
+        for (int attempt = 0; attempt < 3 && !fat16_initialized; attempt++) {
+            fat16_set_drive(drive_get_current());
+            fat16_initialized = fat16_init();
+        }
+    }
+    return fat16_initialized;
 }
 
 void shell_prompt() {
@@ -782,10 +794,9 @@ void shell_execute(char* cmd) {
     } else if (mystrcmp(command, "dmesg") == 0) {
         log_dump_buffer(LOG_DEST_BOTH);
     } else if (mystrcmp(command, "dir") == 0) {
-        if (!fat16_initialized) {
-            fat16_set_drive(drive_get_current());
-            fat16_init();
-            fat16_initialized = 1;
+        if (!ensure_fat16_ready()) {
+            shell_out_both("No disk or FAT16 partition found on current drive\n");
+            return;
         }
         shell_out_both("Directory of ");
         shell_out_both_char('A' + drive_get_current());
@@ -812,10 +823,9 @@ void shell_execute(char* cmd) {
             }
         }
     } else if (mystrcmp(command, "cd") == 0) {
-        if (!fat16_initialized) {
-            fat16_set_drive(drive_get_current());
-            fat16_init();
-            fat16_initialized = 1;
+        if (!ensure_fat16_ready()) {
+            shell_out_both("No disk or FAT16 partition found on current drive\n");
+            return;
         }
         if (args[0] == '\0') {
             print_char('A' + drive_get_current());
@@ -859,10 +869,9 @@ void shell_execute(char* cmd) {
         if (args[0] == '\0') {
             print_string("Usage: type <filename>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
             // Convert to uppercase for FAT16 (which is case-insensitive)
             str_to_upper(args);
@@ -901,10 +910,9 @@ void shell_execute(char* cmd) {
         if (args[0] == '\0') {
             shell_out_both("Usage: mkdir <dirname>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
 
             str_to_upper(args);
@@ -919,10 +927,9 @@ void shell_execute(char* cmd) {
         if (args[0] == '\0') {
             shell_out_both("Usage: rmdir <dirname>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
 
             str_to_upper(args);
@@ -937,10 +944,9 @@ void shell_execute(char* cmd) {
         if (args[0] == '\0') {
             shell_out_both("Usage: del <filename>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
 
             str_to_upper(args);
@@ -981,10 +987,9 @@ void shell_execute(char* cmd) {
         if (!parse_two_args(args, src_name, sizeof(src_name), dst_name, sizeof(dst_name))) {
             shell_out_both("Usage: copy <source> <destination>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
 
             str_to_upper(src_name);
@@ -1004,10 +1009,9 @@ void shell_execute(char* cmd) {
         if (!parse_two_args(args, src_name, sizeof(src_name), dst_name, sizeof(dst_name))) {
             shell_out_both("Usage: move <source> <destination>\n");
         } else {
-            if (!fat16_initialized) {
-                fat16_set_drive(drive_get_current());
-                fat16_init();
-                fat16_initialized = 1;
+            if (!ensure_fat16_ready()) {
+                shell_out_both("No disk or FAT16 partition found on current drive\n");
+                return;
             }
 
             str_to_upper(src_name);
