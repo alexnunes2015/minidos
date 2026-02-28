@@ -22,6 +22,5 @@ Estabelecer a base tecnica para um scheduler simples e habilitar o caminho inici
 - `[sched] runtime demo tasks registered`
 
 ## Proximos passos
-- Separar stack de kernel por processo e stack de usuario para apps ELF.
 - Evoluir ABI de syscalls para transicao user/kernel com isolamento de memoria.
 - Generalizar API de criacao de processo para uso por userland ELF (alem das tarefas de demo em ring0).

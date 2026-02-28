@@ -132,7 +132,7 @@ Critério de pronto:
 
 Objetivo: preparar base técnica para scheduler simples.
 
-Status: em andamento desde 15/02/2026.
+Status: concluída em 28/02/2026.
 
 - Isolar melhor contexto kernel/user.
 - Definir estrutura de processo (PID, estado, stack user/kernel).
@@ -151,10 +151,13 @@ Checklist crítico de validação (Fase 5):
 - [x] Self-test de troca de contexto executado no boot com confirmação em log serial.
 - [x] IRQ0 habilitada com PIT configurado sem regressão de boot/shell.
 - [x] Quantum de preempção conectado ao caminho de retorno de interrupção.
-- [ ] Separação completa de stack kernel/user por processo.
+- [x] Separação completa de stack kernel/user por processo.
 
 Critério de pronto:
 - Documento de design técnico fechado e protótipo de troca de contexto validado.
+
+Validação de fechamento:
+- Build com separação explícita de stack kernel/user no PCB (`user_esp`, limites base/top por stack) e self-test de scheduler validando stacks distintas entre processos de runtime.
 
 ## Ordem Recomendada de Execução
 

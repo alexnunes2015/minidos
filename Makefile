@@ -19,7 +19,7 @@ KERNEL_ASM = $(BUILD_DIR)/entry.o
 
 # Ensure drive.o is included
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4
+.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4 full-test
 
 all: minidos.img
 
@@ -88,13 +88,26 @@ test-serial: minidos.img
 	python3 tests/test_serial.py "ver" "drives"
 
 test-keyboard: minidos.img
-	python3 tests/test_keyboard_irq.py
+	TMPDIR="$(CURDIR)/build" python3 tests/test_keyboard_irq.py
+
+test-keyboard-soft: minidos.img
+	TMPDIR="$(CURDIR)/build" python3 tests/test_keyboard_irq.py --soft-skip-env
 
 test-phase3: minidos.img
 	python3 tests/test_phase3.py
 
 test-phase4: minidos.img
 	python3 tests/test_phase4.py
+
+full-test:
+	$(MAKE) clean
+	$(MAKE) all
+	$(MAKE) test
+	$(MAKE) test-serial
+	$(MAKE) test-keyboard-soft
+	$(MAKE) test-paging
+	$(MAKE) test-phase3
+	$(MAKE) test-phase4
 
 test: test-help test-ver test-drives
 
@@ -113,4 +126,4 @@ test-paging:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4 test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run phase0-check test-paging test-keyboard test-keyboard-soft test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

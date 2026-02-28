@@ -11,6 +11,11 @@ typedef enum {
 typedef struct {
     unsigned int* esp;
     unsigned int* irq_esp;
+    unsigned int* user_esp;
+    unsigned int* kernel_stack_base;
+    unsigned int* kernel_stack_top;
+    unsigned int* user_stack_base;
+    unsigned int* user_stack_top;
 } process_context_t;
 
 typedef struct {

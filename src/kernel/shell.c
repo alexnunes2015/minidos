@@ -1411,23 +1411,7 @@ static int try_execute_com(const char* command, const char* args) {
     com_entry_t entry = (com_entry_t)load_addr;
     int exit_code = entry(&api);
 
-    shell_out_both("Program returned ");
-    if (exit_code >= 0 && exit_code <= 9) {
-        char d[2];
-        d[0] = (char)('0' + exit_code);
-        d[1] = '\0';
-        shell_out_both(d);
-    } else {
-        char code_str[16];
-        unsigned int value = (unsigned int)((exit_code < 0) ? -exit_code : exit_code);
-        int len = uint_to_dec(value, code_str);
-        code_str[len] = '\0';
-        if (exit_code < 0) {
-            shell_out_both("-");
-        }
-        shell_out_both(code_str);
-    }
-    shell_out_both("\n");
+    (void)exit_code;
 
     return 1;
 }
@@ -1487,23 +1471,7 @@ static int try_execute_elf(const char* command, const char* args) {
         return 1;
     }
 
-    shell_out_both("Program returned ");
-    if (exit_code >= 0 && exit_code <= 9) {
-        char d[2];
-        d[0] = (char)('0' + exit_code);
-        d[1] = '\0';
-        shell_out_both(d);
-    } else {
-        char code_str[16];
-        unsigned int value = (unsigned int)((exit_code < 0) ? -exit_code : exit_code);
-        int len = uint_to_dec(value, code_str);
-        code_str[len] = '\0';
-        if (exit_code < 0) {
-            shell_out_both("-");
-        }
-        shell_out_both(code_str);
-    }
-    shell_out_both("\n");
+    (void)exit_code;
     return 1;
 }
 
@@ -1970,9 +1938,6 @@ void shell_execute(char* cmd) {
             int bytes_read = fat16_read_file_from_dir(current_dir_cluster, file_upper, file_buffer, sizeof(file_buffer));
             
             if (bytes_read > 0) {
-                print_string("--- ");
-                print_string(file_upper);
-                print_string(" ---\n");
                 // Print file contents
                 for (int j = 0; j < bytes_read; j++) {
                     unsigned char c = file_buffer[j];
@@ -1989,7 +1954,7 @@ void shell_execute(char* cmd) {
                         print_char('.');
                     }
                 }
-                print_string("\n--- End of file ---\n");
+                print_char('\n');
             } else {
                 print_string("File not found: ");
                 print_string(file_upper);

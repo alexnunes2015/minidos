@@ -146,6 +146,11 @@ def main():
     parser.add_argument("--cmd-timeout", type=float, default=8.0)
     parser.add_argument("--key-delay", type=float, default=0.05)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--soft-skip-env",
+        action="store_true",
+        help="Return success when environment blocks QMP/socket setup (useful in restricted sandboxes).",
+    )
     args = parser.parse_args()
 
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -185,13 +190,30 @@ def main():
 
     qmp_sock = None
     try:
-        ready_markers = ["Entering main loop", "MiniDOS Shell Ready."]
+        ready_markers = [
+            "Entering main loop",
+            "MiniDOS Shell Ready.",
+            "Failed to bind socket",
+            "Operation not permitted",
+        ]
         log = _read_until(proc, ready_markers, args.ready_timeout, echo=not args.quiet)
         if not log:
             print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
             return 1
+        if "Failed to bind socket" in log or "Operation not permitted" in log:
+            if args.soft_skip_env:
+                print("SKIP: QMP/socket blocked by environment restrictions", file=sys.stderr)
+                return 0
+            print("ERROR: QMP/socket blocked by environment restrictions", file=sys.stderr)
+            return 1
 
-        qmp_sock = _qmp_connect(qmp_socket, timeout_s=10.0)
+        try:
+            qmp_sock = _qmp_connect(qmp_socket, timeout_s=10.0)
+        except RuntimeError as exc:
+            if args.soft_skip_env:
+                print(f"SKIP: QMP unavailable in this environment ({exc})", file=sys.stderr)
+                return 0
+            raise
 
         _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
 

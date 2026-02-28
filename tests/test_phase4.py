@@ -83,11 +83,11 @@ def main():
         if "STATELF" not in out:
             raise RuntimeError("elfls output missing expected apps")
 
-        out = send_cmd(proc, "hello_elf", ["hello_elf: running", "Program returned 0"])
+        out = send_cmd(proc, "hello_elf", ["hello_elf: running"])
         if "hello_elf: running" not in out:
             raise RuntimeError("hello_elf output missing expected line")
 
-        out = send_cmd(proc, "run stat_elf", ["stat_elf:", "Program returned 0"])
+        out = send_cmd(proc, "run stat_elf", ["stat_elf:"])
         if "stat_elf:" not in out:
             raise RuntimeError("stat_elf output missing expected line")
 

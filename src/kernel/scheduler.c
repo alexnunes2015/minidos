@@ -8,6 +8,7 @@
 #define PIT_BASE_HZ 1193182U
 #define SCHED_MAX_PROCS 3
 #define SCHED_STACK_WORDS 512
+#define SCHED_USER_STACK_WORDS 512
 #define SCHED_TEST_ROUNDS 3
 
 static inline void outb(unsigned short port, unsigned char value) {
@@ -17,6 +18,7 @@ static inline void outb(unsigned short port, unsigned char value) {
 typedef struct {
     process_t pcb;
     unsigned int kernel_stack[SCHED_STACK_WORDS];
+    unsigned int user_stack[SCHED_USER_STACK_WORDS];
 } sched_proc_slot_t;
 
 static sched_proc_slot_t g_slots[SCHED_MAX_PROCS];
@@ -54,13 +56,23 @@ static int sched_find_next_ready(void) {
     return -1;
 }
 
+static void sched_init_process_slot(int idx, const char* name, process_state_t state) {
+    sched_proc_slot_t* slot = &g_slots[idx];
+    slot->pcb.pid = idx;
+    slot->pcb.name = name;
+    slot->pcb.state = state;
+    slot->pcb.context.esp = 0;
+    slot->pcb.context.irq_esp = 0;
+    slot->pcb.context.user_esp = &slot->user_stack[SCHED_USER_STACK_WORDS];
+    slot->pcb.context.kernel_stack_base = &slot->kernel_stack[0];
+    slot->pcb.context.kernel_stack_top = &slot->kernel_stack[SCHED_STACK_WORDS];
+    slot->pcb.context.user_stack_base = &slot->user_stack[0];
+    slot->pcb.context.user_stack_top = &slot->user_stack[SCHED_USER_STACK_WORDS];
+}
+
 static void sched_runtime_reset(void) {
     for (int i = 0; i < SCHED_MAX_PROCS; i++) {
-        g_slots[i].pcb.pid = i;
-        g_slots[i].pcb.name = "idle";
-        g_slots[i].pcb.state = PROCESS_UNUSED;
-        g_slots[i].pcb.context.esp = 0;
-        g_slots[i].pcb.context.irq_esp = 0;
+        sched_init_process_slot(i, "idle", PROCESS_UNUSED);
     }
 
     g_slots[0].pcb.name = "kernel";
@@ -99,7 +111,7 @@ static void sched_task_exit(void) {
 }
 
 static unsigned int* sched_prepare_stack(sched_proc_slot_t* slot, void (*entry)(void)) {
-    unsigned int* sp = &slot->kernel_stack[SCHED_STACK_WORDS];
+    unsigned int* sp = slot->pcb.context.kernel_stack_top;
 
     *--sp = (unsigned int)sched_task_exit;
     *--sp = (unsigned int)entry;
@@ -197,11 +209,7 @@ int scheduler_phase5_self_test(void) {
     g_test_completed = 0;
 
     for (int i = 0; i < SCHED_MAX_PROCS; i++) {
-        g_slots[i].pcb.pid = i;
-        g_slots[i].pcb.name = "idle";
-        g_slots[i].pcb.state = PROCESS_UNUSED;
-        g_slots[i].pcb.context.esp = 0;
-        g_slots[i].pcb.context.irq_esp = 0;
+        sched_init_process_slot(i, "idle", PROCESS_UNUSED);
     }
 
     g_slots[0].pcb.name = "kernel";
@@ -213,6 +221,12 @@ int scheduler_phase5_self_test(void) {
 
     g_slots[1].pcb.context.esp = sched_prepare_stack(&g_slots[1], sched_task_a);
     g_slots[2].pcb.context.esp = sched_prepare_stack(&g_slots[2], sched_task_b);
+
+    if (g_slots[1].pcb.context.kernel_stack_top == g_slots[2].pcb.context.kernel_stack_top ||
+        g_slots[1].pcb.context.user_stack_top == g_slots[2].pcb.context.user_stack_top) {
+        log_serial_raw("[sched] phase5 stack separation failed\n");
+        return -1;
+    }
 
     g_current = 0;
 

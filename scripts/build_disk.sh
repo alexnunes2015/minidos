@@ -192,7 +192,6 @@ trap "losetup -d $LOOP1 2>/dev/null; rm -rf $TMPDIR" EXIT
 # Add files to A:
 mount "$LOOP1" "$TMPDIR"
 echo "Welcome to drive A:" > $TMPDIR/README.TXT
-echo "ECHO I'm the AUTOEXEC.AUT" > $TMPDIR/AUTOEXEC.AUT
 mkdir -p "$TMPDIR/GAMES"
 cp "$GUESS_APP_ELF" "$TMPDIR/GAMES/$GUESS_APP_NAME.ELF"
 cp "$DOSSHELL_APP_ELF" "$TMPDIR/$DOSSHELL_APP_NAME.ELF"
@@ -226,10 +225,6 @@ format_with_mtools() {
 
     if ! echo "Welcome to drive A:" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/README.TXT; then
         echo "ERROR: failed to write README.TXT via mtools" >&2
-        return 1
-    fi
-    if ! printf "ECHO I'm the AUTOEXEC.AUT\n" | mcopy -i "$DISK_IMG@@$A_OFF" - ::/AUTOEXEC.AUT; then
-        echo "ERROR: failed to write AUTOEXEC.AUT via mtools" >&2
         return 1
     fi
     if ! mmd -i "$DISK_IMG@@$A_OFF" ::/GAMES; then
