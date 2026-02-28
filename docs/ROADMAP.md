@@ -80,7 +80,7 @@ Critério de pronto:
 
 Objetivo: evoluir de MVP de disco para base utilizável.
 
-Status: em andamento desde 15/02/2026.
+Status: concluída em 28/02/2026.
 
 - Expandir ATA além de `disk_id` 0.
 - Validar leitura/escrita em múltiplos discos/canais suportados.
@@ -103,6 +103,9 @@ Checklist crítico de validação (Fase 3):
 
 Critério de pronto:
 - Testes de escrita e leitura passando em sequência, sem corrupção detectável.
+
+Validação de fechamento:
+- `make test-phase3` verde em 28/02/2026, cobrindo multi-disco, isolamento entre volumes, operações FAT16 de escrita (`copy`, `ren`, `mkdir`, `rmdir`, `del`) e cenários negativos (cross-drive inválido e drive inexistente).
 
 ## Fase 4 - Userland e Execução ELF (2 semanas)
 

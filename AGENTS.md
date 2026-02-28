@@ -44,8 +44,8 @@ Dependencies used by the build/tests include `gcc` (with `-m32`), `ld`, `nasm`, 
 ## Known Issues & Next Steps
 - Protected Mode transition currently boots into the kernel in serial smoke tests; keep using serial checkpoints to detect regressions early.
 - Disk write path is implemented (`disk_write_lba` / `disk_write_lba_from_disk` in `src/kernel/disk.c`).
-- ATA access currently supports only the primary master drive (`disk_id` 0).
-- Next steps: expand ATA support beyond `disk_id` 0, strengthen interrupt handling, and continue memory-management evolution (see `docs/DESIGN.md`).
+- ATA PIO access is validated for `disk_id` 0..3 in phase regression (`make test-phase3`).
+- Next steps: complete process kernel/user stack separation (Fase 5), strengthen interrupt handling, and continue memory-management evolution (see `docs/DESIGN.md` and `docs/ROADMAP.md`).
 
 ## Security & Configuration Tips
 - Disk formatting may require `sudo` for loop devices, or use `mtools` instead. See `scripts/build_disk.sh` for the flow.
