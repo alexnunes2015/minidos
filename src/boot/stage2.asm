@@ -17,6 +17,10 @@
 %define BOOT_VIDEO_BLUE_SIZE   0x051D
 %define BOOT_VIDEO_BLUE_POS    0x051E
 %define BOOT_VIDEO_FB          0x0520
+%define BOOT_DRIVE_NUMBER      0x0504
+%define BOOT_DRIVE_FLAGS       0x0505
+%define BOOT_DRIVE_SPT         0x0506
+%define BOOT_DRIVE_HEADS       0x0508
 
 %define VBE_MODE_INFO          0x7000
 
@@ -63,6 +67,7 @@ start:
     jae .geom_done2
     mov word [sectors_per_track], 18
     mov word [heads], 2
+    mov byte [geom_ok], 1
 .geom_done2:
     
     ; Read base memory from BIOS (0x413 contains KB of base memory, max 640KB)
@@ -80,6 +85,26 @@ start:
 .no_extended:
     mov word [0x502], 0     ; No extended memory
 .mem_done:
+
+    ; Publish boot drive metadata for the protected-mode kernel.
+    mov al, [drive_number]
+    mov [BOOT_DRIVE_NUMBER], al
+
+    xor al, al
+    cmp byte [lba_supported], 0
+    je .no_lba_flag
+    or al, 0x01
+.no_lba_flag:
+    cmp byte [geom_ok], 0
+    je .no_geom_flag
+    or al, 0x02
+.no_geom_flag:
+    mov [BOOT_DRIVE_FLAGS], al
+
+    mov ax, [sectors_per_track]
+    mov [BOOT_DRIVE_SPT], ax
+    mov ax, [heads]
+    mov [BOOT_DRIVE_HEADS], ax
     
     mov si, msg_start
     call serial_print_string

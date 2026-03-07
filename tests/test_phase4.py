@@ -58,7 +58,9 @@ def main():
     qemu_cmd = [
         "qemu-system-i386",
         "-drive",
-        f"file={IMG},format=raw,if=ide",
+        f"file={IMG},format=raw,if=floppy,index=0",
+        "-boot",
+        "a",
         "-m",
         "16M",
         "-serial",

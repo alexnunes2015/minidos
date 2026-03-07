@@ -7,4 +7,4 @@ echo "Starting MiniDOS in QEMU..."
 echo "Press Ctrl+Alt+G to release mouse, Ctrl+Alt+2 for monitor, Ctrl+Alt+1 to return"
 echo ""
 
-qemu-system-i386 -fda "$ROOT_DIR/minidos.img" -boot a
+qemu-system-i386 -drive file="$ROOT_DIR/minidos.img",format=raw,if=floppy,index=0 -boot a

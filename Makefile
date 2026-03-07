@@ -24,7 +24,7 @@ KERNEL_ASM = $(BUILD_DIR)/entry.o
 all: minidos.img
 
 run: minidos.img
-	qemu-system-i386 -drive file=minidos.img,format=raw,if=ide -m 16M -serial stdio
+	qemu-system-i386 -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

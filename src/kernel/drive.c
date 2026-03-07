@@ -7,6 +7,17 @@ static DriveInfo drives[MAX_DRIVES];
 static int current_drive = 0;  // A:
 static unsigned char mbr_buffer[SECTOR_SIZE];
 
+static unsigned short read_le16(const unsigned char* ptr) {
+    return (unsigned short)(ptr[0] | (ptr[1] << 8));
+}
+
+static unsigned int read_le32(const unsigned char* ptr) {
+    return (unsigned int)(ptr[0] |
+                          (ptr[1] << 8) |
+                          (ptr[2] << 16) |
+                          (ptr[3] << 24));
+}
+
 // Helper to print hex byte
 static void print_hex_byte(unsigned char val) {
     const char hex[] = "0123456789ABCDEF";
@@ -34,6 +45,88 @@ static void print_num(unsigned int num) {
     }
 }
 
+static unsigned char detect_fat_type(const unsigned char* boot_sector) {
+    unsigned short bytes_per_sector = read_le16(boot_sector + 11);
+    unsigned char sectors_per_cluster = boot_sector[13];
+    unsigned short reserved_sectors = read_le16(boot_sector + 14);
+    unsigned char fat_count = boot_sector[16];
+    unsigned short root_entries = read_le16(boot_sector + 17);
+    unsigned short total_sectors_16 = read_le16(boot_sector + 19);
+    unsigned short sectors_per_fat = read_le16(boot_sector + 22);
+    unsigned int total_sectors_32 = read_le32(boot_sector + 32);
+    unsigned int total_sectors = total_sectors_16 != 0 ? total_sectors_16 : total_sectors_32;
+    unsigned int root_dir_sectors;
+    unsigned int data_sectors;
+    unsigned int cluster_count;
+
+    if (bytes_per_sector != SECTOR_SIZE ||
+        sectors_per_cluster == 0 ||
+        reserved_sectors == 0 ||
+        fat_count == 0 ||
+        sectors_per_fat == 0 ||
+        root_entries == 0 ||
+        total_sectors == 0) {
+        return 0;
+    }
+
+    root_dir_sectors = ((unsigned int)root_entries * 32U + (bytes_per_sector - 1)) / bytes_per_sector;
+    if (total_sectors <= (unsigned int)reserved_sectors + (unsigned int)fat_count * sectors_per_fat + root_dir_sectors) {
+        return 0;
+    }
+
+    data_sectors = total_sectors - ((unsigned int)reserved_sectors + (unsigned int)fat_count * sectors_per_fat + root_dir_sectors);
+    cluster_count = data_sectors / sectors_per_cluster;
+
+    if (cluster_count < 4085U) {
+        return 0x01; // FAT12
+    }
+    if (cluster_count < 65525U) {
+        return 0x06; // FAT16
+    }
+    return 0;
+}
+
+static int detect_whole_disk_volume(unsigned char disk_id, int* next_letter) {
+    unsigned short total_sectors_16;
+    unsigned int total_sectors_32;
+    unsigned int total_sectors;
+    unsigned char fs_type;
+
+    if (!next_letter || *next_letter >= MAX_DRIVES) {
+        return 0;
+    }
+    if (disk_read_lba_from_disk(disk_id, 0, mbr_buffer) != 0) {
+        return 0;
+    }
+    if (mbr_buffer[510] != 0x55 || mbr_buffer[511] != 0xAA) {
+        return 0;
+    }
+
+    fs_type = detect_fat_type(mbr_buffer);
+    if (fs_type == 0) {
+        return 0;
+    }
+
+    total_sectors_16 = read_le16(mbr_buffer + 19);
+    total_sectors_32 = read_le32(mbr_buffer + 32);
+    total_sectors = total_sectors_16 != 0 ? total_sectors_16 : total_sectors_32;
+    if (total_sectors == 0 && disk_id == 0) {
+        total_sectors = disk_boot_media_total_sectors();
+    }
+    if (total_sectors == 0) {
+        return 0;
+    }
+
+    drives[*next_letter].valid = 1;
+    drives[*next_letter].disk_id = disk_id;
+    drives[*next_letter].partition_num = -1;
+    drives[*next_letter].lba_start = 0;
+    drives[*next_letter].sector_count = total_sectors;
+    drives[*next_letter].fs_type = fs_type;
+    (*next_letter)++;
+    return 1;
+}
+
 // Detect partitions on a specific disk
 static int detect_disk_partitions(unsigned char disk_id, int* next_letter) {
     // Try to read MBR from this disk
@@ -56,7 +149,7 @@ static int detect_disk_partitions(unsigned char disk_id, int* next_letter) {
         MBR_PartitionEntry* part = &mbr->partitions[i];
         
         // Skip empty partitions
-        if (part->partition_type == 0) {
+        if (part->partition_type == 0 || part->sector_count == 0) {
             continue;
         }
         
@@ -92,8 +185,14 @@ void drive_init() {
     
     print_string("Detecting drives...\n");
     
-    // Try to detect up to 4 ATA disks (primary master/slave, secondary master/slave)
-    for (unsigned char disk = 0; disk < 4; disk++) {
+    if (disk_boot_media_is_floppy()) {
+        if (detect_whole_disk_volume(0, &next_letter)) {
+            print_string("  Boot floppy: whole-disk volume\n");
+        }
+    }
+
+    // Try to detect up to 4 ATA disks (primary master/slave, secondary master/slave).
+    for (unsigned char disk = disk_boot_media_is_floppy() ? 1 : 0; disk < 4; disk++) {
         int found = detect_disk_partitions(disk, &next_letter);
         if (found > 0) {
             print_string("  Disk ");
@@ -105,14 +204,18 @@ void drive_init() {
     }
     
     if (next_letter == 0) {
-        print_string("  No partitions found - creating test drive A:\n");
-        drives[0].valid = 1;
-        drives[0].disk_id = 0;
-        drives[0].partition_num = -1;
-        drives[0].lba_start = 2048;  // 1MB offset
-        drives[0].sector_count = 32768;  // 16MB
-        drives[0].fs_type = 0x06;  // FAT16
-        next_letter = 1;
+        if (disk_boot_media_is_floppy() && detect_whole_disk_volume(0, &next_letter)) {
+            print_string("  Boot floppy fallback mounted as A:\n");
+        } else {
+            print_string("  No partitions found - creating test drive A:\n");
+            drives[0].valid = 1;
+            drives[0].disk_id = 0;
+            drives[0].partition_num = -1;
+            drives[0].lba_start = 2048;  // 1MB offset
+            drives[0].sector_count = 32768;  // 16MB
+            drives[0].fs_type = 0x06;  // FAT16
+            next_letter = 1;
+        }
     }
     
     // Set current drive to first valid drive (default A:)

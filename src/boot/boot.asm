@@ -11,7 +11,7 @@ nop
 bdb_oem:                    db 'MSWIN4.1'           ; 8 bytes
 bdb_bytes_per_sector:       dw 512
 bdb_sectors_per_cluster:    db 1
-bdb_reserved_sectors:       dw 1
+bdb_reserved_sectors:       dw 160
 bdb_fat_count:              db 2
 bdb_dir_entries_count:      dw 224
 bdb_total_sectors:          dw 2880                 ; 2880 * 512 = 1.44MB
@@ -28,7 +28,7 @@ ebr_drive_number:           db 0                    ; 0x00 floppy, 0x80 hdd
 ebr_signature:              db 0x29
 ebr_volume_id:              db 0x12, 0x34, 0x56, 0x78
 ebr_volume_label:           db 'MINIDOS    '        ; 11 bytes
-ebr_system_id:              db 'FAT16   '           ; 8 bytes
+ebr_system_id:              db 'FAT12   '           ; 8 bytes
 
 start:
     ; SAVE BOOT DRIVE

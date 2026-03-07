@@ -59,7 +59,7 @@ case "${1:-help}" in
         ;;
     
     dir)
-        run_test "Directory Listing C:" "c:" "dir"
+        run_test "Directory Listing A:" "a:" "dir"
         ;;
 
     rmdir)
@@ -67,7 +67,7 @@ case "${1:-help}" in
         ;;
     
     type)
-        run_test "Type File" "c:" "type hello.txt"
+        run_test "Type File" "a:" "type hello.txt"
         ;;
     
     shell)

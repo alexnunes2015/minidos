@@ -27,6 +27,13 @@
 #define ATA_SR_ERR      0x01
 #define ATA_DCR_SRST    0x04
 
+#define BOOT_DRIVE_NUMBER_ADDR   0x0504
+#define BOOT_DRIVE_FLAGS_ADDR    0x0505
+#define BOOT_DRIVE_SPT_ADDR      0x0506
+#define BOOT_DRIVE_HEADS_ADDR    0x0508
+#define BOOT_GEOMETRY_VALID_FLAG 0x02
+#define BIOS_SECTOR_SIZE         512
+
 static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -53,21 +60,72 @@ static inline void io_wait() {
     outb(0x80, 0);
 }
 
+static inline unsigned char read_phys_u8(unsigned int addr) {
+    unsigned char value;
+    __asm__ volatile ("movb (%1), %0" : "=r"(value) : "r"(addr) : "memory");
+    return value;
+}
+
+static inline unsigned short read_phys_u16(unsigned int addr) {
+    unsigned short value;
+    __asm__ volatile ("movw (%1), %0" : "=r"(value) : "r"(addr) : "memory");
+    return value;
+}
+
+static inline unsigned short read_le16(const unsigned char* ptr) {
+    return (unsigned short)(ptr[0] | (ptr[1] << 8));
+}
+
+static inline unsigned int read_le32(const unsigned char* ptr) {
+    return (unsigned int)(ptr[0] |
+                          (ptr[1] << 8) |
+                          (ptr[2] << 16) |
+                          (ptr[3] << 24));
+}
+
+extern int biosdisk_boot_read_sector(unsigned int drive, unsigned int cylinder, unsigned int head, unsigned int sector);
+extern int biosdisk_boot_write_sector(unsigned int drive, unsigned int cylinder, unsigned int head, unsigned int sector);
+extern unsigned char biosdisk_transfer_buffer[BIOS_SECTOR_SIZE];
+
 typedef struct {
     unsigned short io_base;
     unsigned short ctrl_base;
     unsigned char drive_sel;
 } ata_target_t;
 
-static int ata_decode_target(unsigned char disk_id, ata_target_t* target) {
-    if (!target || disk_id > 3) {
+typedef struct {
+    unsigned char drive_number;
+    unsigned short sectors_per_track;
+    unsigned short heads;
+    unsigned int total_sectors;
+    int is_floppy;
+    int geometry_valid;
+} boot_media_t;
+
+static boot_media_t boot_media;
+
+static int ata_decode_physical_target(unsigned char ata_id, ata_target_t* target) {
+    if (!target || ata_id > 3) {
         return -1;
     }
 
-    target->io_base = (disk_id < 2) ? ATA_PRIMARY_IO : ATA_SECONDARY_IO;
-    target->ctrl_base = (disk_id < 2) ? ATA_PRIMARY_CTRL : ATA_SECONDARY_CTRL;
-    target->drive_sel = (disk_id & 1) ? 0x10 : 0x00; // Slave bit
+    target->io_base = (ata_id < 2) ? ATA_PRIMARY_IO : ATA_SECONDARY_IO;
+    target->ctrl_base = (ata_id < 2) ? ATA_PRIMARY_CTRL : ATA_SECONDARY_CTRL;
+    target->drive_sel = (ata_id & 1) ? 0x10 : 0x00; // Slave bit
     return 0;
+}
+
+static int ata_decode_target(unsigned char disk_id, ata_target_t* target) {
+    unsigned char ata_id = disk_id;
+
+    if (boot_media.is_floppy) {
+        if (disk_id == 0) {
+            return -1;
+        }
+        ata_id = (unsigned char)(disk_id - 1);
+    }
+
+    return ata_decode_physical_target(ata_id, target);
 }
 
 static int ata_has_error(const ata_target_t* target) {
@@ -117,6 +175,64 @@ static void ata_soft_reset(const ata_target_t* target) {
     io_wait();
     io_wait();
     io_wait();
+}
+
+static int boot_floppy_lba_to_chs(
+    unsigned int lba,
+    unsigned short* cylinder,
+    unsigned short* head,
+    unsigned short* sector
+) {
+    unsigned int sectors_per_track = boot_media.sectors_per_track;
+    unsigned int heads = boot_media.heads;
+    unsigned int tmp;
+
+    if (!cylinder || !head || !sector) {
+        return -1;
+    }
+    if (!boot_media.is_floppy || sectors_per_track == 0 || heads == 0) {
+        return -1;
+    }
+    if (boot_media.total_sectors != 0 && lba >= boot_media.total_sectors) {
+        return -1;
+    }
+
+    tmp = lba / sectors_per_track;
+    *sector = (unsigned short)((lba % sectors_per_track) + 1);
+    *head = (unsigned short)(tmp % heads);
+    *cylinder = (unsigned short)(tmp / heads);
+    return 0;
+}
+
+static int boot_floppy_rw_sector(unsigned int lba, unsigned char* buffer, int write) {
+    unsigned short cylinder = 0;
+    unsigned short head = 0;
+    unsigned short sector = 0;
+    int rc;
+
+    if (!buffer) {
+        return -1;
+    }
+    if (boot_floppy_lba_to_chs(lba, &cylinder, &head, &sector) != 0) {
+        return -1;
+    }
+
+    if (write) {
+        for (int i = 0; i < BIOS_SECTOR_SIZE; i++) {
+            biosdisk_transfer_buffer[i] = buffer[i];
+        }
+        rc = biosdisk_boot_write_sector(boot_media.drive_number, cylinder, head, sector);
+        return rc == 0 ? 0 : -1;
+    }
+
+    rc = biosdisk_boot_read_sector(boot_media.drive_number, cylinder, head, sector);
+    if (rc != 0) {
+        return -1;
+    }
+    for (int i = 0; i < BIOS_SECTOR_SIZE; i++) {
+        buffer[i] = biosdisk_transfer_buffer[i];
+    }
+    return 0;
 }
 
 static int disk_read_lba_internal(const ata_target_t* target, unsigned int lba, unsigned char* buffer) {
@@ -208,19 +324,63 @@ static int disk_write_lba_internal(const ata_target_t* target, unsigned int lba,
 void disk_init() {
     ata_target_t primary_master;
     ata_target_t secondary_master;
+    unsigned char boot_flags;
 
-    if (ata_decode_target(0, &primary_master) == 0) {
+    boot_media.drive_number = read_phys_u8(BOOT_DRIVE_NUMBER_ADDR);
+    boot_media.sectors_per_track = read_phys_u16(BOOT_DRIVE_SPT_ADDR);
+    boot_media.heads = read_phys_u16(BOOT_DRIVE_HEADS_ADDR);
+    boot_media.total_sectors = 0;
+    boot_media.is_floppy = boot_media.drive_number < 0x80;
+    boot_flags = read_phys_u8(BOOT_DRIVE_FLAGS_ADDR);
+    boot_media.geometry_valid = (boot_flags & BOOT_GEOMETRY_VALID_FLAG) != 0;
+
+    if (ata_decode_physical_target(0, &primary_master) == 0) {
         outb(primary_master.io_base + ATA_DRIVE, 0xE0);
         io_wait();
     }
-    if (ata_decode_target(2, &secondary_master) == 0) {
+    if (ata_decode_physical_target(2, &secondary_master) == 0) {
         outb(secondary_master.io_base + ATA_DRIVE, 0xE0);
         io_wait();
     }
+
+    if (boot_media.is_floppy) {
+        unsigned char boot_sector[BIOS_SECTOR_SIZE];
+
+        if (!boot_media.geometry_valid) {
+            boot_media.sectors_per_track = 18;
+            boot_media.heads = 2;
+            boot_media.geometry_valid = 1;
+        }
+
+        if (boot_floppy_rw_sector(0, boot_sector, 0) == 0) {
+            unsigned int total16 = read_le16(boot_sector + 19);
+            unsigned int total32 = read_le32(boot_sector + 32);
+
+            if (boot_media.sectors_per_track == 0) {
+                boot_media.sectors_per_track = read_le16(boot_sector + 24);
+            }
+            if (boot_media.heads == 0) {
+                boot_media.heads = read_le16(boot_sector + 26);
+            }
+            boot_media.total_sectors = total16 != 0 ? total16 : total32;
+        }
+    }
+}
+
+int disk_boot_media_is_floppy(void) {
+    return boot_media.is_floppy;
+}
+
+unsigned int disk_boot_media_total_sectors(void) {
+    return boot_media.total_sectors;
 }
 
 int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
     ata_target_t target;
+
+    if (boot_media.is_floppy && disk_id == 0) {
+        return boot_floppy_rw_sector(lba, buffer, 0);
+    }
     if (ata_decode_target(disk_id, &target) != 0) {
         return -1;
     }
@@ -235,6 +395,10 @@ int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned ch
 
 int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
     ata_target_t target;
+
+    if (boot_media.is_floppy && disk_id == 0) {
+        return boot_floppy_rw_sector(lba, buffer, 1);
+    }
     if (ata_decode_target(disk_id, &target) != 0) {
         return -1;
     }

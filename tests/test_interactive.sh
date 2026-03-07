@@ -52,7 +52,8 @@ INPUT_PID=$!
 
 # Run QEMU with input from FIFO
 timeout 30 $QEMU \
-    -drive "file=$DISK,format=raw,if=ide" \
+    -drive "file=$DISK,format=raw,if=floppy,index=0" \
+    -boot a \
     -m 16M \
     -serial stdio \
     -monitor none \

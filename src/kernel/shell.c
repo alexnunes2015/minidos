@@ -1691,7 +1691,7 @@ void shell_execute(char* cmd) {
         shell_out_both(args);
         shell_out_both("\n");
     } else if (mystrcmp(command, "ver") == 0) {
-        shell_out_both("MiniDOS Version 0.1 (MVP) - FAT16\n");
+        shell_out_both("MiniDOS Version 0.1 (MVP) - FAT12/FAT16\n");
     } else if (mystrcmp(command, "time") == 0) {
         rtc_time_t current_time;
         if (!rtc_read_time(&current_time)) {

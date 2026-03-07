@@ -168,7 +168,9 @@ def main():
     qemu_cmd = [
         args.qemu,
         "-drive",
-        f"file={disk_path},format=raw,if=ide",
+        f"file={disk_path},format=raw,if=floppy,index=0",
+        "-boot",
+        "a",
         "-m",
         args.memory,
         "-serial",

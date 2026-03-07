@@ -3,12 +3,18 @@
 #include "drive.h"
 #include "serial.h"
 
+#define FAT_TYPE_12 12
+#define FAT_TYPE_16 16
+
 static FAT16_BPB bpb;
 static unsigned char sector_buffer[SECTOR_SIZE];
+static unsigned char fat_sector_buffer_aux[SECTOR_SIZE];
 
 static int current_drive_letter = 0;  // A:
 static int fat16_debug_enabled = 1;
+static unsigned int current_fat_type = FAT_TYPE_16;
 
+static unsigned int get_total_clusters(void);
 static int fat16_alloc_cluster_internal(unsigned short* out_cluster);
 static int fat16_free_cluster_chain_internal(unsigned short start_cluster);
 static int fat16_find_entry_internal(
@@ -65,6 +71,8 @@ void fat16_set_drive(int drive_letter) {
 }
 
 int fat16_init() {
+    unsigned int total_clusters;
+
     if (fat16_debug_enabled) {
         serial_print("[FAT16] init drive=");
         serial_putchar((char)('A' + current_drive_letter));
@@ -119,6 +127,16 @@ int fat16_init() {
         return 0;
     }
 
+    total_clusters = get_total_clusters();
+    if (total_clusters < 4085U) {
+        current_fat_type = FAT_TYPE_12;
+    } else if (total_clusters < 65525U) {
+        current_fat_type = FAT_TYPE_16;
+    } else {
+        print_string("[FAT16] Warning: Unsupported FAT type\n");
+        return 0;
+    }
+
     if (fat16_debug_enabled) {
         serial_print("[FAT16] ok bps=");
         serial_print_hex(bpb.bytes_per_sector);
@@ -126,6 +144,8 @@ int fat16_init() {
         serial_print_hex(bpb.sectors_per_fat);
         serial_print(" root=");
         serial_print_hex(bpb.root_entries);
+        serial_print(" type=");
+        serial_print(current_fat_type == FAT_TYPE_12 ? "12" : "16");
         serial_print("\n");
     }
 
@@ -156,38 +176,124 @@ static unsigned int get_total_clusters() {
     return data_sectors / bpb.sectors_per_cluster;
 }
 
+static int fat_is_data_cluster(unsigned int cluster) {
+    unsigned int max_cluster = get_total_clusters() + 1;
+    return cluster >= 2 && cluster <= max_cluster;
+}
+
+static unsigned short fat_end_of_chain_value(void) {
+    return current_fat_type == FAT_TYPE_12 ? 0x0FFF : 0xFFFF;
+}
+
 static unsigned short fat16_read_fat_entry(unsigned short cluster) {
-    unsigned int fat_sector = bpb.reserved_sectors + (cluster * 2) / SECTOR_SIZE;
-    unsigned int fat_offset = (cluster * 2) % SECTOR_SIZE;
-    if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
-        return 0xFFFF;
+    if (current_fat_type == FAT_TYPE_12) {
+        unsigned int fat_offset = cluster + (cluster / 2);
+        unsigned int fat_sector = bpb.reserved_sectors + fat_offset / SECTOR_SIZE;
+        unsigned int fat_byte_offset = fat_offset % SECTOR_SIZE;
+        unsigned short pair;
+
+        if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
+            return fat_end_of_chain_value();
+        }
+        if (fat_byte_offset == (SECTOR_SIZE - 1)) {
+            if (disk_read_sector((int)(fat_sector + 1), fat_sector_buffer_aux) != 0) {
+                return fat_end_of_chain_value();
+            }
+            pair = (unsigned short)(sector_buffer[fat_byte_offset] | (fat_sector_buffer_aux[0] << 8));
+        } else {
+            pair = (unsigned short)(sector_buffer[fat_byte_offset] | (sector_buffer[fat_byte_offset + 1] << 8));
+        }
+
+        if (cluster & 1) {
+            pair >>= 4;
+        } else {
+            pair &= 0x0FFF;
+        }
+        return (unsigned short)(pair & 0x0FFF);
     }
-    return *(unsigned short*)(sector_buffer + fat_offset);
+
+    {
+        unsigned int fat_sector = bpb.reserved_sectors + (cluster * 2) / SECTOR_SIZE;
+        unsigned int fat_offset = (cluster * 2) % SECTOR_SIZE;
+        if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
+            return fat_end_of_chain_value();
+        }
+        return *(unsigned short*)(sector_buffer + fat_offset);
+    }
 }
 
 static int fat16_write_fat_entry(unsigned short cluster, unsigned short value) {
-    unsigned int fat_offset = (cluster * 2) % SECTOR_SIZE;
-    unsigned int fat_sector_index = (cluster * 2) / SECTOR_SIZE;
+    if (current_fat_type == FAT_TYPE_12) {
+        unsigned short masked_value = (unsigned short)(value & 0x0FFF);
+        unsigned int fat_offset = cluster + (cluster / 2);
+        unsigned int fat_sector_index = fat_offset / SECTOR_SIZE;
+        unsigned int fat_byte_offset = fat_offset % SECTOR_SIZE;
 
-    for (unsigned int fat = 0; fat < bpb.fat_count; fat++) {
-        unsigned int fat_sector = bpb.reserved_sectors + fat * bpb.sectors_per_fat + fat_sector_index;
-        if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
-            return 0;
+        for (unsigned int fat = 0; fat < bpb.fat_count; fat++) {
+            unsigned int fat_sector = bpb.reserved_sectors + fat * bpb.sectors_per_fat + fat_sector_index;
+            unsigned short pair;
+
+            if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
+                return 0;
+            }
+
+            if (fat_byte_offset == (SECTOR_SIZE - 1)) {
+                if (disk_read_sector((int)(fat_sector + 1), fat_sector_buffer_aux) != 0) {
+                    return 0;
+                }
+                pair = (unsigned short)(sector_buffer[fat_byte_offset] | (fat_sector_buffer_aux[0] << 8));
+                if (cluster & 1) {
+                    pair = (unsigned short)((pair & 0x000F) | (masked_value << 4));
+                } else {
+                    pair = (unsigned short)((pair & 0xF000) | masked_value);
+                }
+                sector_buffer[fat_byte_offset] = (unsigned char)(pair & 0xFF);
+                fat_sector_buffer_aux[0] = (unsigned char)((pair >> 8) & 0xFF);
+                if (disk_write_sector((int)fat_sector, sector_buffer) != 0) {
+                    return 0;
+                }
+                if (disk_write_sector((int)(fat_sector + 1), fat_sector_buffer_aux) != 0) {
+                    return 0;
+                }
+            } else {
+                pair = (unsigned short)(sector_buffer[fat_byte_offset] | (sector_buffer[fat_byte_offset + 1] << 8));
+                if (cluster & 1) {
+                    pair = (unsigned short)((pair & 0x000F) | (masked_value << 4));
+                } else {
+                    pair = (unsigned short)((pair & 0xF000) | masked_value);
+                }
+                sector_buffer[fat_byte_offset] = (unsigned char)(pair & 0xFF);
+                sector_buffer[fat_byte_offset + 1] = (unsigned char)((pair >> 8) & 0xFF);
+                if (disk_write_sector((int)fat_sector, sector_buffer) != 0) {
+                    return 0;
+                }
+            }
         }
-        *(unsigned short*)(sector_buffer + fat_offset) = value;
-        if (disk_write_sector((int)fat_sector, sector_buffer) != 0) {
-            return 0;
-        }
+
+        return 1;
     }
 
-    return 1;
+    {
+        unsigned int fat_offset = (cluster * 2) % SECTOR_SIZE;
+        unsigned int fat_sector_index = (cluster * 2) / SECTOR_SIZE;
+
+        for (unsigned int fat = 0; fat < bpb.fat_count; fat++) {
+            unsigned int fat_sector = bpb.reserved_sectors + fat * bpb.sectors_per_fat + fat_sector_index;
+            if (disk_read_sector((int)fat_sector, sector_buffer) != 0) {
+                return 0;
+            }
+            *(unsigned short*)(sector_buffer + fat_offset) = value;
+            if (disk_write_sector((int)fat_sector, sector_buffer) != 0) {
+                return 0;
+            }
+        }
+
+        return 1;
+    }
 }
 
 static unsigned short fat16_get_next_cluster(unsigned short cluster) {
-    unsigned int fat_sector = bpb.reserved_sectors + (cluster * 2) / SECTOR_SIZE;
-    unsigned int fat_offset = (cluster * 2) % SECTOR_SIZE;
-    disk_read_sector((int)fat_sector, sector_buffer);
-    return *(unsigned short*)(sector_buffer + fat_offset);
+    return fat16_read_fat_entry(cluster);
 }
 
 static int fat16_match_name(const char* filename, const FAT16_DirectoryEntry* entry) {
@@ -374,7 +480,7 @@ void fat16_list_dir_filtered(unsigned int dir_cluster, const char* pattern) {
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {
@@ -462,7 +568,7 @@ int fat16_write_file_from_dir(unsigned int dir_cluster, const char* filename, co
                 fat16_free_cluster_chain_internal(new_first_cluster);
                 return 0;
             }
-            if (!fat16_write_fat_entry(write_cluster, 0xFFFF)) {
+            if (!fat16_write_fat_entry(write_cluster, fat_end_of_chain_value())) {
                 fat16_free_cluster_chain_internal(new_first_cluster);
                 return 0;
             }
@@ -546,7 +652,7 @@ int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, uns
                 unsigned int cluster = entries[i].cluster_low;
                 unsigned int bytes_read = 0;
 
-                while (cluster != 0xFFFF && bytes_read < (unsigned)max_size && file_size > 0) {
+                while (fat_is_data_cluster(cluster) && bytes_read < (unsigned)max_size && file_size > 0) {
                     int data_start = get_data_start();
                     int cluster_sector = data_start + (cluster - 2) * bpb.sectors_per_cluster;
 
@@ -574,7 +680,7 @@ int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, uns
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             disk_read_sector(sector, sector_buffer);
@@ -592,7 +698,7 @@ int fat16_read_file_from_dir(unsigned int dir_cluster, const char* filename, uns
                 unsigned int file_cluster = entries[i].cluster_low;
                 unsigned int bytes_read = 0;
 
-                while (file_cluster != 0xFFFF && bytes_read < (unsigned)max_size && file_size > 0) {
+                while (fat_is_data_cluster(file_cluster) && bytes_read < (unsigned)max_size && file_size > 0) {
                     int cluster_sector = data_start + (file_cluster - 2) * bpb.sectors_per_cluster;
 
                     for (int cs = 0; cs < bpb.sectors_per_cluster && file_size > 0; cs++) {
@@ -650,7 +756,7 @@ int fat16_find_dir_cluster(unsigned int dir_cluster, const char* name, unsigned 
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             disk_read_sector(sector, sector_buffer);
@@ -770,7 +876,7 @@ static int fat16_alloc_cluster_internal(unsigned short* out_cluster) {
 
     for (unsigned int cluster = 2; cluster <= max_cluster; cluster++) {
         if (fat16_read_fat_entry((unsigned short)cluster) == 0x0000) {
-            if (!fat16_write_fat_entry((unsigned short)cluster, 0xFFFF)) {
+            if (!fat16_write_fat_entry((unsigned short)cluster, fat_end_of_chain_value())) {
                 return 0;
             }
             *out_cluster = (unsigned short)cluster;
@@ -879,7 +985,7 @@ static int fat16_add_dir_entry_internal(unsigned int dir_cluster, const unsigned
     unsigned int cluster_iter = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster_iter >= 2 && cluster_iter < 0xFFF8) {
+    while (fat_is_data_cluster(cluster_iter)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster_iter - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {
@@ -898,7 +1004,7 @@ static int fat16_add_dir_entry_internal(unsigned int dir_cluster, const unsigned
         }
 
         unsigned short next = fat16_get_next_cluster((unsigned short)cluster_iter);
-        if (next >= 0xFFF8) {
+        if (!fat_is_data_cluster(next)) {
             break;
         }
         cluster_iter = next;
@@ -912,7 +1018,7 @@ static int fat16_add_dir_entry_internal(unsigned int dir_cluster, const unsigned
     if (!fat16_write_fat_entry((unsigned short)cluster_iter, new_cluster)) {
         return 0;
     }
-    if (!fat16_write_fat_entry(new_cluster, 0xFFFF)) {
+    if (!fat16_write_fat_entry(new_cluster, fat_end_of_chain_value())) {
         return 0;
     }
 
@@ -971,7 +1077,7 @@ static int fat16_find_entry_internal(
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {
@@ -1007,7 +1113,7 @@ static int fat16_is_directory_empty(unsigned short dir_cluster) {
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {
@@ -1043,7 +1149,7 @@ static int fat16_free_cluster_chain_internal(unsigned short start_cluster) {
     unsigned short cluster = start_cluster;
     unsigned int max_steps = get_total_clusters() + 2;
 
-    while (cluster >= 2 && cluster < 0xFFF8 && max_steps-- > 0) {
+    while (fat_is_data_cluster(cluster) && max_steps-- > 0) {
         unsigned short next = fat16_get_next_cluster(cluster);
         if (!fat16_write_fat_entry(cluster, 0x0000)) {
             return 0;
@@ -1209,7 +1315,7 @@ int fat16_delete_matching(unsigned int dir_cluster, const char* pattern, int fre
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
 
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {
@@ -1324,7 +1430,7 @@ int fat16_copy_file_between_dirs(unsigned int src_dir_cluster, const char* src_n
             unsigned short next_src = fat16_get_next_cluster(src_cluster);
             unsigned short next_dst = 0;
 
-            if (next_src < 2 || next_src >= 0xFFF8) {
+            if (!fat_is_data_cluster(next_src)) {
                 if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
                 return 0;
             }
@@ -1337,7 +1443,7 @@ int fat16_copy_file_between_dirs(unsigned int src_dir_cluster, const char* src_n
                 if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
                 return 0;
             }
-            if (!fat16_write_fat_entry(next_dst, 0xFFFF)) {
+            if (!fat16_write_fat_entry(next_dst, fat_end_of_chain_value())) {
                 fat16_free_cluster_chain_internal(next_dst);
                 if (dst_first_cluster >= 2) fat16_free_cluster_chain_internal(dst_first_cluster);
                 return 0;
@@ -1417,7 +1523,7 @@ int fat16_get_entry_by_index(unsigned int dir_cluster, unsigned int index, char*
 
     unsigned int cluster = dir_cluster;
     int data_start = get_data_start();
-    while (cluster >= 2 && cluster < 0xFFF8) {
+    while (fat_is_data_cluster(cluster)) {
         for (int s = 0; s < bpb.sectors_per_cluster; s++) {
             int sector = data_start + (cluster - 2) * bpb.sectors_per_cluster + s;
             if (disk_read_sector(sector, sector_buffer) != 0) {

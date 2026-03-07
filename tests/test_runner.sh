@@ -24,7 +24,7 @@ if [ $# -eq 0 ]; then
     echo "Examples:"
     echo "  $0 help"
     echo "  $0 ver drives"
-    echo "  $0 c: dir type hello.txt"
+    echo "  $0 a: dir type hello.txt"
     exit 1
 fi
 
@@ -56,7 +56,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
     # Keep shell alive
     sleep 2
 ) | timeout 15 $QEMU \
-    -drive "file=$DISK,format=raw,if=ide" \
+    -drive "file=$DISK,format=raw,if=floppy,index=0" \
+    -boot a \
     -m 16M \
     -serial stdio \
     -monitor none \

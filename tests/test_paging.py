@@ -46,7 +46,8 @@ def main():
 
     cmd = [
         args.qemu,
-        "-drive", f"file={disk_path},format=raw,if=ide",
+        "-drive", f"file={disk_path},format=raw,if=floppy,index=0",
+        "-boot", "a",
         "-m", args.memory,
         "-serial", "stdio",
         "-monitor", "none",

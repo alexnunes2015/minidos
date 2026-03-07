@@ -143,9 +143,11 @@ def main():
         qemu_cmd = [
             "qemu-system-i386",
             "-drive",
-            f"file={disk_a},format=raw,if=ide,index=0",
+            f"file={disk_a},format=raw,if=floppy,index=0",
+            "-boot",
+            "a",
             "-drive",
-            f"file={disk_b},format=raw,if=ide,index=1",
+            f"file={disk_b},format=raw,if=ide,index=0",
             "-m",
             "16M",
             "-serial",

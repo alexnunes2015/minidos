@@ -1,5 +1,41 @@
 # Resolução de Problemas - MiniDOS
 
+## Problema: Ecrã Preto no VirtualBox ao Arrancar como Disquete
+
+### Sintoma
+No VirtualBox, a VM parece arrancar, muda para um ecrã preto e não chega à shell. No QEMU, a mesma `minidos.img` pode arrancar normalmente.
+
+### Causa
+O objetivo do projeto é `floppy-first`, mas a implementação atual ainda não completou essa transição. O stage2 consegue arrancar via BIOS a partir de `DL=0x00`, mas depois o kernel entra em protected mode e passa a usar o backend ATA/IDE em `src/kernel/disk.c`.
+
+Ao mesmo tempo, o build de `minidos.img` cria:
+- um MBR;
+- uma partição FAT16;
+- o volume principal começando em LBA 2048.
+
+Isto corresponde ao modelo transitório de disco usado hoje no QEMU, não ao modelo final desejado de uma disquete MS-DOS clássica.
+
+### Como Confirmar
+- Verifique no VirtualBox se a imagem está anexada só ao controlador `Floppy`.
+- Veja em `src/kernel/kernel.c` que o kernel valida o disco principal com `disk_read_lba(0, ...)` logo após `disk_init()`.
+- Veja em `src/kernel/disk.c` que o driver atual só fala ATA PIO (`0x1F0`, `0x170`) e não o controlador de floppy/FDC.
+
+### Estado Atual Suportado
+- Boot por BIOS/floppy: parcialmente possível no stage2.
+- Disco principal em runtime: ainda dependente de ATA/IDE.
+- Floppy como meio principal de leitura/escrita em runtime: objetivo do projeto, mas ainda não suportado de ponta a ponta.
+
+### Se Quiseres Mesmo o Modelo "Disquete MS-DOS"
+Será preciso uma mudança de arquitetura, não apenas de configuração da VM:
+1. adicionar um backend de floppy/FDC ou um thunk BIOS para acesso a disco após o boot;
+2. introduzir uma abstração de "boot media" no kernel em vez de assumir ATA;
+3. provavelmente gerar uma imagem realmente compatível com floppy (por exemplo 1.44 MB/FAT12), se a intenção for emular uma disquete clássica de ponta a ponta.
+
+### Prioridade de Produto
+O alvo correto é:
+1. floppy como meio principal por omissão;
+2. HDD-style apenas mais tarde, quando existir instalador e esse fluxo passar a fazer sentido.
+
 ## Problema: Sistema Reiniciando Continuamente
 
 ### Causa Identificada

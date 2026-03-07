@@ -26,6 +26,8 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 - **File System**: FAT16 is implemented. It reads the root directory and directories, and loads files using cluster chains.
 - **ATA Disk**: PIO LBA read/write paths are implemented for `disk_id` 0..3 (primary/secondary, master/slave).
 - **Userland (Current)**: External ELF32 apps are loaded from FAT16 and executed in protected mode with a minimal syscall ABI (`puts`, `get_char`, `file_size`) exposed by the shell runtime contract.
+- **Boot Media Direction**: The intended default product model is floppy-first, in the MS-DOS sense: boot and runtime should work with the floppy image as the primary medium.
+- **Boot Media Gap (Current)**: The stage2 loader can boot through BIOS services even when the image is presented as a floppy, but once the kernel is running it no longer uses BIOS disk services and currently has no floppy/FDC backend. The current ATA-style runtime storage path is transitional and does not yet match the intended floppy-first design.
 
 ## Trade-offs
 - **Polling vs Interrupts**: The kernel now uses interrupts as default runtime path. A small polling fallback remains in keyboard input as a compatibility bridge while IRQ-first behavior is stabilized.
@@ -34,6 +36,7 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 ## Current Limitations
 - ELF loader is intentionally minimal (ELF32 `ET_EXEC`, fixed low-memory window, no relocations/dynamic linking).
 - Preemption hook is active, but runtime process population is still minimal (kernel-only path by default), and user/kernel stack split is not enabled yet.
+- A floppy-only VirtualBox attachment still exposes an implementation gap in the current runtime storage model. This should be read as unfinished floppy support, not as a rejection of the floppy-first architecture.
 
 ## Next Technical Steps
 - Expand syscall surface and isolate user/kernel memory domains as preparation for multitasking.
