@@ -170,7 +170,7 @@ gdt_descriptor:
 msg_boot: db 'MiniDOS v0.1 loading...', 0
 msg_ok:   db ' OK', 0x0D, 0x0A, 0
 
-times 446-($-$$) db 0       ; Pad to 446 bytes (partition table at offset 446-509)
-; Partition table preserved by build script (64 bytes)
+times 446-($-$$) db 0       ; Pad unused area in floppy boot sector
+; Superfloppy layout: no partition table is used
 times 510-($-$$) db 0       ; Pad to 510
 dw 0xAA55                   ; Boot signature

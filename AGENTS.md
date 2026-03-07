@@ -55,3 +55,8 @@ Dependencies used by the build/tests include `gcc` (with `-m32`), `ld`, `nasm`, 
 - If the target file already has local changes, review them with `git diff HEAD -- <file>` and preserve them.
 - Do not revert or rewrite unrelated local changes; ignore them unless asked.
 - If unexpected changes appear, stop and ask how to proceed.
+
+## Agent Workflow
+- Follow `docs/DEVELOPMENT_PROTOCOL.md` for any non-trivial task.
+- Run the appropriate validation tier before claiming completion.
+- If a change touches build/image/debug behavior, keep `docs/DEBUGGING.md` and `docs/TEST_SCRIPTS.md` aligned in the same task.

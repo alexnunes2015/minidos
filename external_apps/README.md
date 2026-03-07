@@ -67,5 +67,5 @@ gcc -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie
     -Iexternal_apps/runtime -c my_app.c -o build/external_apps/app.o
 ld -m elf_i386 -T external_apps/runtime/app.ld -o build/external_apps/app.elf \
     build/external_apps/entry.o build/external_apps/app.o
-mcopy -o -i minidos.img@@1048576 build/external_apps/app.elf ::/MYAPP.ELF
+mcopy -o -i minidos.img build/external_apps/app.elf ::/MYAPP.ELF
 ```

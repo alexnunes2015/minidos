@@ -4,34 +4,19 @@ import json
 import os
 import select
 import socket
-import subprocess
 import sys
 import tempfile
 import time
 
+import subprocess
 
-def _read_until(proc, patterns, timeout_s, max_buf=30000, echo=True):
-    deadline = time.time() + timeout_s
-    buf = ""
-    while time.time() < deadline:
-        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
-        if not ready:
-            continue
-        data = os.read(proc.stdout.fileno(), 4096)
-        if not data:
-            break
-        text = data.decode(errors="ignore")
-        if echo:
-            sys.stdout.write(text)
-            sys.stdout.flush()
-        buf += text
-        if len(buf) > max_buf:
-            buf = buf[-max_buf:]
-        for pat in patterns:
-            if pat in buf:
-                return buf
-    return None
-
+from qemu_harness import (
+    build_floppy_qemu_cmd,
+    read_until,
+    resolve_disk_path,
+    spawn_qemu,
+    terminate_process,
+)
 
 def _qmp_read_line(qmp_sock, timeout=2.0):
     deadline = time.time() + timeout
@@ -153,8 +138,7 @@ def main():
     )
     args = parser.parse_args()
 
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    disk_path = args.disk if os.path.isabs(args.disk) else os.path.join(root_dir, args.disk)
+    disk_path = resolve_disk_path(args.disk)
     if not os.path.exists(disk_path):
         print(f"ERROR: disk image not found: {disk_path}", file=sys.stderr)
         return 2
@@ -165,30 +149,13 @@ def main():
     except FileNotFoundError:
         pass
 
-    qemu_cmd = [
-        args.qemu,
-        "-drive",
-        f"file={disk_path},format=raw,if=floppy,index=0",
-        "-boot",
-        "a",
-        "-m",
-        args.memory,
-        "-serial",
-        "stdio",
-        "-monitor",
-        "none",
-        "-display",
-        "none",
-        "-qmp",
-        f"unix:{qmp_socket},server=on,wait=off",
-    ]
-
-    proc = subprocess.Popen(
-        qemu_cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    qemu_cmd = build_floppy_qemu_cmd(
+        disk_path,
+        qemu=args.qemu,
+        memory=args.memory,
+        extra_args=["-qmp", f"unix:{qmp_socket},server=on,wait=off"],
     )
+    proc = spawn_qemu(qemu_cmd, stdin=subprocess.DEVNULL)
 
     qmp_sock = None
     try:
@@ -198,8 +165,8 @@ def main():
             "Failed to bind socket",
             "Operation not permitted",
         ]
-        log = _read_until(proc, ready_markers, args.ready_timeout, echo=not args.quiet)
-        if not log:
+        log, matched = read_until(proc, ready_markers, args.ready_timeout, echo=not args.quiet)
+        if not matched:
             print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
             return 1
         if "Failed to bind socket" in log or "Operation not permitted" in log:
@@ -219,17 +186,17 @@ def main():
 
         _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
 
-        log_after = _read_until(
+        log_after, matched = read_until(
             proc,
             ["Command:", "MiniDOS Version 0.1"],
             args.cmd_timeout,
             echo=not args.quiet,
         )
-        if not log_after:
+        if not matched:
             print("ERROR: timeout waiting for keyboard command output", file=sys.stderr)
             return 1
 
-        extra = _read_until(
+        extra, _ = read_until(
             proc,
             ["MiniDOS Version 0.1"],
             args.cmd_timeout,
@@ -255,10 +222,7 @@ def main():
                 qmp_sock.close()
             except Exception:
                 pass
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+        terminate_process(proc)
         try:
             if os.path.exists(qmp_socket):
                 os.unlink(qmp_socket)

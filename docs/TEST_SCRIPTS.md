@@ -2,6 +2,8 @@
 
 Permite enviar comandos automaticamente para o shell do MiniDOS e testar suas funcionalidades.
 
+Os testes Python partilham o mesmo contrato de arranque e I/O através de `tests/qemu_harness.py`. Isso evita drift entre scripts e torna o comportamento mais previsível para agentes.
+
 ## Scripts Disponíveis
 
 ### 1. `tests/test_runner.sh` - Test Runner Flexível
@@ -106,6 +108,19 @@ make test-phase3
 - `sfdisk`
 - `mtools` (`mformat`, `mcopy`)
 
+### 7. `make verify-image` - Verificação estrutural da imagem
+Valida a imagem `minidos.img` fora do runtime:
+- tamanho da floppy (`1.44MB`);
+- BPB FAT12;
+- assinatura de boot;
+- `kernel_sectors` patchado em `stage2.bin`;
+- presença dos ficheiros esperados no volume FAT.
+
+**Uso:**
+```bash
+make verify-image
+```
+
 ## Características
 
 ✅ **Captura de Output** - Todos os comandos capturam a saída completa
@@ -113,6 +128,7 @@ make test-phase3
 ✅ **Serial Debug** - Via COM1 a 38400 baud
 ✅ **Boot Logo** - Mostra boot logo VGA Mode 13h antes do shell
 ✅ **Phase 3 Stress** - Cobertura de multi-disco/multi-volume com validações negativas
+✅ **Shared Harness** - Arranque/QEMU/timeouts centralizados em `tests/qemu_harness.py`
 
 ## Exemplo de Teste Completo
 
@@ -158,9 +174,12 @@ Test completed!
 
 Todos os testes mostram a saída serial que inclui:
 - `[Stage2] Started` - Stage2 bootloader carregado
+- `[Stage2] Displaying boot logo...` / `[Stage2] Logo displayed` - Sequência de splash no stage2
 - `[Stage2] Loading kernel...` - Kernel sendo carregado
 - `[Stage2] Kernel loaded` - Kernel pronto
 - `[Stage2] Entering PM...` - Transição para modo protegido
+- `[int] IDT active, PIC remapped, IRQ0/IRQ1 enabled` - Caminho de interrupções ativo
+- `[sched] phase5 context-switch self-test OK` - Self-test de scheduler concluído
 - `[paging] init` / `[paging] enabled` - Sequência de ativação de paging
 - `paging self-test OK` - Self-test de mapeamento concluído
 - `[paging] #PF detected` + `CR2=...` - Diagnóstico de page fault (teste negativo)
@@ -171,7 +190,10 @@ Todos os testes mostram a saída serial que inclui:
 
 Se os scripts não funcionar:
 1. Verificar que `minidos.img` existe: `ls -lh minidos.img`
-2. Executar `make clean && make` para recompilação
-3. Verificar permissões: `chmod +x tests/test*.sh`
-4. Verificar se QEMU está instalado: `which qemu-system-i386`
-5. Para `test_phase3.py`, verificar `sfdisk`, `mformat` e `mcopy` no `PATH`
+2. Executar `make verify-image`
+3. Executar `make clean && make` para recompilação
+4. Executar `make phase0-check` para confirmar o baseline
+5. Verificar permissões: `chmod +x tests/test*.sh`
+6. Verificar se QEMU está instalado: `which qemu-system-i386`
+7. Para `test_phase3.py`, verificar `sfdisk`, `mformat` e `mcopy` no `PATH`
+8. Para debug detalhado, consultar [docs/DEBUGGING.md](docs/DEBUGGING.md)

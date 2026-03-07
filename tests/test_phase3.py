@@ -1,65 +1,45 @@
 #!/usr/bin/env python3
 import os
-import select
 import shutil
-import subprocess
 import sys
 import tempfile
-import time
+import subprocess
 
-
-def read_until(proc, patterns, timeout_s, max_buf=60000):
-    deadline = time.time() + timeout_s
-    buf = ""
-    while time.time() < deadline:
-        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
-        if not ready:
-            continue
-        data = os.read(proc.stdout.fileno(), 4096)
-        if not data:
-            break
-        text = data.decode(errors="ignore")
-        sys.stdout.write(text)
-        sys.stdout.flush()
-        buf += text
-        if len(buf) > max_buf:
-            buf = buf[-max_buf:]
-        if any(p in buf for p in patterns):
-            return buf
-    return None
-
-
-def send_line(proc, line):
-    proc.stdin.write((line + "\r").encode())
-    proc.stdin.flush()
-
+from qemu_harness import (
+    build_floppy_qemu_cmd,
+    read_until,
+    repo_root,
+    send_line,
+    spawn_qemu,
+    terminate_process,
+)
 
 def run_cmd(proc, cmd, must_contain=None, timeout_s=8.0, wait_cycle=True):
     del wait_cycle
     send_line(proc, cmd)
-    accepted = read_until(
+    accepted, matched = read_until(
         proc,
         [f"Command: {cmd}", "Bad command", "File not found", "Invalid drive"],
         timeout_s,
     )
-    if not accepted:
+    if not matched:
         send_line(proc, cmd)
-        accepted = read_until(
+        accepted, matched = read_until(
             proc,
             [f"Command: {cmd}", "Bad command", "File not found", "Invalid drive"],
             timeout_s,
         )
-    if not accepted:
+    if not matched:
         raise RuntimeError(f"timeout waiting command acceptance: {cmd}")
 
     out = accepted
     if must_contain:
         if not all(token in out for token in must_contain):
-            matched = read_until(proc, must_contain, timeout_s)
+            extra, matched = read_until(proc, must_contain, timeout_s)
             if not matched:
                 missing = [token for token in must_contain if token not in out]
                 raise RuntimeError(f"missing token(s) `{missing}` for `{cmd}`")
-            out += matched
+            out += extra
     return out
 
 
@@ -118,7 +98,7 @@ def require_tools():
 
 
 def main():
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    root_dir = repo_root()
     disk_a = os.path.join(root_dir, "minidos.img")
     if not os.path.exists(disk_a):
         print("ERROR: minidos.img not found. Run `make` first.", file=sys.stderr)
@@ -140,33 +120,17 @@ def main():
                 {"start": 36864, "size": 32768, "label": "B_TWO", "file": "B2MARK.TXT", "text": "B2 data\n"},
             ],
         )
-        qemu_cmd = [
-            "qemu-system-i386",
-            "-drive",
-            f"file={disk_a},format=raw,if=floppy,index=0",
-            "-boot",
-            "a",
-            "-drive",
-            f"file={disk_b},format=raw,if=ide,index=0",
-            "-m",
-            "16M",
-            "-serial",
-            "stdio",
-            "-monitor",
-            "none",
-            "-display",
-            "none",
-        ]
-
-        proc = subprocess.Popen(
-            qemu_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+        qemu_cmd = build_floppy_qemu_cmd(
+            disk_a,
+            extra_args=[
+                "-drive",
+                f"file={disk_b},format=raw,if=ide,index=0",
+            ],
         )
+        proc = spawn_qemu(qemu_cmd)
 
         try:
-            ready = read_until(proc, ["Entering main loop", "MiniDOS Shell Ready"], 30.0)
+            _, ready = read_until(proc, ["Entering main loop", "MiniDOS Shell Ready"], 30.0)
             if not ready:
                 print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
                 return 1
@@ -209,10 +173,7 @@ def main():
             if "Directory of D:\\" in out:
                 raise RuntimeError("unexpected switch to drive D:")
         finally:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            terminate_process(proc)
 
     print("Phase 3 multi-disk stress test passed.")
     return 0

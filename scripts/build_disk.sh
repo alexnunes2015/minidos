@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create MiniDOS disk with MBR and partitions
+# Create MiniDOS 1.44MB FAT12 floppy image
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISK_IMG="$ROOT_DIR/minidos.img"

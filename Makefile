@@ -3,6 +3,9 @@
 CC = gcc
 LD = ld
 AS = nasm
+OBJCOPY = objcopy
+QEMU = qemu-system-i386
+GDB = gdb
 CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -Isrc/kernel
 CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
 LDFLAGS = -m elf_i386 -T src/kernel/kernel.ld
@@ -16,20 +19,33 @@ KERNEL_SOURCES_ALL = $(wildcard $(KERNEL_DIR)/*.c)
 KERNEL_SOURCES = $(KERNEL_DIR)/kernel.c $(filter-out $(KERNEL_DIR)/kernel.c $(KERNEL_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
 KERNEL_ASM = $(BUILD_DIR)/entry.o
+QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
 # Ensure drive.o is included
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-phase3 test-phase4 full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-phase3 test-phase4 full-test
 
 all: minidos.img
 
 run: minidos.img
-	qemu-system-i386 -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
+	$(QEMU) $(QEMU_FLOPPY_FLAGS)
+
+run-no-reboot: minidos.img
+	$(QEMU) $(QEMU_FLOPPY_FLAGS) -no-reboot -no-shutdown
+
+run-trace: minidos.img | $(BUILD_DIR)
+	$(QEMU) $(QEMU_FLOPPY_FLAGS) -monitor none -display none -no-reboot -no-shutdown -d int,guest_errors,cpu_reset -D $(BUILD_DIR)/qemu-trace.log
+
+run-gdb: minidos.img $(BUILD_DIR)/kernel.elf
+	$(QEMU) $(QEMU_FLOPPY_FLAGS) -monitor none -display none -no-reboot -no-shutdown -S -gdb tcp::1234
+
+gdb-kernel: $(BUILD_DIR)/kernel.elf scripts/kernel.gdb
+	$(GDB) -x scripts/kernel.gdb
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Bootloader (MBR)
+# Bootloader (floppy boot sector)
 $(BUILD_DIR)/boot.bin: $(BOOT_DIR)/boot.asm | $(BUILD_DIR)
 	$(AS) -f bin $< -o $@
 
@@ -45,11 +61,15 @@ $(BUILD_DIR)/entry.o: $(KERNEL_DIR)/entry.asm | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Kernel binary
-$(BUILD_DIR)/kernel.bin: $(KERNEL_ASM) $(KERNEL_OBJECTS)
-	$(LD) $(LDFLAGS) -o $@ --oformat binary $^
+# Kernel ELF with symbols
+$(BUILD_DIR)/kernel.elf: $(KERNEL_ASM) $(KERNEL_OBJECTS)
+	$(LD) $(LDFLAGS) -o $@ $^
 
-# Disk image - create with MBR and partitions
+# Kernel flat binary used by the bootloader
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
+	$(OBJCOPY) -O binary $< $@
+
+# Disk image - create 1.44MB FAT12 floppy image
 minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh
 	@# Convert boot logo if BMP exists
 	@if [ -f "$(BOOTLOGO_DIR)/boot_logo.bmp" ]; then \
@@ -61,6 +81,9 @@ minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.b
 
 clean:
 	rm -rf $(BUILD_DIR) minidos.img
+
+verify-image: minidos.img scripts/verify_image.sh
+	bash scripts/verify_image.sh
 
 # Test targets
 test-help:
@@ -102,7 +125,18 @@ test-phase4: minidos.img
 full-test:
 	$(MAKE) clean
 	$(MAKE) all
+	$(MAKE) verify-image
 	$(MAKE) test
+	$(MAKE) test-serial
+	$(MAKE) test-keyboard-soft
+	$(MAKE) test-paging
+	$(MAKE) test-phase3
+	$(MAKE) test-phase4
+
+ci:
+	$(MAKE) clean
+	$(MAKE) all
+	$(MAKE) verify-image
 	$(MAKE) test-serial
 	$(MAKE) test-keyboard-soft
 	$(MAKE) test-paging
@@ -114,6 +148,7 @@ test: test-help test-ver test-drives
 phase0-check:
 	$(MAKE) clean
 	$(MAKE) all
+	$(MAKE) verify-image
 	$(MAKE) test-serial
 
 test-paging:
@@ -126,4 +161,4 @@ test-paging:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run phase0-check test-paging test-keyboard test-keyboard-soft test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

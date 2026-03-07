@@ -1,39 +1,18 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import select
-import subprocess
 import sys
 import time
 
-
-def _read_until(proc, patterns, timeout_s, echo=True, max_buf=20000):
-    deadline = time.time() + timeout_s
-    buf = ""
-    while time.time() < deadline:
-        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
-        if not ready:
-            continue
-        data = os.read(proc.stdout.fileno(), 4096)
-        if not data:
-            break
-        text = data.decode(errors="ignore")
-        if echo:
-            sys.stdout.write(text)
-            sys.stdout.flush()
-        buf += text
-        if len(buf) > max_buf:
-            buf = buf[-max_buf:]
-        for pat in patterns:
-            if pat in buf:
-                return pat
-    return None
-
-
-def _send_line(proc, line):
-    proc.stdin.write((line + "\r").encode())
-    proc.stdin.flush()
-
+from qemu_harness import (
+    build_floppy_qemu_cmd,
+    read_until,
+    resolve_disk_path,
+    send_line,
+    spawn_qemu,
+    terminate_process,
+    wait_for_shell_ready,
+)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -87,37 +66,17 @@ def main():
     )
     args = parser.parse_args()
 
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    disk_path = args.disk
-    if not os.path.isabs(disk_path):
-        disk_path = os.path.join(root_dir, disk_path)
-
+    disk_path = resolve_disk_path(args.disk)
     if not os.path.exists(disk_path):
         print(f"ERROR: disk image not found: {disk_path}", file=sys.stderr)
         return 2
 
-    qemu_cmd = [
-        args.qemu,
-        "-drive",
-        f"file={disk_path},format=raw,if=floppy,index=0",
-        "-boot",
-        "a",
-        "-m",
-        args.memory,
-        "-serial",
-        "stdio",
-        "-monitor",
-        "none",
-        "-display",
-        "none",
-    ]
-
-    proc = subprocess.Popen(
-        qemu_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    qemu_cmd = build_floppy_qemu_cmd(
+        disk_path,
+        qemu=args.qemu,
+        memory=args.memory,
     )
+    proc = spawn_qemu(qemu_cmd)
 
     try:
         pm_marker = "[Stage2] Entering PM..."
@@ -130,13 +89,19 @@ def main():
             "MiniDOS Shell Ready",
             "MiniDOS v0.1 Kernel Started",
         ]
-        matched = _read_until(
-            proc, kernel_ready, args.ready_timeout, echo=not args.quiet
+        _, matched = wait_for_shell_ready(
+            proc,
+            args.ready_timeout,
+            echo=not args.quiet,
+            extra_markers=kernel_ready,
         )
         if not matched:
             # Fallback: if kernel messages never show, try after PM.
-            matched = _read_until(
-                proc, [pm_marker], args.ready_timeout, echo=not args.quiet
+            _, matched = read_until(
+                proc,
+                [pm_marker],
+                args.ready_timeout,
+                echo=not args.quiet,
             )
             if not matched:
                 print("\nERROR: timeout waiting for shell readiness.", file=sys.stderr)
@@ -165,7 +130,7 @@ def main():
         idx = 0
         if commands:
             # Send first command early so serial input is already pending.
-            _send_line(proc, commands[0])
+            send_line(proc, commands[0])
             idx = 1
             cmd = commands[0]
             accepted_patterns = [
@@ -174,29 +139,35 @@ def main():
                 "File not found",
                 "Invalid drive",
             ]
-            ok = _read_until(
-                proc, accepted_patterns, args.cmd_timeout, echo=not args.quiet
+            output, matched = read_until(
+                proc,
+                accepted_patterns,
+                args.cmd_timeout,
+                echo=not args.quiet,
             )
-            if not ok:
-                _send_line(proc, cmd)
-                ok = _read_until(
-                    proc, accepted_patterns, args.cmd_timeout, echo=not args.quiet
+            if not matched:
+                send_line(proc, cmd)
+                output, matched = read_until(
+                    proc,
+                    accepted_patterns,
+                    args.cmd_timeout,
+                    echo=not args.quiet,
                 )
-                if not ok:
+                if not matched:
                     print(
                         f"\nERROR: timeout waiting for command acceptance: {cmd}",
                         file=sys.stderr,
                     )
                     return 1
             if not args.no_assert and cmd in expected_map:
-                if not any(pat in ok for pat in expected_map[cmd]):
-                    ok = _read_until(
+                if not any(pat in output for pat in expected_map[cmd]):
+                    _, expected = read_until(
                         proc,
                         expected_map[cmd],
                         args.cmd_timeout,
                         echo=not args.quiet,
                     )
-                    if not ok:
+                    if not expected:
                         print(
                             f"\nERROR: expected output not found for command: {cmd}",
                             file=sys.stderr,
@@ -204,37 +175,43 @@ def main():
                         return 1
 
         for cmd in commands[idx:]:
-            _send_line(proc, cmd)
+            send_line(proc, cmd)
             accepted_patterns = [
                 f"Command: {cmd}",
                 "Bad command",
                 "File not found",
                 "Invalid drive",
             ]
-            ok = _read_until(
-                proc, accepted_patterns, args.cmd_timeout, echo=not args.quiet
+            output, matched = read_until(
+                proc,
+                accepted_patterns,
+                args.cmd_timeout,
+                echo=not args.quiet,
             )
-            if not ok:
+            if not matched:
                 # Retry once in case the shell fell back to keyboard.
-                _send_line(proc, cmd)
-                ok = _read_until(
-                    proc, accepted_patterns, args.cmd_timeout, echo=not args.quiet
+                send_line(proc, cmd)
+                output, matched = read_until(
+                    proc,
+                    accepted_patterns,
+                    args.cmd_timeout,
+                    echo=not args.quiet,
                 )
-                if not ok:
+                if not matched:
                     print(
                         f"\nERROR: timeout waiting for command acceptance: {cmd}",
                         file=sys.stderr,
                     )
                     return 1
             if not args.no_assert and cmd in expected_map:
-                if not any(pat in ok for pat in expected_map[cmd]):
-                    ok = _read_until(
+                if not any(pat in output for pat in expected_map[cmd]):
+                    _, expected = read_until(
                         proc,
                         expected_map[cmd],
                         args.cmd_timeout,
                         echo=not args.quiet,
                     )
-                    if not ok:
+                    if not expected:
                         print(
                             f"\nERROR: expected output not found for command: {cmd}",
                             file=sys.stderr,
@@ -242,10 +219,7 @@ def main():
                         return 1
 
     finally:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+        terminate_process(proc)
 
     return 0
 

@@ -328,3 +328,5 @@ thunk_gdt_desc:
 biosdisk_realmode_idtr:
     dw 0x03FF
     dd 0x00000000
+
+section .note.GNU-stack noalloc noexec nowrite progbits

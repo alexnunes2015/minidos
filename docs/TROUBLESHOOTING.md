@@ -1,130 +1,124 @@
-# Resolução de Problemas - MiniDOS
+# MiniDOS Troubleshooting
 
-## Problema: Ecrã Preto no VirtualBox ao Arrancar como Disquete
+Use this file for symptom-oriented diagnosis. For the full operator workflow, see [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
-### Sintoma
-No VirtualBox, a VM parece arrancar, muda para um ecrã preto e não chega à shell. No QEMU, a mesma `minidos.img` pode arrancar normalmente.
+## First Checks
 
-### Causa
-O objetivo do projeto é `floppy-first`, mas a implementação atual ainda não completou essa transição. O stage2 consegue arrancar via BIOS a partir de `DL=0x00`, mas depois o kernel entra em protected mode e passa a usar o backend ATA/IDE em `src/kernel/disk.c`.
+Before debugging behavior, confirm that the image and baseline are healthy:
 
-Ao mesmo tempo, o build de `minidos.img` cria:
-- um MBR;
-- uma partição FAT16;
-- o volume principal começando em LBA 2048.
-
-Isto corresponde ao modelo transitório de disco usado hoje no QEMU, não ao modelo final desejado de uma disquete MS-DOS clássica.
-
-### Como Confirmar
-- Verifique no VirtualBox se a imagem está anexada só ao controlador `Floppy`.
-- Veja em `src/kernel/kernel.c` que o kernel valida o disco principal com `disk_read_lba(0, ...)` logo após `disk_init()`.
-- Veja em `src/kernel/disk.c` que o driver atual só fala ATA PIO (`0x1F0`, `0x170`) e não o controlador de floppy/FDC.
-
-### Estado Atual Suportado
-- Boot por BIOS/floppy: parcialmente possível no stage2.
-- Disco principal em runtime: ainda dependente de ATA/IDE.
-- Floppy como meio principal de leitura/escrita em runtime: objetivo do projeto, mas ainda não suportado de ponta a ponta.
-
-### Se Quiseres Mesmo o Modelo "Disquete MS-DOS"
-Será preciso uma mudança de arquitetura, não apenas de configuração da VM:
-1. adicionar um backend de floppy/FDC ou um thunk BIOS para acesso a disco após o boot;
-2. introduzir uma abstração de "boot media" no kernel em vez de assumir ATA;
-3. provavelmente gerar uma imagem realmente compatível com floppy (por exemplo 1.44 MB/FAT12), se a intenção for emular uma disquete clássica de ponta a ponta.
-
-### Prioridade de Produto
-O alvo correto é:
-1. floppy como meio principal por omissão;
-2. HDD-style apenas mais tarde, quando existir instalador e esse fluxo passar a fazer sentido.
-
-## Problema: Sistema Reiniciando Continuamente
-
-### Causa Identificada
-O sistema estava entrando em loop de reinicialização devido a problemas na criação da imagem do disco.
-
-### Diagnóstico
-O problema ocorria porque:
-1. O `mformat` criava o sistema de arquivos FAT
-2. Depois escrevíamos o bootloader com `dd`
-3. O `mformat` com opção `-B` tentava preservar o BPB, mas havia incompatibilidades
-
-### Solução Aplicada
-Invertemos a ordem das operações no Makefile:
-
-```makefile
-# ORDEM CORRETA:
-1. Criar imagem vazia
-2. Formatar com mformat (cria FAT com bootloader genérico)
-3. Copiar arquivos para FAT (mcopy)
-4. Escrever kernel no setor 33
-5. Sobrescrever bootloader completo (512 bytes)
+```sh
+make verify-image
+make phase0-check
 ```
 
-Isso garante que:
-- O BPB no bootloader é compatível com a estrutura FAT criada
-- O código do bootloader sobrescreve o boot genérico do mformat
-- O kernel está no setor correto (33)
+If either command fails, fix that first.
 
-### Melhorias Adicionadas
-1. **Mensagem de debug**: Adicionado "Entering Protected Mode..." para identificar onde o boot para
-2. **Teste direto de vídeo no kernel**: Primeiro comando escreve diretamente na memória de vídeo
-3. **Ordem de build otimizada**: Garantias de que o BPB é preservado
+## Symptom: Boot Stops Before The Kernel
 
-### Como Testar
+Run:
 
-```bash
-make clean && make
-make run
+```sh
+make verify-image
+make run-no-reboot
 ```
 
-### O Que Deve Aparecer
+What to inspect:
 
-Se funcionar corretamente:
-```
-MiniDOS v0.1 loading................. OK
-Entering Protected Mode...
-KERNEL LOADED!
-MiniDOS v0.1 Kernel Started
-Welcome to your minimalist 16/32-bit OS.
+- serial output up to `[Stage2] Entering PM...`
+- boot signature `0x55AA`
+- FAT12 floppy BPB values
+- patched `kernel_sectors` in `stage2.bin`
 
-MiniDOS Shell Ready.
-Type 'help' for commands.
-A:>
-```
+Common causes:
 
-### Se Ainda Reiniciar
+- `boot.bin` no longer fits 512 bytes
+- `stage2.bin` no longer fits the fixed 4-sector budget
+- `kernel.bin` exceeds the reserved boot area
+- image layout changed without updating build or docs
 
-Execute passo a passo para diagnosticar:
+## Symptom: Panic Or Silent Reset After Protected Mode
 
-```bash
-# Verificar tamanho do bootloader
-ls -lh build/boot.bin  # Deve ser exatamente 512 bytes
+Run:
 
-# Verificar assinatura de boot
-hexdump -C minidos.img -n 512 | tail -1  # Deve terminar com 55 aa
-
-# Verificar kernel no setor 33
-dd if=minidos.img bs=512 skip=33 count=1 2>/dev/null | hexdump -C | head -5
-
-# Testar com output serial (se disponível)
-qemu-system-i386 -fda minidos.img -boot a -serial stdio
+```sh
+make run-no-reboot
+make run-trace
 ```
 
-### Problemas Comuns
+What to inspect:
 
-1. **Triple Fault**: Geralmente causado por GDT inválida ou jump incorreto
-2. **Disco não lido**: BIOS INT 13h falhando - verificar parâmetros CHS
-3. **Kernel não executa**: Verificar se está no setor 33 e se é código de 32-bit válido
+- `[paging]` markers
+- exception logs with `CR2`, `error`, `eip`, `cs`, `eflags`
+- `build/qemu-trace.log`
 
-### Debug Adicional
+If the failure is paging-specific, run:
 
-Para adicionar mais debug ao bootloader, edite `src/boot/boot.asm` e adicione mensagens antes de cada etapa crítica usando:
-
-```nasm
-mov si, msg_debug
-call print_string
+```sh
+make test-paging
 ```
 
-E defina a mensagem antes das assinaturas:
-```nasm
-msg_debug: db 'Debug Point X', 0x0D, 0x0A, 0
+## Symptom: Shell Appears But Commands Fail
+
+Run:
+
+```sh
+python3 tests/test_serial.py "ver" "drives" "dir"
 ```
+
+What to inspect:
+
+- `Command:` serial markers
+- FAT initialization logs
+- drive enumeration and current drive
+
+## Symptom: Keyboard Input Regressed
+
+Run:
+
+```sh
+make test-keyboard-soft
+```
+
+If the environment supports QMP sockets:
+
+```sh
+make test-keyboard
+```
+
+What to inspect:
+
+- whether the shell reaches `MiniDOS Shell Ready.`
+- whether the injected command is accepted exactly once
+- whether IRQ1 markers and shell command markers still appear in order
+
+## Symptom: FAT Or Multi-Disk Behavior Broke
+
+Run:
+
+```sh
+make test-phase3
+```
+
+What to inspect:
+
+- `A:` boot floppy still mounts as a whole-disk volume
+- `B:` and `C:` enumerate correctly from ATA-backed partitions
+- negative cases still fail cleanly
+
+## Symptom: ELF Apps No Longer Run
+
+Run:
+
+```sh
+make test-phase4
+```
+
+What to inspect:
+
+- app installation into the image
+- `elfls` output
+- return to shell after app execution
+
+## VirtualBox Note
+
+The current official debug and validation target is QEMU. The boot image is a `1.44MB` FAT12 floppy, and the kernel keeps boot-floppy access alive through a BIOS disk thunk after entering protected mode. If another emulator behaves differently, validate first in QEMU before diagnosing emulator-specific behavior.

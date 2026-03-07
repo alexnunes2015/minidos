@@ -23,11 +23,12 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 ### 3. Drivers
 - **Video**: Direct memory access to `0xB8000` is used. This is faster and more flexible than BIOS calls once outside of the bootloader.
 - **Keyboard**: IRQ1-driven input is enabled (PIC remapped + unmask IRQ1), with temporary fallback polling in the keyboard path for transitional robustness.
-- **File System**: FAT16 is implemented. It reads the root directory and directories, and loads files using cluster chains.
-- **ATA Disk**: PIO LBA read/write paths are implemented for `disk_id` 0..3 (primary/secondary, master/slave).
+- **File System**: FAT12/FAT16 support is implemented. The boot floppy is exposed as a whole-disk FAT volume when valid, and ATA-backed volumes are enumerated from partitions.
+- **Boot Disk Access**: When the system boots from floppy media, the kernel uses a BIOS disk thunk to keep accessing the boot disk after entering protected mode.
+- **ATA Disk**: PIO LBA read/write paths are implemented for secondary disks (`disk_id` 0..3 physical ATA targets, shifted when the boot media is a floppy).
 - **Userland (Current)**: External ELF32 apps are loaded from FAT16 and executed in protected mode with a minimal syscall ABI (`puts`, `get_char`, `file_size`) exposed by the shell runtime contract.
 - **Boot Media Direction**: The intended default product model is floppy-first, in the MS-DOS sense: boot and runtime should work with the floppy image as the primary medium.
-- **Boot Media Gap (Current)**: The stage2 loader can boot through BIOS services even when the image is presented as a floppy, but once the kernel is running it no longer uses BIOS disk services and currently has no floppy/FDC backend. The current ATA-style runtime storage path is transitional and does not yet match the intended floppy-first design.
+- **Boot Media Gap (Current)**: The current build/runtime path supports the boot floppy through the BIOS thunk, but there is still no native FDC driver and no general support for non-boot floppy devices. Secondary storage remains ATA-centric.
 
 ## Trade-offs
 - **Polling vs Interrupts**: The kernel now uses interrupts as default runtime path. A small polling fallback remains in keyboard input as a compatibility bridge while IRQ-first behavior is stabilized.
@@ -35,10 +36,11 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 
 ## Current Limitations
 - ELF loader is intentionally minimal (ELF32 `ET_EXEC`, fixed low-memory window, no relocations/dynamic linking).
-- Preemption hook is active, but runtime process population is still minimal (kernel-only path by default), and user/kernel stack split is not enabled yet.
-- A floppy-only VirtualBox attachment still exposes an implementation gap in the current runtime storage model. This should be read as unfinished floppy support, not as a rejection of the floppy-first architecture.
+- Preemption hook is active, but runtime process population is still minimal and scheduler coverage is currently driven mostly by self-tests and kernel-managed tasks.
+- The boot floppy path depends on BIOS INT 13h through the thunk. That is sufficient for the current product model, but it is not a substitute for a native floppy controller driver if hardware coverage becomes a goal.
 
 ## Next Technical Steps
 - Expand syscall surface and isolate user/kernel memory domains as preparation for multitasking.
 - Evolve phase-5 scheduler from cooperative validation to preemptive round-robin driven by IRQ0 quantum.
 - Strengthen interrupt diagnostics and add targeted automated tests for exception/IRQ regressions.
+- Keep build, test, and debug contracts synchronized with [docs/DEVELOPMENT_PROTOCOL.md](docs/DEVELOPMENT_PROTOCOL.md).

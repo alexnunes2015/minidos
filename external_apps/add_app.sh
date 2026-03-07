@@ -5,7 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS_DIR="$ROOT_DIR/external_apps/runtime"
 BUILD_DIR="$ROOT_DIR/build/external_apps"
 IMG_PATH="$ROOT_DIR/minidos.img"
-A_OFFSET=1048576
 
 usage() {
     echo "Usage: $0 <path/to/app.c> [APPNAME]"
@@ -54,9 +53,16 @@ need_cmd gcc
 need_cmd ld
 need_cmd nasm
 need_cmd mcopy
+need_cmd mdir
 
 if [[ ! -f "$IMG_PATH" ]]; then
     echo "ERROR: $IMG_PATH not found. Run 'make' first." >&2
+    exit 1
+fi
+
+if ! mdir -i "$IMG_PATH" :: >/dev/null 2>&1; then
+    echo "ERROR: $IMG_PATH is not a readable FAT floppy image for mtools." >&2
+    echo "Run 'make verify-image' and rebuild the image if needed." >&2
     exit 1
 fi
 
@@ -86,7 +92,7 @@ fi
 
 cp "$APP_ELF" "$APP_DST"
 echo "Copying $(basename "$APP_DST") to A: in minidos.img..."
-mcopy -o -i "$IMG_PATH@@$A_OFFSET" "$APP_DST" "::/$APP_BASE.ELF"
+mcopy -o -i "$IMG_PATH" "$APP_DST" "::/$APP_BASE.ELF"
 
 echo "Done."
 echo "App installed as A:\\$APP_BASE.ELF"
