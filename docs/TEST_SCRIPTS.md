@@ -74,7 +74,13 @@ make test-paging
 ```
 
 ### 5. `tests/test_keyboard_irq.py` - Validação de teclado por IRQ1
-Valida entrada de teclado real via IRQ1 (sem enviar comando pela serial), injetando teclas pelo monitor QMP (`sendkey`) e confirmando que o comando chega ao shell sem duplicação.
+Valida entrada de teclado real via IRQ1 (sem enviar comando pela serial), injetando teclas pelo monitor QMP (`input-send-event`, com fallback para `sendkey`) e confirmando que:
+- o shell aceita um comando inteiro por teclado;
+- `DOSSHELL` recebe teclado e devolve controlo ao shell;
+- `EDIT` recebe `ESC` por teclado e devolve controlo ao shell.
+
+O harness espera pelo marcador serial `APPIN001` antes de enviar teclas para apps gráficas, para não confundir latência de arranque com falha de teclado.
+Depois espera `APPRET001` antes de validar que o shell retomou controlo, eliminando sleeps fixos no caminho de saída das apps.
 
 **Uso:**
 ```bash
@@ -86,7 +92,30 @@ python3 tests/test_keyboard_irq.py
 make test-keyboard
 ```
 
-### 6. `tests/test_phase3.py` - Regressão crítica de disco/FAT16 (Fase 3)
+### 6. `tests/test_mouse_ui.py` - Validação de rato PS/2 / IRQ12
+Valida o caminho completo de rato para GUI:
+- instala `WIN95UI.ELF` na imagem;
+- arranca o MiniDOS com QMP ativo;
+- lança `WIN95UI` por teclado;
+- espera `APPIN001`;
+- espera `APPRET001` depois do clique ou do input de saída;
+- injeta movimento relativo e clique esquerdo por `input-send-event`;
+- confirma que a app devolve controlo ao shell e que `ver` volta a ser aceite;
+- move o rato dentro de `DOSSHELL` e `EDIT` e confirma que `q` / `ESC` continuam a sair das apps sem injetar teclas espúrias.
+
+O teste assume que o cursor começa no centro do ecrã e move-se relativamente até ao botão `Cancel`, o que evita depender de resolução fixa.
+
+**Uso:**
+```bash
+python3 tests/test_mouse_ui.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-mouse
+```
+
+### 7. `tests/test_phase3.py` - Regressão crítica de disco/FAT16 (Fase 3)
 Executa um cenário multi-disco/multi-partição crítico. O próprio teste:
 - cria discos virtuais de dados;
 - cria partições FAT16 com conteúdos distintos;
@@ -127,6 +156,7 @@ make verify-image
 ✅ **Timeout** - Proteção contra hang infinito (10-15 segundos)
 ✅ **Serial Debug** - Via COM1 a 38400 baud
 ✅ **Boot Logo** - Mostra boot logo VGA Mode 13h antes do shell
+✅ **Mouse IRQ12** - Cobertura QMP para movimento/clique na demo gráfica
 ✅ **Phase 3 Stress** - Cobertura de multi-disco/multi-volume com validações negativas
 ✅ **Shared Harness** - Arranque/QEMU/timeouts centralizados em `tests/qemu_harness.py`
 
@@ -178,11 +208,17 @@ Todos os testes mostram a saída serial que inclui:
 - `[Stage2] Loading kernel...` - Kernel sendo carregado
 - `[Stage2] Kernel loaded` - Kernel pronto
 - `[Stage2] Entering PM...` - Transição para modo protegido
-- `[int] IDT active, PIC remapped, IRQ0/IRQ1 enabled` - Caminho de interrupções ativo
+- `[kbd] scan set 1 selected (translation on)` / `[kbd] scan set 2 selected (translation off)` - Decoder do teclado alinhado com o modo do controlador PS/2
+- `[mouse] PS/2 mouse enabled on IRQ12` - Porta auxiliar PS/2 ativa e reporting ligado
+- `[mouse] first packet received` - Primeiro pacote de rato observado em runtime
+- `APPIN001` / `APPRET001` - Contrato serial de entrada e retorno de apps interativas
+- `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled` - Caminho de interrupções ativo
 - `[sched] phase5 context-switch self-test OK` - Self-test de scheduler concluído
 - `[paging] init` / `[paging] enabled` - Sequência de ativação de paging
 - `paging self-test OK` - Self-test de mapeamento concluído
 - `[paging] #PF detected` + `CR2=...` - Diagnóstico de page fault (teste negativo)
+
+**Nota:** O `stage2` já avança a janela `ES` ao carregar kernels acima de `64 KiB`, por isso o `kernel_sectors` pode ultrapassar `128` sem corromper o payload carregado.
 
 **Nota:** O kernel está executando após a transição para Protected Mode nos testes seriais atuais. Se houver regressão, use os checkpoints PM no serial (`CLI`, `LGDT`, `CR0.PE`, `Before far jump`) para localizar onde o boot para.
 

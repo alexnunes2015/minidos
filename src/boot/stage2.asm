@@ -150,6 +150,11 @@ start:
     
     inc ax
     add bx, 512
+    jnc .next_sector
+    mov dx, es
+    add dx, 0x1000
+    mov es, dx
+.next_sector:
     loop .load_loop
 
     mov si, msg_loaded

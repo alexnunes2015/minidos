@@ -66,8 +66,8 @@ Veja [assets/bootlogo/README.md](assets/bootlogo/README.md) para converter image
 ## Notas úteis
 
 - Saída de debug via serial (COM1). Consulte [docs/TEST_SCRIPTS.md](docs/TEST_SCRIPTS.md).
-- O build atual gera uma imagem `1.44MB` FAT12 com BPB de floppy em [scripts/build_disk.sh](scripts/build_disk.sh).
-- O disco de boot em modo floppy é acedido pelo kernel através de um BIOS disk thunk; discos secundários continuam a usar ATA PIO em [src/kernel/disk.c](src/kernel/disk.c).
+- O build atual gera uma imagem `1.44MB` FAT12 para compatibilidade de boot em [scripts/build_disk.sh](scripts/build_disk.sh).
+- Em runtime, o disco de boot em modo floppy é acedido pelo kernel através de um BIOS disk thunk; volumes adicionais continuam centrados no caminho FAT16/ATA em [src/kernel/disk.c](src/kernel/disk.c).
 - O drive `A:` é montado como volume whole-disk quando o meio de boot é uma floppy FAT válida.
 - Usa [docs/DEVELOPMENT_PROTOCOL.md](docs/DEVELOPMENT_PROTOCOL.md) como contrato operacional para trabalho feito por agentes.
 - Usa [docs/DEBUGGING.md](docs/DEBUGGING.md) para ciclos de diagnóstico e GDB.

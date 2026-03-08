@@ -2,6 +2,10 @@
 
 Este roadmap organiza os próximos passos do S.O. em fases incrementais, com foco em estabilidade, memória, I/O e execução de apps ELF.
 
+Nota sobre status:
+- `concluída` significa que o contrato mínimo da fase foi fechado com validação suficiente para a época.
+- `baseline entregue` significa que existe base técnica ou protótipo validado, mas a fase continua aberta para hardening e cobertura real.
+
 ## Fase 0 - Baseline Estável (1 semana)
 
 Status: concluída em 14/02/2026.
@@ -128,17 +132,17 @@ Entregas concluídas:
 Critério de pronto:
 - `hello_elf` e `stat_elf` executam pelo shell com retorno controlado ao kernel.
 
-## Fase 5 - Preparação para Multitarefa (futuro)
+## Fase 5 - Preparação para Multitarefa (em progresso)
 
 Objetivo: preparar base técnica para scheduler simples.
 
-Status: concluída em 28/02/2026.
+Status: baseline entregue em 28/02/2026; fase ainda aberta.
 
 - Isolar melhor contexto kernel/user.
 - Definir estrutura de processo (PID, estado, stack user/kernel).
 - Planejar round-robin inicial com timer.
 
-Entregas iniciais:
+Baseline entregue:
 - Estrutura de processo adicionada (`process_t`) com PID, estado e contexto mínimo salvo (`ESP`).
 - Protótipo de troca de contexto cooperativa no kernel (`scheduler_phase5_self_test`) validado via serial.
 - Timer PIT configurado e IRQ0 habilitado para base de round-robin (coleta de ticks em `scheduler_on_timer_tick`).
@@ -153,10 +157,13 @@ Checklist crítico de validação (Fase 5):
 - [x] Quantum de preempção conectado ao caminho de retorno de interrupção.
 - [x] Separação completa de stack kernel/user por processo.
 
-Critério de pronto:
-- Documento de design técnico fechado e protótipo de troca de contexto validado.
+Critério para encerrar a fase:
+- População de processos em runtime não pode depender só de tarefas de demonstração e self-tests.
+- Cobertura automatizada precisa validar round-robin real e regressões de preempção fora do caminho de boot.
+- A separação kernel/user precisa ser descrita e exercitada para além do contexto mínimo salvo no PCB.
+- Documento de design técnico e testes têm de refletir o estado final, não apenas a base inicial.
 
-Validação de fechamento:
+Validação atual da baseline:
 - Build com separação explícita de stack kernel/user no PCB (`user_esp`, limites base/top por stack) e self-test de scheduler validando stacks distintas entre processos de runtime.
 
 ## Ordem Recomendada de Execução

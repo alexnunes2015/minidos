@@ -8,12 +8,13 @@
 #include "logger.h"
 #include "paging.h"
 #include "scheduler.h"
+#include "timer.h"
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
 static const unsigned int BOOT_LOGO_MS = 5000;
 static const unsigned int BOOT_SPLASH_MS = 1200;
-static const unsigned int PIT_HZ = 1193182;
+static const unsigned int BOOT_PROGRESS_STEP_MS = 50;
 
 #define STOP_MEMORY_INVALID "STOP 0x00000001"
 #define STOP_PAGING_INIT    "STOP 0x00000002"
@@ -22,6 +23,12 @@ static const unsigned int PIT_HZ = 1193182;
 #define AUTO_SCRIPT_NAME    "AUTOEXEC.AUT"
 #define AUTO_SCRIPT_MAX     2048
 #define AUTO_LINE_MAX       64
+
+typedef enum {
+    CMD_INPUT_NONE = 0,
+    CMD_INPUT_SERIAL = 1,
+    CMD_INPUT_KEYBOARD = 2
+} command_input_t;
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char val;
@@ -39,40 +46,6 @@ static inline unsigned short read_phys_u16(unsigned int addr) {
     return val;
 }
 
-// Simple delay function
-static void delay(unsigned int count) {
-    for (volatile unsigned int i = 0; i < count; i++) {
-        for (volatile unsigned int j = 0; j < 10000; j++) {
-            __asm__ volatile ("nop");
-        }
-    }
-}
-
-static unsigned short pit_read_counter0(void) {
-    outb(0x43, 0x00); // Latch channel 0 current count
-    unsigned short lo = inb(0x40);
-    unsigned short hi = inb(0x40);
-    return (unsigned short)(lo | (hi << 8));
-}
-
-static void pit_wait_ms(unsigned int ms) {
-    unsigned int target = ms * (PIT_HZ / 1000);
-    unsigned int elapsed = 0;
-    unsigned short prev = pit_read_counter0();
-
-    while (elapsed < target) {
-        unsigned short cur = pit_read_counter0();
-        unsigned short delta;
-        if (prev >= cur) {
-            delta = (unsigned short)(prev - cur);
-        } else {
-            delta = (unsigned short)(prev + (65536 - cur));
-        }
-        elapsed += (unsigned int)delta;
-        prev = cur;
-    }
-}
-
 static void wait_boot_logo() {
     const unsigned int step_ms = 50;
     unsigned int elapsed = 0;
@@ -85,7 +58,7 @@ static void wait_boot_logo() {
             next = BOOT_LOGO_MS;
         }
 
-        pit_wait_ms(next - elapsed);
+        timer_sleep_ms(next - elapsed);
         elapsed = next;
 
         frame++;
@@ -94,7 +67,7 @@ static void wait_boot_logo() {
 }
 
 static void bsod_wait_key_then_reboot() {
-    pit_wait_ms(1000);
+    timer_sleep_ms(1000);
 
     while (serial_received()) {
         (void)serial_getchar();
@@ -112,7 +85,7 @@ static void bsod_wait_key_then_reboot() {
             (void)inb(0x60);
             break;
         }
-        __asm__ volatile ("nop");
+        timer_wait_for_interrupt();
     }
 
     outb(0x64, 0xFE);
@@ -169,11 +142,11 @@ static void show_boot_logo() {
     print_string("[");
     for (int i = 0; i < 28; i++) {
         print_char('#');
-        delay(2);
+        timer_sleep_ms(BOOT_PROGRESS_STEP_MS);
     }
     print_string("] READY\n");
 
-    pit_wait_ms(BOOT_SPLASH_MS);
+    timer_sleep_ms(BOOT_SPLASH_MS);
     cls();
 }
 
@@ -199,6 +172,59 @@ static int is_rem_line(const char* line) {
         }
     }
     return 0;
+}
+
+static command_input_t read_command_line(char* buffer, int max_len) {
+    int i = 0;
+    command_input_t source = CMD_INPUT_NONE;
+
+    if (!buffer || max_len <= 0) {
+        return CMD_INPUT_NONE;
+    }
+
+    while (i < max_len - 1) {
+        char c = 0;
+
+        if (source != CMD_INPUT_KEYBOARD && serial_received()) {
+            c = serial_getchar();
+            if (source == CMD_INPUT_NONE && c == '\0') {
+                continue;
+            }
+
+            source = CMD_INPUT_SERIAL;
+            if (c == '\r' || c == '\n') {
+                break;
+            }
+
+            buffer[i++] = c;
+            serial_putchar(c);
+            continue;
+        }
+
+        if (source != CMD_INPUT_SERIAL && keyboard_try_get_char(&c)) {
+            source = CMD_INPUT_KEYBOARD;
+            if (c == '\n') {
+                print_char('\n');
+                break;
+            }
+            if (c == '\b') {
+                if (i > 0) {
+                    i--;
+                    print_char('\b');
+                }
+                continue;
+            }
+
+            buffer[i++] = c;
+            print_char(c);
+            continue;
+        }
+
+        timer_wait_for_interrupt();
+    }
+
+    buffer[i] = '\0';
+    return source;
 }
 
 static void run_auto_script() {
@@ -349,26 +375,19 @@ void kernel_main() {
     shell_init();
     run_auto_script();
     
+    /* Flush any keys pressed during boot before entering the shell */
+    keyboard_flush();
     log_write(LOG_LEVEL_INFO, "kernel", "Entering main loop\n", LOG_DEST_SERIAL);
     while(1) {
         shell_prompt();
         char command[64];
-        int use_serial = 0;
-        for (int i = 0; i < 50000; i++) {
-            if (serial_received()) {
-                use_serial = 1;
-                break;
-            }
-            __asm__ volatile ("nop");
-        }
+        command_input_t input = read_command_line(command, 64);
 
-        if (use_serial) {
+        if (input == CMD_INPUT_SERIAL) {
             log_write(LOG_LEVEL_DEBUG, "input", "reading command from serial\n", LOG_DEST_SERIAL);
-            serial_read_line(command, 64);
             log_serial_raw("\n");
         } else {
-            log_write(LOG_LEVEL_TRACE, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
-            keyboard_read_line(command, 64);
+            log_write(LOG_LEVEL_DEBUG, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
         }
         
         log_write(LOG_LEVEL_INFO, "shell", "Command: ", LOG_DEST_SERIAL);

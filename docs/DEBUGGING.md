@@ -29,7 +29,10 @@ make gdb-kernel
 - `[paging] init`
 - `[paging] enabled`
 - `paging self-test OK`
-- `[int] IDT active, PIC remapped, IRQ0/IRQ1 enabled`
+- `[kbd] scan set 1 selected (translation on)` or `[kbd] scan set 2 selected (translation off)`
+- `[mouse] PS/2 mouse enabled on IRQ12`
+- `[mouse] first packet received`
+- `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled`
 - `[sched] phase5 context-switch self-test OK`
 - `MiniDOS Shell Ready.`
 - `[INFO][kernel] Entering main loop`
@@ -49,6 +52,8 @@ Check:
 
 - boot signature and BPB are valid
 - stage2 still fits in the fixed sector budget
+- patched `kernel_sectors` still matches the built kernel
+- if the kernel crossed `64 KiB`, stage2 now advances the `ES` window while loading sectors
 - serial output reaches the PM checkpoints
 
 ### Paging or exception failure
@@ -77,6 +82,7 @@ python3 tests/test_serial.py "ver" "drives" "dir"
 
 Check:
 
+- `Entering main loop` appears before the harness starts injecting serial commands
 - `Command:` serial markers
 - current drive enumeration
 - FAT init logs
@@ -94,6 +100,26 @@ If environment allows QMP sockets, prefer:
 ```sh
 make test-keyboard
 ```
+
+That suite now covers keyboard-only entry into the shell plus keyboard exit paths for `DOSSHELL` and `EDIT`.
+It waits for `APPIN001` before sending keys into GUI apps and for `APPRET001` before asserting that the shell resumed, so app-input races are easier to localize from serial logs.
+
+### Mouse / GUI IRQ12 regressions
+
+Run:
+
+```sh
+make test-mouse
+```
+
+Check:
+
+- `[mouse] PS/2 mouse enabled on IRQ12`
+- `APPIN001` after `WIN95UI` starts
+- `APPRET001` after the click closes `WIN95UI` or after `q` / `ESC` return from the other apps
+- `[mouse] first packet received` after QMP moves the pointer
+- shell accepts `ver` after the test clicks `Cancel`
+- `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app
 
 ### FAT or multi-disk regressions
 

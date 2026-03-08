@@ -23,7 +23,7 @@ QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-phase3 test-phase4 full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 full-test
 
 all: minidos.img
 
@@ -116,6 +116,9 @@ test-keyboard: minidos.img
 test-keyboard-soft: minidos.img
 	TMPDIR="$(CURDIR)/build" python3 tests/test_keyboard_irq.py --soft-skip-env
 
+test-mouse: minidos.img
+	TMPDIR="$(CURDIR)/build" python3 tests/test_mouse_ui.py
+
 test-phase3: minidos.img
 	python3 tests/test_phase3.py
 
@@ -161,4 +164,4 @@ test-paging:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

@@ -12,7 +12,7 @@
 #define STATUS_MENU "MENU ATIVO: ALT sai | ESQ/DIR menu | CIMA/BAIXO item"
 #define DEFAULT_NEW_FILE "UNTITLED.TXT"
 
-#define MENU_COUNT 5
+#define MENU_COUNT 4
 #define MENU_ITEMS 5
 #define DLG_MAX_ENTRIES 64
 #define DLG_VISIBLE_ROWS 10
@@ -20,18 +20,17 @@
 #define CURSOR_BLINK_TICKS 90
 
 static const char* g_menu_labels[MENU_COUNT] = {
-    " File ", " Edit ", " Search ", " Options ", " Help "
+    " File ", " Edit ", " Search ", " Help "
 };
 
 static const char* g_menu_items[MENU_COUNT][MENU_ITEMS] = {
     { " Novo ", " Abrir ", " Save ", " Save As ", " Exit " },
     { " Copiar ", " Colar ", " Selecionar ", " Desfazer ", " Refazer " },
     { " Localizar ", " Proximo ", " Anterior ", " Ir para ", " Substituir " },
-    { " Aparencia ", " Fonte ", " Cores ", " Margens ", " Layout " },
     { " Sobre ", " Teclas ", " Creditos ", " Versao ", " Ajuda " }
 };
 
-static const int g_menu_x[MENU_COUNT] = { 8, 56, 120, 184, 256 };
+static const int g_menu_x[MENU_COUNT] = { 8, 56, 120, 184 };
 
 static const unsigned int UI_BG_OUTER = 0x101722u;
 static const unsigned int UI_BG_FRAME = 0x0B1019u;
@@ -611,6 +610,35 @@ static int run_unsaved_dialog(const minidos_app_api_t* api, int sw, int sh) {
     }
 }
 
+static void run_about_dialog(const minidos_app_api_t* api, int sw, int sh) {
+    int x = (sw - 430) / 2;
+    int y = (sh - 220) / 2;
+
+    draw_rect(api, x, y, 430, 220, UI_ACCENT);
+    draw_rect(api, x + 2, y + 2, 426, 216, UI_BG_PANEL);
+
+    draw_rect(api, x + 8, y + 8, 414, 20, UI_TITLE_BG);
+    draw_text(api, x + 12, y + 12, "About MiniDOS EDIT", UI_TITLE_FG, UI_TITLE_BG);
+
+    draw_rect(api, x + 10, y + 36, 410, 144, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 46, "MiniDOS EDIT", UI_TEXT_FG, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 62, "Editor de texto 80x25 para MiniDOS", UI_TEXT_FG, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 86, "Versao: 0.1 template", UI_TEXT_FG, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 102, "UI: File, Edit, Search, Help", UI_TEXT_FG, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 126, "Atalhos: ALT menu | ESC sair", UI_TEXT_FG, UI_TEXT_BG);
+    draw_text(api, x + 14, y + 142, "Autor: MiniDOS team", UI_TEXT_FG, UI_TEXT_BG);
+
+    draw_rect(api, x + 10, y + 188, 410, 18, UI_STATUS_BG);
+    draw_text(api, x + 14, y + 192, "ESC ou ENTER para fechar", UI_STATUS_FG, UI_STATUS_BG);
+
+    while (1) {
+        unsigned char c = (unsigned char)app_get_char(api);
+        if (c == 27 || c == '\r' || c == '\n') {
+            return;
+        }
+    }
+}
+
 static int handle_exit_request(const minidos_app_api_t* api,
                                char lines[EDIT_ROWS][EDIT_COLS + 1],
                                unsigned char* file_buffer,
@@ -671,9 +699,255 @@ static int handle_exit_request(const minidos_app_api_t* api,
     }
 }
 
+static void lines_copy(char dst[EDIT_ROWS][EDIT_COLS + 1], char src[EDIT_ROWS][EDIT_COLS + 1]) {
+    for (int r = 0; r < EDIT_ROWS; r++) {
+        for (int c = 0; c <= EDIT_COLS; c++) {
+            dst[r][c] = src[r][c];
+        }
+    }
+}
+
+static void push_undo_snapshot(char lines[EDIT_ROWS][EDIT_COLS + 1],
+                               char undo_lines[EDIT_ROWS][EDIT_COLS + 1],
+                               int* can_undo,
+                               int* can_redo) {
+    lines_copy(undo_lines, lines);
+    if (can_undo) {
+        *can_undo = 1;
+    }
+    if (can_redo) {
+        *can_redo = 0;
+    }
+}
+
+static void set_line_from_text(char* line, const char* text) {
+    int i = 0;
+    line_blank(line);
+    while (text[i] && i < EDIT_COLS) {
+        line[i] = text[i];
+        i++;
+    }
+}
+
+static int copy_current_line(char lines[EDIT_ROWS][EDIT_COLS + 1], int cur_row, char* out_clip, int out_clip_size) {
+    int len = 0;
+    if (!out_clip || out_clip_size < 2 || cur_row < 0 || cur_row >= EDIT_ROWS) {
+        return 0;
+    }
+    len = line_used_len(lines[cur_row]);
+    if (len <= 0) {
+        return 0;
+    }
+    if (len > out_clip_size - 1) {
+        len = out_clip_size - 1;
+    }
+    for (int i = 0; i < len; i++) {
+        out_clip[i] = lines[cur_row][i];
+    }
+    out_clip[len] = '\0';
+    return 1;
+}
+
+static int paste_on_current_line(char lines[EDIT_ROWS][EDIT_COLS + 1], int* cur_row, int* cur_col, const char* clip_text) {
+    int col = 0;
+    int i = 0;
+    if (!cur_row || !cur_col || !clip_text) {
+        return 0;
+    }
+    if (*cur_row < 0 || *cur_row >= EDIT_ROWS || *cur_col < 0 || *cur_col >= EDIT_COLS) {
+        return 0;
+    }
+    col = *cur_col;
+    while (clip_text[i] && col < EDIT_COLS) {
+        lines[*cur_row][col++] = clip_text[i++];
+    }
+    if (i <= 0) {
+        return 0;
+    }
+    *cur_col = col < EDIT_COLS ? col : (EDIT_COLS - 1);
+    return 1;
+}
+
+static int char_lower(int c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c + ('a' - 'A');
+    }
+    return c;
+}
+
+static int str_contains_at_ci(const char* hay, int hay_len, int pos, const char* needle, int needle_len) {
+    if (pos < 0 || needle_len <= 0 || pos + needle_len > hay_len) {
+        return 0;
+    }
+    for (int i = 0; i < needle_len; i++) {
+        if (char_lower(hay[pos + i]) != char_lower(needle[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int find_text_forward(char lines[EDIT_ROWS][EDIT_COLS + 1],
+                             const char* query,
+                             int start_row,
+                             int start_col,
+                             int* out_row,
+                             int* out_col) {
+    int qlen = str_len(query);
+    if (qlen <= 0) {
+        return 0;
+    }
+    for (int r = start_row; r < EDIT_ROWS; r++) {
+        int begin = (r == start_row) ? start_col : 0;
+        int used = line_used_len(lines[r]);
+        if (begin < 0) begin = 0;
+        if (used < qlen) continue;
+        for (int c = begin; c <= used - qlen; c++) {
+            if (str_contains_at_ci(lines[r], used, c, query, qlen)) {
+                *out_row = r;
+                *out_col = c;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int find_text_backward(char lines[EDIT_ROWS][EDIT_COLS + 1],
+                              const char* query,
+                              int start_row,
+                              int start_col,
+                              int* out_row,
+                              int* out_col) {
+    int qlen = str_len(query);
+    if (qlen <= 0) {
+        return 0;
+    }
+    for (int r = start_row; r >= 0; r--) {
+        int used = line_used_len(lines[r]);
+        int begin = used - qlen;
+        if (begin < 0) {
+            continue;
+        }
+        if (r == start_row && begin > start_col) {
+            begin = start_col;
+        }
+        for (int c = begin; c >= 0; c--) {
+            if (str_contains_at_ci(lines[r], used, c, query, qlen)) {
+                *out_row = r;
+                *out_col = c;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int parse_positive_int(const char* text) {
+    int value = 0;
+    int i = 0;
+    if (!text || !text[0]) {
+        return -1;
+    }
+    while (text[i]) {
+        if (text[i] < '0' || text[i] > '9') {
+            return -1;
+        }
+        value = (value * 10) + (text[i] - '0');
+        i++;
+    }
+    return value;
+}
+
+static int run_text_input_dialog(const minidos_app_api_t* api,
+                                 const char* title,
+                                 const char* prompt,
+                                 char* value,
+                                 int value_size,
+                                 int sw,
+                                 int sh) {
+    int x = (sw - 440) / 2;
+    int y = (sh - 140) / 2;
+    if (!value || value_size < 2) {
+        return 0;
+    }
+
+    draw_rect(api, x, y, 440, 140, UI_ACCENT);
+    draw_rect(api, x + 2, y + 2, 436, 136, UI_BG_PANEL);
+    draw_rect(api, x + 8, y + 8, 424, 18, UI_TITLE_BG);
+    draw_text(api, x + 12, y + 12, title, UI_TITLE_FG, UI_TITLE_BG);
+    draw_text(api, x + 12, y + 38, prompt, UI_TEXT_FG, UI_BG_PANEL);
+    draw_rect(api, x + 10, y + 58, 420, 18, UI_TEXT_BG);
+    draw_text(api, x + 12, y + 62, value, UI_TEXT_FG, UI_TEXT_BG);
+    draw_rect(api, x + 10, y + 110, 420, 16, UI_STATUS_BG);
+    draw_text(api, x + 12, y + 114, "ENTER confirma | ESC cancela", UI_STATUS_FG, UI_STATUS_BG);
+
+    while (1) {
+        unsigned char c = (unsigned char)app_get_char(api);
+        int len = str_len(value);
+        if (c == 27) {
+            return 0;
+        }
+        if (c == '\r' || c == '\n') {
+            return 1;
+        }
+        if (c == '\b' || c == 127) {
+            if (len > 0) {
+                value[len - 1] = '\0';
+            }
+        } else if (c >= 32 && c <= 126) {
+            if (len < value_size - 1) {
+                value[len] = (char)c;
+                value[len + 1] = '\0';
+            }
+        }
+        draw_rect(api, x + 10, y + 58, 420, 18, UI_TEXT_BG);
+        draw_text(api, x + 12, y + 62, value, UI_TEXT_FG, UI_TEXT_BG);
+    }
+}
+
+static int replace_all_occurrences(char lines[EDIT_ROWS][EDIT_COLS + 1], const char* find_text, const char* replace_text) {
+    int replacements = 0;
+    int find_len = str_len(find_text);
+    int repl_len = str_len(replace_text);
+
+    if (find_len <= 0) {
+        return 0;
+    }
+
+    for (int r = 0; r < EDIT_ROWS; r++) {
+        char merged[EDIT_COLS + 1];
+        int out_pos = 0;
+        int used = line_used_len(lines[r]);
+        int changed = 0;
+
+        for (int i = 0; i < used && out_pos < EDIT_COLS; ) {
+            if (i + find_len <= used && str_contains_at_ci(lines[r], used, i, find_text, find_len)) {
+                for (int j = 0; j < repl_len && out_pos < EDIT_COLS; j++) {
+                    merged[out_pos++] = replace_text[j];
+                }
+                i += find_len;
+                replacements++;
+                changed = 1;
+            } else {
+                merged[out_pos++] = lines[r][i++];
+            }
+        }
+        merged[out_pos] = '\0';
+        if (changed) {
+            set_line_from_text(lines[r], merged);
+        }
+    }
+    return replacements;
+}
+
 int app_main(const minidos_app_api_t* api) {
     char lines[EDIT_ROWS][EDIT_COLS + 1];
+    char undo_lines[EDIT_ROWS][EDIT_COLS + 1];
+    char redo_lines[EDIT_ROWS][EDIT_COLS + 1];
     unsigned char file_buffer[EDIT_MAX_FILE_BYTES];
+    char clipboard_line[EDIT_COLS + 1];
+    char last_search[32];
     int sw = 640;
     int sh = 480;
     int cur_row = 0;
@@ -686,6 +960,9 @@ int app_main(const minidos_app_api_t* api) {
     int has_current_file = 0;
     int is_new_file = 1;
     int dirty = 0;
+    int can_undo = 0;
+    int can_redo = 0;
+    int has_clipboard_line = 0;
     int cursor_visible = 1;
     unsigned int last_blink_tick = 0;
     char status[112];
@@ -703,6 +980,8 @@ int app_main(const minidos_app_api_t* api) {
     has_current_file = 1;
     is_new_file = 1;
     dirty = 0;
+    clipboard_line[0] = '\0';
+    last_search[0] = '\0';
 
     draw_base_ui(api, lines, sw, sh, menu_mode, menu_index, menu_item);
     build_status(status, sizeof(status), cur_row, cur_col, menu_mode);
@@ -715,6 +994,7 @@ int app_main(const minidos_app_api_t* api) {
         int old_col = cur_col;
         int moved = 0;
         int changed = 0;
+        int snapshot_taken = 0;
         int have_char = 0;
         unsigned char c = 0;
 
@@ -798,6 +1078,7 @@ int app_main(const minidos_app_api_t* api) {
             } else if (c == '\r' || c == '\n') {
                 if (menu_index == 0 && menu_item == 0) {
                     menu_mode = 0;
+                    push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
                     editor_clear(lines, &cur_row, &cur_col);
                     str_copy(current_file, DEFAULT_NEW_FILE, (int)sizeof(current_file));
                     has_current_file = 1;
@@ -816,6 +1097,7 @@ int app_main(const minidos_app_api_t* api) {
                     if (run_file_dialog(api, "Open", 0, file_name, (int)sizeof(file_name), sw, sh)) {
                         bytes_read = app_file_read(api, file_name, file_buffer, (int)sizeof(file_buffer));
                         if (bytes_read >= 0) {
+                            push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
                             editor_import_buffer(lines, &cur_row, &cur_col, file_buffer, bytes_read);
                             str_copy(current_file, file_name, (int)sizeof(current_file));
                             has_current_file = 1;
@@ -879,6 +1161,172 @@ int app_main(const minidos_app_api_t* api) {
                         running = 0;
                     }
                     need_full_redraw = 1;
+                } else if (menu_index == 1 && menu_item == 0) {
+                    menu_mode = 0;
+                    if (copy_current_line(lines, cur_row, clipboard_line, (int)sizeof(clipboard_line))) {
+                        has_clipboard_line = 1;
+                        str_copy(status, "Linha copiada", (int)sizeof(status));
+                    } else {
+                        str_copy(status, "Copiar: linha vazia", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 1 && menu_item == 1) {
+                    menu_mode = 0;
+                    if (!has_clipboard_line) {
+                        str_copy(status, "Colar: clipboard vazio", (int)sizeof(status));
+                    } else {
+                        push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
+                        if (paste_on_current_line(lines, &cur_row, &cur_col, clipboard_line)) {
+                            dirty = 1;
+                            str_copy(status, "Linha colada", (int)sizeof(status));
+                        } else {
+                            str_copy(status, "Colar: sem alteracao", (int)sizeof(status));
+                        }
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 1 && menu_item == 2) {
+                    menu_mode = 0;
+                    if (editor_export_buffer(lines, file_buffer, (int)sizeof(file_buffer)) > 0) {
+                        str_copy(status, "Selecionar: documento ativo", (int)sizeof(status));
+                    } else {
+                        str_copy(status, "Selecionar: documento vazio", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 1 && menu_item == 3) {
+                    menu_mode = 0;
+                    if (!can_undo) {
+                        str_copy(status, "Desfazer: nada a desfazer", (int)sizeof(status));
+                    } else {
+                        lines_copy(redo_lines, lines);
+                        can_redo = 1;
+                        lines_copy(lines, undo_lines);
+                        can_undo = 0;
+                        dirty = 1;
+                        str_copy(status, "Desfazer executado", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 1 && menu_item == 4) {
+                    menu_mode = 0;
+                    if (!can_redo) {
+                        str_copy(status, "Refazer: nada a refazer", (int)sizeof(status));
+                    } else {
+                        lines_copy(undo_lines, lines);
+                        can_undo = 1;
+                        lines_copy(lines, redo_lines);
+                        can_redo = 0;
+                        dirty = 1;
+                        str_copy(status, "Refazer executado", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 2 && menu_item == 0) {
+                    char query[32];
+                    int found_row = 0;
+                    int found_col = 0;
+                    menu_mode = 0;
+                    query[0] = '\0';
+                    if (run_text_input_dialog(api, "Localizar", "Texto:", query, (int)sizeof(query), sw, sh) && query[0]) {
+                        if (find_text_forward(lines, query, 0, 0, &found_row, &found_col)) {
+                            str_copy(last_search, query, (int)sizeof(last_search));
+                            cur_row = found_row;
+                            cur_col = found_col;
+                            str_copy(status, "Localizar: ocorrencia encontrada", (int)sizeof(status));
+                        } else {
+                            str_copy(status, "Localizar: sem resultados", (int)sizeof(status));
+                        }
+                    } else {
+                        str_copy(status, "Localizar cancelado", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 2 && menu_item == 1) {
+                    int found_row = 0;
+                    int found_col = 0;
+                    menu_mode = 0;
+                    if (!last_search[0]) {
+                        str_copy(status, "Proximo: sem termo de pesquisa", (int)sizeof(status));
+                    } else if (find_text_forward(lines, last_search, cur_row, cur_col + 1, &found_row, &found_col) ||
+                               find_text_forward(lines, last_search, 0, 0, &found_row, &found_col)) {
+                        cur_row = found_row;
+                        cur_col = found_col;
+                        str_copy(status, "Proximo: ocorrencia encontrada", (int)sizeof(status));
+                    } else {
+                        str_copy(status, "Proximo: sem resultados", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 2 && menu_item == 2) {
+                    int found_row = 0;
+                    int found_col = 0;
+                    menu_mode = 0;
+                    if (!last_search[0]) {
+                        str_copy(status, "Anterior: sem termo de pesquisa", (int)sizeof(status));
+                    } else if (find_text_backward(lines, last_search, cur_row, cur_col - 1, &found_row, &found_col) ||
+                               find_text_backward(lines, last_search, EDIT_ROWS - 1, EDIT_COLS - 1, &found_row, &found_col)) {
+                        cur_row = found_row;
+                        cur_col = found_col;
+                        str_copy(status, "Anterior: ocorrencia encontrada", (int)sizeof(status));
+                    } else {
+                        str_copy(status, "Anterior: sem resultados", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 2 && menu_item == 3) {
+                    char line_text[8];
+                    int target = -1;
+                    menu_mode = 0;
+                    line_text[0] = '\0';
+                    if (run_text_input_dialog(api, "Ir para", "Linha (1-24):", line_text, (int)sizeof(line_text), sw, sh)) {
+                        target = parse_positive_int(line_text);
+                        if (target >= 1 && target <= EDIT_ROWS) {
+                            cur_row = target - 1;
+                            if (cur_col >= EDIT_COLS) {
+                                cur_col = EDIT_COLS - 1;
+                            }
+                            str_copy(status, "Cursor movido", (int)sizeof(status));
+                        } else {
+                            str_copy(status, "Ir para: linha invalida", (int)sizeof(status));
+                        }
+                    } else {
+                        str_copy(status, "Ir para cancelado", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
+                } else if (menu_index == 2 && menu_item == 4) {
+                    char find_text[32];
+                    char replace_text[32];
+                    int replaced = 0;
+                    menu_mode = 0;
+                    find_text[0] = '\0';
+                    replace_text[0] = '\0';
+                    if (!run_text_input_dialog(api, "Substituir", "Texto a localizar:", find_text, (int)sizeof(find_text), sw, sh) || !find_text[0]) {
+                        str_copy(status, "Substituir cancelado", (int)sizeof(status));
+                        need_full_redraw = 1;
+                    } else if (!run_text_input_dialog(api, "Substituir", "Novo texto:", replace_text, (int)sizeof(replace_text), sw, sh)) {
+                        str_copy(status, "Substituir cancelado", (int)sizeof(status));
+                        need_full_redraw = 1;
+                    } else {
+                        push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
+                        replaced = replace_all_occurrences(lines, find_text, replace_text);
+                        if (replaced > 0) {
+                            dirty = 1;
+                            str_copy(last_search, find_text, (int)sizeof(last_search));
+                            str_copy(status, "Substituir: alteracoes aplicadas", (int)sizeof(status));
+                        } else {
+                            str_copy(status, "Substituir: sem ocorrencias", (int)sizeof(status));
+                        }
+                        need_full_redraw = 1;
+                    }
+                } else if (menu_index == 3) {
+                    menu_mode = 0;
+                    if (menu_item == 0) {
+                        run_about_dialog(api, sw, sh);
+                        str_copy(status, "About fechado", (int)sizeof(status));
+                    } else if (menu_item == 1) {
+                        str_copy(status, "Teclas: ALT menu | ESC sair | setas mover", (int)sizeof(status));
+                    } else if (menu_item == 2) {
+                        str_copy(status, "Creditos: MiniDOS team", (int)sizeof(status));
+                    } else if (menu_item == 3) {
+                        str_copy(status, "Versao: 0.1 template", (int)sizeof(status));
+                    } else {
+                        str_copy(status, "Ajuda: use File para abrir/gravar", (int)sizeof(status));
+                    }
+                    need_full_redraw = 1;
                 }
             }
 
@@ -886,11 +1334,9 @@ int app_main(const minidos_app_api_t* api) {
                 draw_menu_overlay(api, menu_mode, menu_index, menu_item, sw);
                 draw_status_text(api, status, sw, sh);
             } else if (!menu_mode && running) {
-                char file_status[112];
                 cursor_visible = 1;
                 draw_base_ui(api, lines, sw, sh, menu_mode, menu_index, menu_item);
-                build_file_status(file_status, (int)sizeof(file_status), current_file);
-                draw_status_text(api, file_status, sw, sh);
+                draw_status_text(api, status, sw, sh);
                 draw_cell(api, lines, cur_row, cur_col, 1);
             } else if (menu_mode && !menu_redraw && need_full_redraw) {
                 draw_base_ui(api, lines, sw, sh, menu_mode, menu_index, menu_item);
@@ -917,12 +1363,20 @@ int app_main(const minidos_app_api_t* api) {
             }
         } else if (c == '\b' || c == 127) {
             if (cur_col > 0) {
+                if (!snapshot_taken) {
+                    push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
+                    snapshot_taken = 1;
+                }
                 cur_col--;
                 lines[cur_row][cur_col] = ' ';
                 moved = 1;
                 changed = 1;
             } else if (cur_row > 0) {
                 int prev_len;
+                if (!snapshot_taken) {
+                    push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
+                    snapshot_taken = 1;
+                }
                 cur_row--;
                 prev_len = line_used_len(lines[cur_row]);
                 cur_col = prev_len;
@@ -934,6 +1388,10 @@ int app_main(const minidos_app_api_t* api) {
                 moved = 1;
             }
         } else if (c >= 32 && c <= 126) {
+            if (!snapshot_taken) {
+                push_undo_snapshot(lines, undo_lines, &can_undo, &can_redo);
+                snapshot_taken = 1;
+            }
             lines[cur_row][cur_col] = (char)c;
             changed = 1;
             if (cur_col < EDIT_COLS - 1) {

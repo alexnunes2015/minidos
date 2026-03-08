@@ -6,7 +6,9 @@
 #include "logger.h"
 #include "rtc.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "scheduler.h"
+#include "timer.h"
 
 static unsigned int current_dir_cluster = 0;
 static char current_path[64] = "\\";
@@ -14,7 +16,10 @@ static int fat16_initialized = 0;
 static unsigned int app_clip_src_cluster = 0;
 static char app_clip_name[64];
 static int app_clip_mode = 0; /* 0 none, 1 copy, 2 move */
-static const unsigned int PIT_HZ = 1193182;
+static const unsigned int SHELL_BOOT_STEP_MS = 50;
+static const unsigned int SHELL_BOOT_FINAL_MS = 100;
+static const unsigned int EFLAGS_IF = 0x00000200U;
+static int app_input_ready_logged = 0;
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char val;
@@ -22,38 +27,10 @@ static inline unsigned char inb(unsigned short port) {
     return val;
 }
 
-static inline void outb(unsigned short port, unsigned char val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static unsigned short pit_read_counter0(void) {
-    outb(0x43, 0x00);
-    {
-        unsigned short lo = inb(0x40);
-        unsigned short hi = inb(0x40);
-        return (unsigned short)(lo | (hi << 8));
-    }
-}
-
-static void wait_ms(unsigned int ms) {
-    unsigned int target = ms * (PIT_HZ / 1000);
-    unsigned int elapsed = 0;
-    unsigned short prev = pit_read_counter0();
-
-    while (elapsed < target) {
-        unsigned short cur = pit_read_counter0();
-        unsigned short delta = (prev >= cur) ? (unsigned short)(prev - cur) : (unsigned short)(prev + (65536 - cur));
-        elapsed += (unsigned int)delta;
-        prev = cur;
-    }
-}
-
-static void delay(unsigned int count) {
-    for (volatile unsigned int i = 0; i < count; i++) {
-        for (volatile unsigned int j = 0; j < 20000; j++) {
-            __asm__ volatile ("nop");
-        }
-    }
+static inline unsigned int read_eflags(void) {
+    unsigned int flags;
+    __asm__ volatile ("pushf\npop %0" : "=r"(flags));
+    return flags;
 }
 
 static void show_boot_screen() {
@@ -67,11 +44,11 @@ static void show_boot_screen() {
     print_string("[ ");
     for (int i = 0; i < 20; i++) {
         print_char('#');
-        delay(2);
+        timer_sleep_ms(SHELL_BOOT_STEP_MS);
     }
     print_string(" ] Done\n\n");
 
-    delay(10);
+    timer_sleep_ms(SHELL_BOOT_FINAL_MS);
     cls();
 }
 
@@ -625,6 +602,13 @@ enum {
     APP_SYSCALL_FILE_WRITE = 22,
     APP_SYSCALL_GET_CHAR_NONBLOCK = 23,
     APP_SYSCALL_GET_TICKS = 24,
+    APP_SYSCALL_GET_MOUSE_STATE = 25,
+    APP_SYSCALL_WAIT_EVENT = 26,
+};
+
+enum {
+    APP_EVENT_KEY = 1,
+    APP_EVENT_MOUSE = 2,
 };
 
 typedef struct {
@@ -643,6 +627,16 @@ typedef struct {
     unsigned int bg;
 } app_gfx_text_t;
 
+typedef struct {
+    int x;
+    int y;
+    int dx;
+    int dy;
+    unsigned int buttons;
+    unsigned int seq;
+    int present;
+} app_mouse_state_t;
+
 typedef int (*app_syscall_t)(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2);
 
 typedef struct {
@@ -656,29 +650,116 @@ static void app_api_puts(const char* text) {
     shell_out_both(text);
 }
 
-static char app_api_get_char(void) {
-    if (serial_received()) {
-        return serial_getchar();
+static void app_api_ensure_interrupts_enabled(void) {
+    if ((read_eflags() & EFLAGS_IF) == 0U) {
+        __asm__ volatile ("sti");
     }
-    return keyboard_get_char();
 }
 
-static int app_api_get_char_nonblock(char* out) {
+static void app_api_begin_input_session(void) {
+    app_input_ready_logged = 0;
+}
+
+static void app_api_note_input_ready(void) {
+    if (!app_input_ready_logged) {
+        log_serial_raw("APPIN001\n");
+        app_input_ready_logged = 1;
+    }
+}
+
+static void app_api_note_session_return(void) {
+    log_serial_raw("APPRET001\n");
+    app_input_ready_logged = 0;
+}
+
+static int app_api_try_get_char(char* out) {
     if (!out) {
         return 0;
     }
+
+    app_api_ensure_interrupts_enabled();
+    app_api_note_input_ready();
+
+    if (keyboard_try_get_char(out)) {
+        return 1;
+    }
+
     if (serial_received()) {
         *out = serial_getchar();
         return 1;
     }
-    return keyboard_try_get_char(out);
+
+    return 0;
+}
+
+static char app_api_get_char(void) {
+    char c = 0;
+
+    while (!app_api_try_get_char(&c)) {
+        timer_wait_for_interrupt();
+    }
+
+    return c;
+}
+
+static int app_api_get_char_nonblock(char* out) {
+    return app_api_try_get_char(out);
+}
+
+static int app_api_get_mouse_state(app_mouse_state_t* out) {
+    mouse_state_t state;
+
+    if (!out) {
+        return 0;
+    }
+
+    app_api_ensure_interrupts_enabled();
+    app_api_note_input_ready();
+
+    if (!mouse_get_state(&state)) {
+        return 0;
+    }
+
+    out->x = state.x;
+    out->y = state.y;
+    out->dx = state.dx;
+    out->dy = state.dy;
+    out->buttons = state.buttons;
+    out->seq = state.seq;
+    out->present = state.present;
+    return 1;
+}
+
+static int app_api_wait_event(unsigned int last_mouse_seq) {
+    mouse_state_t state;
+
+    app_api_ensure_interrupts_enabled();
+    app_api_note_input_ready();
+
+    while (1) {
+        int flags = 0;
+
+        if (keyboard_has_input() || serial_received()) {
+            flags |= APP_EVENT_KEY;
+        }
+
+        if (mouse_get_state(&state) && state.present && state.seq != last_mouse_seq) {
+            flags |= APP_EVENT_MOUSE;
+        }
+
+        if (flags != 0) {
+            return flags;
+        }
+
+        timer_wait_for_interrupt();
+    }
 }
 
 static unsigned int app_rng_state = 0xA5F21C3Du;
 
 static unsigned int app_api_random_u32(void) {
-    unsigned int pit = (unsigned int)pit_read_counter0();
-    unsigned int mix = pit ^ (pit << 16);
+    unsigned int ticks = scheduler_get_ticks();
+    unsigned int mix = ticks ^ (ticks << 16);
 
     app_rng_state ^= mix;
     app_rng_state ^= (app_rng_state << 13);
@@ -706,6 +787,14 @@ static int app_api_syscall(unsigned int num, unsigned int a0, unsigned int a1, u
             return (int)(unsigned char)c;
         }
         return -1;
+    }
+
+    if (num == APP_SYSCALL_GET_MOUSE_STATE) {
+        return app_api_get_mouse_state((app_mouse_state_t*)a0);
+    }
+
+    if (num == APP_SYSCALL_WAIT_EVENT) {
+        return app_api_wait_event(a0);
     }
 
     if (num == APP_SYSCALL_GET_TICKS) {
@@ -1406,11 +1495,14 @@ static int try_execute_com(const char* command, const char* args) {
     shell_out_both("...\n");
 
     api.syscall = app_api_syscall;
+    app_api_begin_input_session();
+    app_api_ensure_interrupts_enabled();
 
     typedef int (*com_entry_t)(const minidos_app_api_t* api);
     com_entry_t entry = (com_entry_t)load_addr;
     int exit_code = entry(&api);
 
+    app_api_note_session_return();
     (void)exit_code;
 
     return 1;
@@ -1465,12 +1557,15 @@ static int try_execute_elf(const char* command, const char* args) {
     shell_out_both("...\n");
 
     api.syscall = app_api_syscall;
+    app_api_begin_input_session();
+    app_api_ensure_interrupts_enabled();
     int exit_code = load_elf_and_run(elf_buffer, bytes_read, &api);
     if (exit_code == -1) {
         shell_out_both("Invalid ELF or load error\n");
         return 1;
     }
 
+    app_api_note_session_return();
     (void)exit_code;
     return 1;
 }
@@ -1598,7 +1693,7 @@ void shell_prompt() {
 static void shell_trigger_bsod() {
     video_show_bsod("0E : TEST_BSOD", "Triggered by hidden command BSOD.");
 
-    wait_ms(1000);
+    timer_sleep_ms(1000);
 
     // Flush stale input (e.g. Enter used to submit the BSOD command)
     while (serial_received()) {
@@ -1617,7 +1712,7 @@ static void shell_trigger_bsod() {
             (void)inb(0x60);
             break;
         }
-        __asm__ volatile ("nop");
+        timer_wait_for_interrupt();
     }
 
     cls();
@@ -1691,7 +1786,7 @@ void shell_execute(char* cmd) {
         shell_out_both(args);
         shell_out_both("\n");
     } else if (mystrcmp(command, "ver") == 0) {
-        shell_out_both("MiniDOS Version 0.1 (MVP) - FAT12/FAT16\n");
+        shell_out_both("MiniDOS Version 0.1 (MVP) - boot floppy FAT12 + FAT16 runtime\n");
     } else if (mystrcmp(command, "time") == 0) {
         rtc_time_t current_time;
         if (!rtc_read_time(&current_time)) {
@@ -1785,7 +1880,7 @@ void shell_execute(char* cmd) {
             shell_out_both("Usage: sleep <ms>\n");
             return;
         }
-        wait_ms(ms);
+        timer_sleep_ms(ms);
     } else if (mystrcmp(command, "color") == 0) {
         unsigned int rgb = 0;
         if (!parse_uint_arg(args, &rgb)) {

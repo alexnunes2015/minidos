@@ -25,14 +25,31 @@ def run_host(cmd):
 
 def send_cmd(proc, cmd, patterns):
     send_line(proc, cmd)
-    _, accepted = read_until(proc, [f"Command: {cmd}"], timeout_s=8.0)
-    if not accepted:
+    accepted_patterns = [f"Command: {cmd}"] + list(patterns)
+    out, matched = read_until(proc, accepted_patterns, timeout_s=8.0)
+    if not matched:
         raise RuntimeError(f"Timeout waiting for command acceptance: {cmd}")
 
-    out, matched = read_until(proc, patterns, timeout_s=8.0)
-    if not matched:
-        raise RuntimeError(f"Timeout waiting for patterns: {patterns}")
+    if not any(pattern in out for pattern in patterns):
+        extra, matched = read_until(proc, patterns, timeout_s=8.0)
+        if not matched:
+            raise RuntimeError(f"Timeout waiting for patterns: {patterns}")
+        out += extra
+
     return out
+
+
+def send_text(proc, text):
+    if proc.stdin is None:
+        raise RuntimeError("QEMU process has no stdin pipe")
+    proc.stdin.write(text.encode("latin1"))
+    proc.stdin.flush()
+
+
+def wait_for_marker(proc, marker, timeout_s):
+    _, matched = read_until(proc, [marker], timeout_s=timeout_s)
+    if not matched:
+        raise RuntimeError(f"Timeout waiting for marker: {marker}")
 
 
 def main():
@@ -64,6 +81,22 @@ def main():
         out = send_cmd(proc, "run stat_elf", ["stat_elf:"])
         if "stat_elf:" not in out:
             raise RuntimeError("stat_elf output missing expected line")
+
+        send_cmd(proc, "dosshell", ["Executing DOSSHELL.ELF..."])
+        wait_for_marker(proc, "APPIN001", 20.0)
+        send_text(proc, "q")
+        wait_for_marker(proc, "APPRET001", 20.0)
+        out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
+        if "MiniDOS Version 0.1" not in out:
+            raise RuntimeError("shell did not resume after DOSSHELL input")
+
+        send_cmd(proc, "edit", ["Executing EDIT.ELF..."])
+        wait_for_marker(proc, "APPIN001", 20.0)
+        send_text(proc, "\x1b")
+        wait_for_marker(proc, "APPRET001", 20.0)
+        out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
+        if "MiniDOS Version 0.1" not in out:
+            raise RuntimeError("shell did not resume after EDIT input")
 
         print("PASS: phase4 ELF apps executed successfully")
         return 0

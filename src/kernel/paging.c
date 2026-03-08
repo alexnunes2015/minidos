@@ -3,7 +3,9 @@
 #include "logger.h"
 #include "video.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "scheduler.h"
+#include "timer.h"
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
@@ -118,9 +120,7 @@ static void pic_set_mask(unsigned char master_mask, unsigned char slave_mask) {
 }
 
 static void bsod_wait_key_then_reboot(void) {
-    for (volatile unsigned int i = 0; i < 5000000; i++) {
-        __asm__ volatile ("nop");
-    }
+    timer_sleep_ms(1000);
 
     while (serial_received()) {
         (void)serial_getchar();
@@ -138,7 +138,7 @@ static void bsod_wait_key_then_reboot(void) {
             (void)inb(0x60);
             break;
         }
-        __asm__ volatile ("nop");
+        timer_wait_for_interrupt();
     }
 
     outb(0x64, 0xFE);
@@ -215,6 +215,12 @@ __attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* fram
     if (frame->vector == 33) {
         keyboard_handle_irq();
         pic_send_eoi(1);
+        return 0;
+    }
+
+    if (frame->vector == 44) {
+        mouse_handle_irq();
+        pic_send_eoi(12);
         return 0;
     }
 
@@ -462,11 +468,12 @@ void interrupts_init(void) {
     }
 
     keyboard_init();
+    mouse_init();
     keyboard_set_irq_mode(1);
     scheduler_init_timer(100);
     pic_remap();
-    pic_set_mask(0xFC, 0xFF);
+    pic_set_mask(0xF8, 0xEF);
     interrupt_handlers_ready = 1;
-    log_serial_raw("[int] IDT active, PIC remapped, IRQ0/IRQ1 enabled\n");
+    log_serial_raw("[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled\n");
     __asm__ volatile ("sti");
 }

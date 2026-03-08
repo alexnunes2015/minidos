@@ -2,18 +2,11 @@
 #include "process.h"
 #include "serial.h"
 #include "logger.h"
-
-#define PIT_COMMAND_PORT 0x43
-#define PIT_CHANNEL0_PORT 0x40
-#define PIT_BASE_HZ 1193182U
+#include "timer.h"
 #define SCHED_MAX_PROCS 3
 #define SCHED_STACK_WORDS 512
 #define SCHED_USER_STACK_WORDS 512
 #define SCHED_TEST_ROUNDS 3
-
-static inline void outb(unsigned short port, unsigned char value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
 
 typedef struct {
     process_t pcb;
@@ -23,7 +16,6 @@ typedef struct {
 
 static sched_proc_slot_t g_slots[SCHED_MAX_PROCS];
 static int g_current = -1;
-static unsigned int g_ticks = 0;
 static int g_test_completed = 0;
 static int g_runtime_ready = 0;
 static int g_preemption_enabled = 0;
@@ -134,23 +126,7 @@ static void sched_task_b(void) {
 }
 
 void scheduler_init_timer(unsigned int hz) {
-    if (hz == 0) {
-        hz = 100;
-    }
-
-    unsigned int divisor = PIT_BASE_HZ / hz;
-    if (divisor == 0) {
-        divisor = 1;
-    }
-    if (divisor > 0xFFFFU) {
-        divisor = 0xFFFFU;
-    }
-
-    outb(PIT_COMMAND_PORT, 0x36);
-    outb(PIT_CHANNEL0_PORT, (unsigned char)(divisor & 0xFF));
-    outb(PIT_CHANNEL0_PORT, (unsigned char)((divisor >> 8) & 0xFF));
-
-    log_serial_raw("[sched] PIT timer configured\n");
+    timer_init(hz);
 }
 
 void scheduler_enable_preemption(unsigned int quantum_ticks) {
@@ -165,7 +141,7 @@ void scheduler_enable_preemption(unsigned int quantum_ticks) {
 }
 
 irq_frame_t* scheduler_on_timer_tick(irq_frame_t* frame) {
-    g_ticks++;
+    timer_on_tick();
 
     if (!frame || !g_runtime_ready || g_current < 0 || g_current >= SCHED_MAX_PROCS) {
         return 0;
@@ -251,5 +227,5 @@ int scheduler_phase5_self_test(void) {
 }
 
 unsigned int scheduler_get_ticks(void) {
-    return g_ticks;
+    return timer_get_ticks();
 }

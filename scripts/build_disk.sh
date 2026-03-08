@@ -7,87 +7,103 @@ DISK_KB=1440
 DISK_SECTORS=2880
 RESERVED_SECTORS=160
 KERNEL_LOAD_SECTOR=5
-GUESS_APP_NAME="GUESS100"
-GUESS_APP_DIR="$ROOT_DIR/build/external_apps/$GUESS_APP_NAME"
-GUESS_APP_ELF="$GUESS_APP_DIR/$GUESS_APP_NAME.ELF"
-DOSSHELL_APP_NAME="DOSSHELL"
-DOSSHELL_APP_DIR="$ROOT_DIR/build/external_apps/$DOSSHELL_APP_NAME"
-DOSSHELL_APP_ELF="$DOSSHELL_APP_DIR/$DOSSHELL_APP_NAME.ELF"
-EDIT_APP_NAME="EDIT"
-EDIT_APP_DIR="$ROOT_DIR/build/external_apps/$EDIT_APP_NAME"
-EDIT_APP_ELF="$EDIT_APP_DIR/$EDIT_APP_NAME.ELF"
+APP_SPECS=$(cat <<'EOF'
+GUESS100|GAMES|external_apps/templates/guess100.c
+DOSSHELL||external_apps/templates/dosshell.c
+EDIT||external_apps/templates/edit.c
+WIN95UI||external_apps/templates/win95_demo.c
+EOF
+)
 
 echo "=== Building MiniDOS floppy image ==="
 
-build_guess_game() {
-    mkdir -p "$GUESS_APP_DIR"
+app_build_dir() {
+    printf '%s/build/external_apps/%s' "$ROOT_DIR" "$1"
+}
 
+app_elf_path() {
+    local app_dir
+    app_dir="$(app_build_dir "$1")"
+    printf '%s/%s.ELF' "$app_dir" "$1"
+}
+
+ensure_app_toolchain() {
     if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
-        echo "ERROR: Missing toolchain for default games (gcc/ld/nasm)." >&2
-        exit 1
-    fi
-
-    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$GUESS_APP_DIR/entry.o"
-    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
-        -fno-stack-protector -fno-pic -fno-pie -fno-common \
-        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
-        -I"$ROOT_DIR/external_apps/runtime" \
-        -c "$ROOT_DIR/external_apps/templates/guess100.c" -o "$GUESS_APP_DIR/app.o"
-    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$GUESS_APP_ELF" "$GUESS_APP_DIR/entry.o" "$GUESS_APP_DIR/app.o"
-
-    if [ ! -s "$GUESS_APP_ELF" ]; then
-        echo "ERROR: Failed to build default game app: $GUESS_APP_ELF" >&2
+        echo "ERROR: Missing toolchain for bundled apps (gcc/ld/nasm)." >&2
         exit 1
     fi
 }
 
-build_dosshell_app() {
-    mkdir -p "$DOSSHELL_APP_DIR"
+build_app() {
+    local app_name="$1"
+    local template_rel="$2"
+    local app_dir
+    local app_elf
 
-    if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
-        echo "ERROR: Missing toolchain for DOSSHELL app (gcc/ld/nasm)." >&2
-        exit 1
-    fi
+    app_dir="$(app_build_dir "$app_name")"
+    app_elf="$(app_elf_path "$app_name")"
+    mkdir -p "$app_dir"
 
-    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$DOSSHELL_APP_DIR/entry.o"
+    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$app_dir/entry.o"
     gcc -m32 -ffreestanding -O2 -Wall -Wextra \
         -fno-stack-protector -fno-pic -fno-pie -fno-common \
         -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
         -I"$ROOT_DIR/external_apps/runtime" \
-        -c "$ROOT_DIR/external_apps/templates/dosshell.c" -o "$DOSSHELL_APP_DIR/app.o"
-    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$DOSSHELL_APP_ELF" "$DOSSHELL_APP_DIR/entry.o" "$DOSSHELL_APP_DIR/app.o"
+        -c "$ROOT_DIR/$template_rel" -o "$app_dir/app.o"
+    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$app_elf" "$app_dir/entry.o" "$app_dir/app.o"
 
-    if [ ! -s "$DOSSHELL_APP_ELF" ]; then
-        echo "ERROR: Failed to build DOSSHELL app: $DOSSHELL_APP_ELF" >&2
+    if [ ! -s "$app_elf" ]; then
+        echo "ERROR: Failed to build bundled app: $app_elf" >&2
         exit 1
     fi
 }
 
-build_edit_app() {
-    mkdir -p "$EDIT_APP_DIR"
+build_bundled_apps() {
+    local app_name
+    local app_subdir
+    local template_rel
 
-    if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
-        echo "ERROR: Missing toolchain for EDIT app (gcc/ld/nasm)." >&2
-        exit 1
-    fi
+    ensure_app_toolchain
+    while IFS='|' read -r app_name app_subdir template_rel; do
+        [ -n "$app_name" ] || continue
+        build_app "$app_name" "$template_rel"
+    done <<< "$APP_SPECS"
+}
 
-    nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$EDIT_APP_DIR/entry.o"
-    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
-        -fno-stack-protector -fno-pic -fno-pie -fno-common \
-        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
-        -I"$ROOT_DIR/external_apps/runtime" \
-        -c "$ROOT_DIR/external_apps/templates/edit.c" -o "$EDIT_APP_DIR/app.o"
-    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$EDIT_APP_ELF" "$EDIT_APP_DIR/entry.o" "$EDIT_APP_DIR/app.o"
+copy_boot_logo_tree() {
+    local target_root="$1"
 
-    if [ ! -s "$EDIT_APP_ELF" ]; then
-        echo "ERROR: Failed to build EDIT app: $EDIT_APP_ELF" >&2
-        exit 1
+    if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
+        cp "$ROOT_DIR/assets/bootlogo/logo.raw" "$target_root/BOOTLOGO.DAT"
+        if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
+            cp "$ROOT_DIR/assets/bootlogo/logo.pal" "$target_root/BOOTLOGO.PAL"
+        fi
+        echo "✓ Boot logo added"
     fi
 }
 
-build_guess_game
-build_dosshell_app
-build_edit_app
+copy_payload_tree() {
+    local target_root="$1"
+    local app_name
+    local app_subdir
+    local template_rel
+    local dest_dir
+
+    echo "Welcome to drive A:" > "$target_root/README.TXT"
+    while IFS='|' read -r app_name app_subdir template_rel; do
+        [ -n "$app_name" ] || continue
+        dest_dir="$target_root"
+        if [ -n "$app_subdir" ]; then
+            dest_dir="$target_root/$app_subdir"
+            mkdir -p "$dest_dir"
+        fi
+        cp "$(app_elf_path "$app_name")" "$dest_dir/$app_name.ELF"
+    done <<< "$APP_SPECS"
+
+    copy_boot_logo_tree "$target_root"
+}
+
+build_bundled_apps
 
 KERNEL_BYTES=$(stat -c%s "$ROOT_DIR/build/kernel.bin")
 KERNEL_SECTORS=$(((KERNEL_BYTES + 511) / 512))
@@ -151,59 +167,56 @@ dd if="$ROOT_DIR/build/kernel.bin" of="$DISK_IMG" bs=512 seek="$KERNEL_LOAD_SECT
 echo "Adding files to floppy image..."
 
 copy_with_sudo() {
-sudo bash << SUDO_EOF
-ROOT_DIR="$ROOT_DIR"
-DISK_IMG="$ROOT_DIR/minidos.img"
-GUESS_APP_NAME="$GUESS_APP_NAME"
-GUESS_APP_ELF="$GUESS_APP_ELF"
-DOSSHELL_APP_NAME="$DOSSHELL_APP_NAME"
-DOSSHELL_APP_ELF="$DOSSHELL_APP_ELF"
-EDIT_APP_NAME="$EDIT_APP_NAME"
-EDIT_APP_ELF="$EDIT_APP_ELF"
+    local payload_root
+    local status
 
+    payload_root=$(mktemp -d)
+    copy_payload_tree "$payload_root"
+
+    sudo env DISK_IMG="$DISK_IMG" PAYLOAD_SRC="$payload_root" bash << 'SUDO_EOF'
 TMPDIR=$(mktemp -d)
 trap "umount \"$TMPDIR\" 2>/dev/null || true; rm -rf \"$TMPDIR\"" EXIT
 
 mount -o loop "$DISK_IMG" "$TMPDIR"
-echo "Welcome to drive A:" > "$TMPDIR/README.TXT"
-mkdir -p "$TMPDIR/GAMES"
-cp "$GUESS_APP_ELF" "$TMPDIR/GAMES/$GUESS_APP_NAME.ELF"
-cp "$DOSSHELL_APP_ELF" "$TMPDIR/$DOSSHELL_APP_NAME.ELF"
-cp "$EDIT_APP_ELF" "$TMPDIR/$EDIT_APP_NAME.ELF"
-
-if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
-    cp "$ROOT_DIR/assets/bootlogo/logo.raw" "$TMPDIR/BOOTLOGO.DAT"
-    if [ -f "$ROOT_DIR/assets/bootlogo/logo.pal" ]; then
-        cp "$ROOT_DIR/assets/bootlogo/logo.pal" "$TMPDIR/BOOTLOGO.PAL"
-    fi
-    echo "✓ Boot logo added"
-fi
-
+cp -a "$PAYLOAD_SRC"/. "$TMPDIR"/
 umount "$TMPDIR"
 SUDO_EOF
+    status=$?
+    rm -rf "$payload_root"
+    return $status
 }
 
 copy_with_mtools() {
+    local app_name
+    local app_subdir
+    local template_rel
+    local created_dirs=""
+    local dest_path
+
     if ! echo "Welcome to drive A:" | mcopy -i "$DISK_IMG" - ::/README.TXT; then
         echo "ERROR: failed to write README.TXT via mtools" >&2
         return 1
     fi
-    if ! mmd -i "$DISK_IMG" ::/GAMES; then
-        echo "ERROR: failed to create GAMES directory via mtools" >&2
-        return 1
-    fi
-    if ! mcopy -o -i "$DISK_IMG" "$GUESS_APP_ELF" "::/GAMES/$GUESS_APP_NAME.ELF"; then
-        echo "ERROR: failed to write $GUESS_APP_NAME.ELF via mtools" >&2
-        return 1
-    fi
-    if ! mcopy -o -i "$DISK_IMG" "$DOSSHELL_APP_ELF" "::/$DOSSHELL_APP_NAME.ELF"; then
-        echo "ERROR: failed to write $DOSSHELL_APP_NAME.ELF via mtools" >&2
-        return 1
-    fi
-    if ! mcopy -o -i "$DISK_IMG" "$EDIT_APP_ELF" "::/$EDIT_APP_NAME.ELF"; then
-        echo "ERROR: failed to write $EDIT_APP_NAME.ELF via mtools" >&2
-        return 1
-    fi
+    while IFS='|' read -r app_name app_subdir template_rel; do
+        [ -n "$app_name" ] || continue
+        if [ -n "$app_subdir" ] && [[ "$created_dirs" != *"|$app_subdir|"* ]]; then
+            if ! mmd -i "$DISK_IMG" "::/$app_subdir"; then
+                echo "ERROR: failed to create $app_subdir directory via mtools" >&2
+                return 1
+            fi
+            created_dirs="${created_dirs}|$app_subdir|"
+        fi
+
+        dest_path="::/$app_name.ELF"
+        if [ -n "$app_subdir" ]; then
+            dest_path="::/$app_subdir/$app_name.ELF"
+        fi
+
+        if ! mcopy -o -i "$DISK_IMG" "$(app_elf_path "$app_name")" "$dest_path"; then
+            echo "ERROR: failed to write $app_name.ELF via mtools" >&2
+            return 1
+        fi
+    done <<< "$APP_SPECS"
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
         if ! mcopy -o -i "$DISK_IMG" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT; then

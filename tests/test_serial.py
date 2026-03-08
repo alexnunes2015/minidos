@@ -89,6 +89,7 @@ def main():
             "MiniDOS Shell Ready",
             "MiniDOS v0.1 Kernel Started",
         ]
+        ready_deadline = time.time() + args.ready_timeout
         _, matched = wait_for_shell_ready(
             proc,
             args.ready_timeout,
@@ -107,6 +108,20 @@ def main():
                 print("\nERROR: timeout waiting for shell readiness.", file=sys.stderr)
                 return 1
             time.sleep(args.post_pm_delay)
+        elif matched != "Entering main loop":
+            remaining = max(0.1, ready_deadline - time.time())
+            _, matched = read_until(
+                proc,
+                ["Entering main loop"],
+                remaining,
+                echo=not args.quiet,
+            )
+            if not matched:
+                print(
+                    "\nERROR: shell banner appeared before the main loop became ready.",
+                    file=sys.stderr,
+                )
+                return 1
 
         expected_map = {
             "help": ["Available commands:"],
