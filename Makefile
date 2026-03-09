@@ -10,6 +10,14 @@ GDB = gdb
 BOOT_DIR = src/boot
 KERNEL_DIR = src/kernel
 KERNEL_CORE_DIR = $(KERNEL_DIR)/core
+KERNEL_DEBUG_DIR = $(KERNEL_DIR)/debug
+KERNEL_INPUT_DIR = $(KERNEL_DIR)/input
+KERNEL_MEMORY_DIR = $(KERNEL_DIR)/memory
+KERNEL_PROCESS_DIR = $(KERNEL_DIR)/process
+KERNEL_SHELL_DIR = $(KERNEL_DIR)/shell
+KERNEL_STORAGE_DIR = $(KERNEL_DIR)/storage
+KERNEL_TIME_DIR = $(KERNEL_DIR)/time
+KERNEL_VIDEO_DIR = $(KERNEL_DIR)/video
 BUILD_DIR = build
 BOOTLOGO_DIR = assets/bootlogo
 KERNEL_INCLUDE_DIRS := $(shell find $(KERNEL_DIR) -type d | sort)
@@ -17,8 +25,18 @@ CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pi
 CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
 LDFLAGS = -m elf_i386 -T $(KERNEL_CORE_DIR)/kernel.ld
 
-KERNEL_SOURCES_ALL := $(shell find $(KERNEL_DIR) -name '*.c' | sort)
-KERNEL_SOURCES = $(KERNEL_CORE_DIR)/kernel.c $(filter-out $(KERNEL_CORE_DIR)/kernel.c $(KERNEL_DIR)/storage/fat12.c, $(KERNEL_SOURCES_ALL))
+KERNEL_SOURCE_DIRS = \
+	$(KERNEL_CORE_DIR) \
+	$(KERNEL_DEBUG_DIR) \
+	$(KERNEL_INPUT_DIR) \
+	$(KERNEL_MEMORY_DIR) \
+	$(KERNEL_PROCESS_DIR) \
+	$(KERNEL_SHELL_DIR) \
+	$(KERNEL_STORAGE_DIR) \
+	$(KERNEL_TIME_DIR) \
+	$(KERNEL_VIDEO_DIR)
+KERNEL_SOURCES_ALL := $(shell find $(KERNEL_SOURCE_DIRS) -name '*.c' | sort)
+KERNEL_SOURCES = $(filter-out $(KERNEL_STORAGE_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
 KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o
 QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
