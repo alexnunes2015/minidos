@@ -9,6 +9,7 @@
 %define PM16_DATA_SEL       0x20
 %define REALMODE_CODE_SEG   0x1000
 %define REALMODE_STACK_TOP  0x6000
+%define KERNEL_STACK_TOP    0x90000
 %define CR0_PE              0x00000001
 %define CR0_PG              0x80000000
 
@@ -35,7 +36,9 @@ _start:
     mov ss, ax
 
     ; Ensure we have a valid stack
-    mov esp, 0x90000
+    ; Keep the early kernel stack in low memory; the graphics backbuffer lives
+    ; in a dedicated scratch region above the kernel image.
+    mov esp, KERNEL_STACK_TOP
     mov ebp, esp
     
     ; Clear direction flag

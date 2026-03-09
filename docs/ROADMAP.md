@@ -23,7 +23,7 @@ Critério de pronto:
 Entregas concluídas:
 - Novo alvo `make phase0-check` para executar baseline completo (`clean`, `build`, `test-serial`).
 - `test-serial` atualizado para depender de `minidos.img`, reduzindo risco de artefato antigo.
-- Leituras de memória física fixa ajustadas em `src/kernel/kernel.c` e `src/kernel/video.c` para eliminar warnings críticos de build.
+- Leituras de memória física fixa ajustadas em `src/kernel/core/kernel.c` e `src/kernel/video/video.c` para eliminar warnings críticos de build.
 
 ## Fase 1 - Memória e Paging Mínimo (1 a 2 semanas)
 
@@ -94,7 +94,7 @@ Status: concluída em 28/02/2026.
 - Remover arquivo/diretório.
 
 Entregas iniciais:
-- Driver ATA PIO atualizado para `disk_id` 0..3 (primário/segundário, master/slave) em `src/kernel/disk.c`.
+- Driver ATA PIO atualizado para `disk_id` 0..3 (primário/segundário, master/slave) em `src/kernel/storage/disk.c`.
 - Novo teste de regressão da fase (`tests/test_phase3.py`) com criação dinâmica de múltiplos discos/partições e attach automático no QEMU.
 - Novo alvo `make test-phase3`.
 

@@ -11,6 +11,7 @@ The kernel already exposes low-level graphics syscalls for applications through 
 - `app_gfx_rect`
 - `app_gfx_text`
 - `app_gfx_size`
+- `app_gfx_present`
 - `app_mouse_state`
 - `app_wait_event`
 
@@ -22,6 +23,8 @@ Current goals:
 - classic Win95-like theme defaults
 - reusable window, panel, button, label, and text-box helpers
 - mouse snapshots and waitable input events for GUI apps
+- predictable dirty-rect invalidation for software-cursor apps
+- real backbuffered presentation for GUI frames
 - zero dynamic allocation
 - no dependency on libc
 
@@ -89,18 +92,30 @@ Describes a push button:
 - `ui_rgb(r, g, b)`
 - `ui_screen_size(api, &w, &h)`
 - `ui_clear(api, color)`
+- `ui_present(api)`
 - `ui_fill_rect(api, rect, color)`
 - `ui_frame_rect(api, rect, color)`
 - `ui_bevel_rect(api, rect, top_left, bottom_right)`
 - `ui_draw_text(api, x, y, text, fg, bg)`
 - `ui_rect_make(x, y, w, h)`
 - `ui_rect_inset(rect, amount)`
+- `ui_rect_is_empty(rect)`
 - `ui_rect_contains(&rect, x, y)`
+- `ui_rect_contains_rect(&outer, &inner)`
+- `ui_rects_intersect(a, b)`
+- `ui_rect_intersect(a, b)`
+- `ui_rect_union(a, b)`
+- `ui_rect_subtract(rect, cutout, out_rects, max_rects)`
+- `ui_dirty_list_init(&dirty_list)`
+- `ui_dirty_list_add(&dirty_list, rect)`
+- `ui_dirty_list_add_clipped(&dirty_list, rect, clip)`
 - `ui_mouse_left_down(...)`
 - `ui_mouse_left_pressed(...)`
 - `ui_mouse_left_released(...)`
 
 These are enough to implement custom controls without touching kernel code.
+
+For cursor-driven apps, prefer keeping a short list of dirty rects, repainting the cursor last, and calling `ui_present(api)` once at the end of the frame.
 
 ## Widget Helpers
 
@@ -144,6 +159,7 @@ int app_main(const minidos_app_api_t* api) {
     window.active = 1;
     window.has_close_button = 1;
     ui_draw_window(api, &theme, &window);
+    ui_present(api);
 
     return 0;
 }
@@ -190,9 +206,11 @@ This layer is meant to be the bridge between the current framebuffer primitives 
 If the project evolves toward a real desktop shell, keep the next steps in this order:
 
 1. richer UI event queue (avoid collapsing fast click sequences into a single snapshot)
-2. redraw invalidation and backbuffering
+2. richer present/dirty-rect batching on top of the current backbuffer
 3. control tree/layout
 4. menu bars, list views, and text editing widgets
 5. optional declarative styling format
 
 Do not introduce CSS semantics before the widget tree and event model exist.
+
+The current `win95ui` demo now renders into the kernel backbuffer and only presents once per frame, so hover redraws no longer expose partially drawn window state on the frontbuffer.

@@ -300,7 +300,11 @@ def main():
         _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)
         _wait_for_app_ready(proc, "win95ui", args.cmd_timeout, echo=not args.quiet)
 
-        _send_mouse_move(qmp_sock, 156, 82)
+        # Exercise repeated hover redraws over the title bar/client before the exit click.
+        _send_mouse_move(qmp_sock, -150, -100)
+        _send_mouse_move(qmp_sock, 220, 0)
+        _send_mouse_move(qmp_sock, -80, 60)
+        _send_mouse_move(qmp_sock, 166, 122)
         _send_mouse_button(qmp_sock, "left", down=True)
         _send_mouse_button(qmp_sock, "left", down=False)
         log_after, matched = read_until(

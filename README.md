@@ -5,7 +5,15 @@ Sistema operacional educacional com bootloader BIOS, kernel 16/32-bit e shell b�
 ## Estrutura
 
 - [src/boot/](src/boot/) — boot sector + stage2.
-- [src/kernel/](src/kernel/) — kernel, drivers e shell.
+- [src/kernel/core/](src/kernel/core/) — entry point, linker script e coordenação principal do kernel.
+- [src/kernel/video/](src/kernel/video/) — consola, framebuffer e VGA.
+- [src/kernel/storage/](src/kernel/storage/) — ATA, drives e FAT, com separação entre core FAT, diretórios e I/O de ficheiros.
+- [src/kernel/input/](src/kernel/input/) — teclado e rato.
+- [src/kernel/time/](src/kernel/time/) — RTC e timer/PIT.
+- [src/kernel/debug/](src/kernel/debug/) — serial e logging.
+- [src/kernel/memory/](src/kernel/memory/) — paging.
+- [src/kernel/process/](src/kernel/process/) — processo e scheduler.
+- [src/kernel/shell/](src/kernel/shell/) — shell e runtime de apps.
 - [scripts/](scripts/) — criação de imagens de disco.
 - [tests/](tests/) — testes em QEMU e utilitários.
 - [docs/](docs/) — notas de design, fixes e troubleshooting.
@@ -67,7 +75,7 @@ Veja [assets/bootlogo/README.md](assets/bootlogo/README.md) para converter image
 
 - Saída de debug via serial (COM1). Consulte [docs/TEST_SCRIPTS.md](docs/TEST_SCRIPTS.md).
 - O build atual gera uma imagem `1.44MB` FAT12 para compatibilidade de boot em [scripts/build_disk.sh](scripts/build_disk.sh).
-- Em runtime, o disco de boot em modo floppy é acedido pelo kernel através de um BIOS disk thunk; volumes adicionais continuam centrados no caminho FAT16/ATA em [src/kernel/disk.c](src/kernel/disk.c).
+- Em runtime, o disco de boot em modo floppy é acedido pelo kernel através de um BIOS disk thunk; volumes adicionais continuam centrados no caminho FAT16/ATA em [src/kernel/storage/disk.c](src/kernel/storage/disk.c).
 - O drive `A:` é montado como volume whole-disk quando o meio de boot é uma floppy FAT válida.
 - Usa [docs/DEVELOPMENT_PROTOCOL.md](docs/DEVELOPMENT_PROTOCOL.md) como contrato operacional para trabalho feito por agentes.
 - Usa [docs/DEBUGGING.md](docs/DEBUGGING.md) para ciclos de diagnóstico e GDB.

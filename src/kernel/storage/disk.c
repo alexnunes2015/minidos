@@ -1,5 +1,4 @@
 #include "disk.h"
-
 // ATA PIO ports
 #define ATA_PRIMARY_IO      0x1F0
 #define ATA_PRIMARY_CTRL    0x3F6

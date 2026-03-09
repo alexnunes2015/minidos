@@ -1,4 +1,6 @@
 #include "video.h"
+#include "logger.h"
+#include "serial.h"
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -25,6 +27,11 @@ typedef unsigned int u32;
 #define FONT_H 8
 #define MAX_TEXT_COLS 256
 #define MAX_TEXT_ROWS 160
+#define VIDEO_BACKBUFFER_MAX_WIDTH 1024
+#define VIDEO_BACKBUFFER_MAX_HEIGHT 768
+#define VIDEO_BACKBUFFER_BYTES_PER_PIXEL 4
+#define VIDEO_BACKBUFFER_MAX_BYTES (VIDEO_BACKBUFFER_MAX_WIDTH * VIDEO_BACKBUFFER_MAX_HEIGHT * 4)
+#define VIDEO_BACKBUFFER_BASE ((u8*)0x00400000u)
 
 #define COLOR_BG 0x000000u
 #define COLOR_FG 0xD8DEE9u
@@ -40,12 +47,22 @@ static int fb_width = 0;
 static int fb_height = 0;
 static int fb_pitch = 0;
 static int fb_bpp = 0;
+static int fb_bytes_per_pixel = 0;
 static u8 red_size = 0;
 static u8 red_pos = 0;
 static u8 green_size = 0;
 static u8 green_pos = 0;
 static u8 blue_size = 0;
 static u8 blue_pos = 0;
+static u8* const video_backbuffer = VIDEO_BACKBUFFER_BASE;
+static int backbuffer_ready = 0;
+static int backbuffer_pitch = 0;
+static int present_deferred = 0;
+static int dirty_valid = 0;
+static int dirty_x = 0;
+static int dirty_y = 0;
+static int dirty_w = 0;
+static int dirty_h = 0;
 
 static int text_cols = TEXT_SCREEN_WIDTH;
 static int text_rows = TEXT_SCREEN_HEIGHT;
@@ -53,6 +70,13 @@ static int text_origin_x = 0;
 static int text_origin_y = 0;
 
 static char text_buffer[MAX_TEXT_ROWS][MAX_TEXT_COLS];
+static void init_video_once(void);
+u8* video_backbuffer_fill_base = 0;
+int video_backbuffer_fill_pitch = 0;
+int video_backbuffer_fill_h = 0;
+int video_backbuffer_fill_w = 0;
+u32 video_backbuffer_fill_rgb = 0;
+extern void __attribute__((regparm(0))) video_backbuffer_fill_rect32(void);
 
 static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -100,32 +124,301 @@ static u32 pack_rgb(u8 r, u8 g, u8 b) {
         | scale_component(b, blue_size, blue_pos);
 }
 
+static void video_clear_dirty(void) {
+    dirty_valid = 0;
+    dirty_x = 0;
+    dirty_y = 0;
+    dirty_w = 0;
+    dirty_h = 0;
+}
+
+static void video_disable_backbuffer(void) {
+    backbuffer_ready = 0;
+    backbuffer_pitch = 0;
+    video_clear_dirty();
+}
+
+__attribute__((noinline, regparm(0)))
+static int video_backbuffer_rect_fits(int x, int y, int w, int h) {
+    unsigned int row_bytes;
+    unsigned int row_offset;
+
+    if (!backbuffer_ready || backbuffer_pitch <= 0) {
+        return 0;
+    }
+    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+        return 0;
+    }
+
+    row_bytes = (unsigned int)w * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
+    row_offset = ((unsigned int)(y + h - 1) * (unsigned int)backbuffer_pitch)
+        + ((unsigned int)x * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL);
+
+    if (row_bytes == 0 || row_bytes > VIDEO_BACKBUFFER_MAX_BYTES) {
+        return 0;
+    }
+    if (row_offset > VIDEO_BACKBUFFER_MAX_BYTES) {
+        return 0;
+    }
+    return row_bytes <= (VIDEO_BACKBUFFER_MAX_BYTES - row_offset);
+}
+
+static void video_note_dirty(int x, int y, int w, int h) {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int right;
+    int bottom;
+    int current_right;
+    int current_bottom;
+
+    if (!graphics_mode || !backbuffer_ready || w <= 0 || h <= 0) {
+        return;
+    }
+
+    x0 = x;
+    y0 = y;
+    x1 = x + w;
+    y1 = y + h;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > fb_width) {
+        x1 = fb_width;
+    }
+    if (y1 > fb_height) {
+        y1 = fb_height;
+    }
+
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    x = x0;
+    y = y0;
+    w = x1 - x0;
+    h = y1 - y0;
+
+    if (!dirty_valid) {
+        dirty_valid = 1;
+        dirty_x = x;
+        dirty_y = y;
+        dirty_w = w;
+        dirty_h = h;
+        return;
+    }
+
+    right = x + w;
+    bottom = y + h;
+    current_right = dirty_x + dirty_w;
+    current_bottom = dirty_y + dirty_h;
+
+    if (x < dirty_x) {
+        dirty_x = x;
+    }
+    if (y < dirty_y) {
+        dirty_y = y;
+    }
+    if (right > current_right) {
+        current_right = right;
+    }
+    if (bottom > current_bottom) {
+        current_bottom = bottom;
+    }
+
+    dirty_w = current_right - dirty_x;
+    dirty_h = current_bottom - dirty_y;
+}
+
+static void write_frontbuffer_pixel(volatile u8* dst, u32 rgb) {
+    u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
+
+    if (fb_bytes_per_pixel == 4) {
+        *(volatile u32*)dst = packed;
+        return;
+    }
+
+    if (fb_bytes_per_pixel == 3) {
+        dst[0] = (u8)(packed & 0xFFu);
+        dst[1] = (u8)((packed >> 8) & 0xFFu);
+        dst[2] = (u8)((packed >> 16) & 0xFFu);
+        return;
+    }
+
+    *(volatile u16*)dst = (u16)packed;
+}
+
+static void video_copy_rect_to_front(int x, int y, int w, int h) {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int py;
+
+    if (!graphics_mode || !backbuffer_ready || w <= 0 || h <= 0) {
+        return;
+    }
+
+    x0 = x;
+    y0 = y;
+    x1 = x + w;
+    y1 = y + h;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > fb_width) {
+        x1 = fb_width;
+    }
+    if (y1 > fb_height) {
+        y1 = fb_height;
+    }
+
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    x = x0;
+    y = y0;
+    w = x1 - x0;
+    h = y1 - y0;
+    if (!video_backbuffer_rect_fits(x, y, w, h)) {
+        video_disable_backbuffer();
+        return;
+    }
+
+    for (py = 0; py < h; py++) {
+        volatile u8* dst = fb + ((y + py) * fb_pitch) + (x * fb_bytes_per_pixel);
+        const u32* src = (const u32*)(const void*)(video_backbuffer + ((y + py) * backbuffer_pitch)
+            + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
+        int px;
+
+        for (px = 0; px < w; px++) {
+            write_frontbuffer_pixel(dst + (px * fb_bytes_per_pixel), src[px]);
+        }
+    }
+}
+
+void video_present_pending(void) {
+    init_video_once();
+    if (!graphics_mode || !backbuffer_ready || !dirty_valid) {
+        return;
+    }
+
+    video_copy_rect_to_front(dirty_x, dirty_y, dirty_w, dirty_h);
+    video_clear_dirty();
+}
+
+static void video_maybe_present_pending(void) {
+    if (!present_deferred) {
+        video_present_pending();
+    }
+}
+
+void video_set_deferred_present(int enabled) {
+    init_video_once();
+    if (!graphics_mode || !backbuffer_ready) {
+        return;
+    }
+
+    if (!enabled) {
+        video_present_pending();
+    }
+    present_deferred = enabled ? 1 : 0;
+}
+
+__attribute__((noinline, regparm(0)))
+static void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int py;
+
+    if (!graphics_mode || w <= 0 || h <= 0) {
+        return;
+    }
+
+    x0 = x;
+    y0 = y;
+    x1 = x + w;
+    y1 = y + h;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > fb_width) {
+        x1 = fb_width;
+    }
+    if (y1 > fb_height) {
+        y1 = fb_height;
+    }
+
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    x = x0;
+    y = y0;
+    w = x1 - x0;
+    h = y1 - y0;
+
+    if (backbuffer_ready) {
+        if (!video_backbuffer_rect_fits(x, y, w, h)) {
+            video_disable_backbuffer();
+        } else {
+            video_backbuffer_fill_base = video_backbuffer + (y * backbuffer_pitch) + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL);
+            video_backbuffer_fill_pitch = backbuffer_pitch;
+            video_backbuffer_fill_h = h;
+            video_backbuffer_fill_w = w;
+            video_backbuffer_fill_rgb = rgb;
+            video_backbuffer_fill_rect32();
+            return;
+        }
+    }
+
+    for (py = 0; py < h; py++) {
+        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes_per_pixel);
+        int px;
+
+        for (px = 0; px < w; px++) {
+            write_frontbuffer_pixel(row + (px * fb_bytes_per_pixel), rgb);
+        }
+    }
+}
+
 static void draw_pixel(int x, int y, u32 rgb) {
     if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) {
         return;
     }
 
-    u8* p = (u8*)fb + (y * fb_pitch);
-    u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFF), (u8)((rgb >> 8) & 0xFF), (u8)(rgb & 0xFF));
-
-    if (fb_bpp == 32) {
-        *(volatile u32*)(p + x * 4) = packed;
-    } else if (fb_bpp == 24) {
-        u8* px = p + x * 3;
-        px[0] = (u8)(packed & 0xFF);
-        px[1] = (u8)((packed >> 8) & 0xFF);
-        px[2] = (u8)((packed >> 16) & 0xFF);
-    } else {
-        *(volatile u16*)(p + x * 2) = (u16)packed;
+    if (backbuffer_ready) {
+        if (!video_backbuffer_rect_fits(x, y, 1, 1)) {
+            video_disable_backbuffer();
+        } else {
+            volatile u32* p = (volatile u32*)(void*)(video_backbuffer + (y * backbuffer_pitch)
+                + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
+            *p = rgb;
+            return;
+        }
     }
+
+    write_frontbuffer_pixel(fb + (y * fb_pitch) + (x * fb_bytes_per_pixel), rgb);
 }
 
 static void clear_graphics(u32 rgb) {
-    for (int y = 0; y < fb_height; y++) {
-        for (int x = 0; x < fb_width; x++) {
-            draw_pixel(x, y, rgb);
-        }
-    }
+    fill_rect_rgb(0, 0, fb_width, fb_height, rgb);
 }
 
 static const u8 GLYPH_SPACE[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -252,7 +545,15 @@ static void redraw_text_buffer() {
     }
 }
 
-static void init_video_once() {
+static void video_note_cell(int col, int row) {
+    video_note_dirty(text_origin_x + (col * FONT_W), text_origin_y + (row * FONT_H), FONT_W, FONT_H);
+}
+
+static void video_note_text_area(void) {
+    video_note_dirty(text_origin_x, text_origin_y, text_cols * FONT_W, text_rows * FONT_H);
+}
+
+static void init_video_once(void) {
     if (video_ready) {
         return;
     }
@@ -272,6 +573,7 @@ static void init_video_once() {
             fb_height = height;
             fb_pitch = pitch;
             fb_bpp = bpp;
+            fb_bytes_per_pixel = (fb_bpp <= 16) ? 2 : ((fb_bpp <= 24) ? 3 : 4);
             red_size = mem8(BOOT_VIDEO_RED_SIZE_ADDR);
             red_pos = mem8(BOOT_VIDEO_RED_POS_ADDR);
             green_size = mem8(BOOT_VIDEO_GREEN_SIZE_ADDR);
@@ -298,6 +600,33 @@ static void init_video_once() {
 
             text_origin_x = 0;
             text_origin_y = 0;
+
+            if (fb_width <= VIDEO_BACKBUFFER_MAX_WIDTH
+                && fb_height <= VIDEO_BACKBUFFER_MAX_HEIGHT) {
+                unsigned int required_pitch = (unsigned int)fb_width * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
+                unsigned int required_bytes = required_pitch * (unsigned int)fb_height;
+
+                if (required_pitch > 0 && required_bytes <= VIDEO_BACKBUFFER_MAX_BYTES) {
+                    backbuffer_ready = 1;
+                    backbuffer_pitch = (int)required_pitch;
+                }
+            }
+
+            log_serial_raw("[video] init fb=");
+            serial_print_hex((u32)fb);
+            log_serial_raw(" w=");
+            serial_print_hex((u32)fb_width);
+            log_serial_raw(" h=");
+            serial_print_hex((u32)fb_height);
+            log_serial_raw(" pitch=");
+            serial_print_hex((u32)fb_pitch);
+            log_serial_raw(" bpp=");
+            serial_print_hex((u32)fb_bpp);
+            log_serial_raw(" bb=");
+            serial_print_hex((u32)backbuffer_ready);
+            log_serial_raw(" bp=");
+            serial_print_hex((u32)backbuffer_pitch);
+            log_serial_raw("\n");
         }
     }
 
@@ -314,7 +643,8 @@ static void init_video_once() {
 
     if (graphics_mode) {
         clear_graphics(COLOR_BG);
-        redraw_text_buffer();
+        video_note_dirty(0, 0, fb_width, fb_height);
+        video_present_pending();
     }
 }
 
@@ -346,6 +676,8 @@ void video_clear_color(unsigned int rgb) {
         return;
     }
     clear_graphics(rgb);
+    video_note_dirty(0, 0, fb_width, fb_height);
+    video_maybe_present_pending();
 }
 
 void video_fill_rect(int x, int y, int w, int h, unsigned int rgb) {
@@ -353,11 +685,10 @@ void video_fill_rect(int x, int y, int w, int h, unsigned int rgb) {
     if (!graphics_mode || w <= 0 || h <= 0) {
         return;
     }
-    for (int py = y; py < y + h; py++) {
-        for (int px = x; px < x + w; px++) {
-            draw_pixel(px, py, rgb);
-        }
-    }
+
+    fill_rect_rgb(x, y, w, h, rgb);
+    video_note_dirty(x, y, w, h);
+    video_maybe_present_pending();
 }
 
 int video_draw_indexed_image_centered(const unsigned char* pixels, int width, int height, const unsigned char* palette) {
@@ -382,6 +713,8 @@ int video_draw_indexed_image_centered(const unsigned char* pixels, int width, in
         }
     }
 
+    video_note_dirty(0, 0, fb_width, fb_height);
+    video_maybe_present_pending();
     return 1;
 }
 
@@ -433,6 +766,9 @@ void video_draw_boot_gradient(unsigned int frame) {
             draw_pixel(x, bar_y + y, c);
         }
     }
+
+    video_note_dirty(0, bar_y, fb_width, bar_h);
+    video_maybe_present_pending();
 }
 
 void update_cursor() {
@@ -460,7 +796,8 @@ void cls() {
 
     if (graphics_mode) {
         clear_graphics(COLOR_BG);
-        redraw_text_buffer();
+        video_note_dirty(0, 0, fb_width, fb_height);
+        video_maybe_present_pending();
     } else {
         volatile u8* video = TEXT_VIDEO_MEMORY;
         for (int i = 0; i < TEXT_SCREEN_WIDTH * TEXT_SCREEN_HEIGHT * 2; i += 2) {
@@ -487,6 +824,8 @@ static void scroll_graphics() {
 
     redraw_text_buffer();
     cursor_y = text_rows - 1;
+    video_note_text_area();
+    video_maybe_present_pending();
 }
 
 static void scroll_text() {
@@ -520,6 +859,7 @@ void print_char(char c) {
                 cursor_x--;
                 text_buffer[cursor_y][cursor_x] = ' ';
                 render_cell(cursor_x, cursor_y, ' ');
+                video_note_cell(cursor_x, cursor_y);
             }
         } else {
             if (c < 32 || c > 126) {
@@ -527,6 +867,7 @@ void print_char(char c) {
             }
             text_buffer[cursor_y][cursor_x] = c;
             render_cell(cursor_x, cursor_y, c);
+            video_note_cell(cursor_x, cursor_y);
             cursor_x++;
         }
 
@@ -539,6 +880,7 @@ void print_char(char c) {
             scroll_graphics();
         }
 
+        video_maybe_present_pending();
         return;
     }
 
@@ -619,6 +961,52 @@ static void draw_string_custom(int col, int row, const char* s, u32 fg, u32 bg) 
     }
 }
 
+static void measure_string_custom(int col, int row, const char* s, int* out_w, int* out_h) {
+    int x = col;
+    int start_col = col;
+    int start_row = row;
+    int max_x = col;
+    int max_y = row;
+
+    if (out_w) {
+        *out_w = 0;
+    }
+    if (out_h) {
+        *out_h = 0;
+    }
+    if (!s) {
+        return;
+    }
+
+    for (int i = 0; s[i] != '\0' && row < text_rows; i++) {
+        if (s[i] == '\n') {
+            row++;
+            x = start_col;
+            continue;
+        }
+        if (x < text_cols) {
+            if ((x + 1) > max_x) {
+                max_x = x + 1;
+            }
+            if ((row + 1) > max_y) {
+                max_y = row + 1;
+            }
+        }
+        x++;
+        if (x >= text_cols) {
+            row++;
+            x = start_col;
+        }
+    }
+
+    if (out_w) {
+        *out_w = (max_x > col) ? ((max_x - col) * FONT_W) : 0;
+    }
+    if (out_h) {
+        *out_h = (max_y > start_row) ? ((max_y - start_row) * FONT_H) : FONT_H;
+    }
+}
+
 void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigned int bg) {
     init_video_once();
     if (!text) {
@@ -637,6 +1025,19 @@ void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigne
         row = 0;
     }
     draw_string_custom(col, row, text, fg, bg);
+    {
+        int w = 0;
+        int h = 0;
+        measure_string_custom(col, row, text, &w, &h);
+        if (w <= 0) {
+            w = FONT_W;
+        }
+        if (h <= 0) {
+            h = FONT_H;
+        }
+        video_note_dirty(text_origin_x + (col * FONT_W), text_origin_y + (row * FONT_H), w, h);
+    }
+    video_maybe_present_pending();
 }
 
 static int str_len_local(const char* s) {
@@ -676,6 +1077,8 @@ void video_show_bsod(const char* stop_code, const char* detail) {
         draw_string_custom(11, 13, stop, fg, bg);
         draw_string_custom(4, 15, extra, fg, bg);
         draw_string_centered_custom(18, "PRESS ANY KEY TO CONTINUE _", fg, bg);
+        video_note_dirty(0, 0, fb_width, fb_height);
+        video_maybe_present_pending();
         return;
     }
 

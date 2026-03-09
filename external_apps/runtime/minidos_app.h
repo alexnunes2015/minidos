@@ -32,6 +32,7 @@ enum {
     MINIDOS_SYSCALL_GET_TICKS = 24,
     MINIDOS_SYSCALL_GET_MOUSE_STATE = 25,
     MINIDOS_SYSCALL_WAIT_EVENT = 26,
+    MINIDOS_SYSCALL_GFX_PRESENT = 27,
 };
 
 enum {
@@ -133,6 +134,10 @@ static inline int app_gfx_text(const minidos_app_api_t* api, const app_gfx_text_
 
 static inline int app_gfx_size(const minidos_app_api_t* api, int* out_w, int* out_h) {
     return app_syscall(api, MINIDOS_SYSCALL_GFX_SIZE, (unsigned int)out_w, (unsigned int)out_h, 0);
+}
+
+static inline int app_gfx_present(const minidos_app_api_t* api) {
+    return app_syscall(api, MINIDOS_SYSCALL_GFX_PRESENT, 0, 0, 0);
 }
 
 static inline int app_mouse_state(const minidos_app_api_t* api, app_mouse_state_t* out) {

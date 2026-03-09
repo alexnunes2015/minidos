@@ -5,6 +5,7 @@
 
 #define UI_CHAR_W 8
 #define UI_CHAR_H 8
+#define UI_DIRTY_RECTS_MAX 8
 
 typedef struct {
     int x;
@@ -12,6 +13,11 @@ typedef struct {
     int w;
     int h;
 } ui_rect_t;
+
+typedef struct {
+    ui_rect_t rects[UI_DIRTY_RECTS_MAX];
+    int count;
+} ui_dirty_list_t;
 
 typedef struct {
     unsigned int desktop_bg;
@@ -79,6 +85,10 @@ static inline ui_rect_t ui_rect_inset(ui_rect_t rect, int amount) {
     return rect;
 }
 
+static inline int ui_rect_is_empty(ui_rect_t rect) {
+    return rect.w <= 0 || rect.h <= 0;
+}
+
 static inline int ui_rect_contains(const ui_rect_t* rect, int px, int py) {
     if (!rect) {
         return 0;
@@ -86,6 +96,132 @@ static inline int ui_rect_contains(const ui_rect_t* rect, int px, int py) {
     return px >= rect->x && py >= rect->y
         && px < (rect->x + rect->w)
         && py < (rect->y + rect->h);
+}
+
+static inline int ui_rect_contains_rect(const ui_rect_t* outer, const ui_rect_t* inner) {
+    if (!outer || !inner || ui_rect_is_empty(*inner)) {
+        return 0;
+    }
+    return inner->x >= outer->x
+        && inner->y >= outer->y
+        && (inner->x + inner->w) <= (outer->x + outer->w)
+        && (inner->y + inner->h) <= (outer->y + outer->h);
+}
+
+static inline int ui_rects_intersect(ui_rect_t a, ui_rect_t b) {
+    if (ui_rect_is_empty(a) || ui_rect_is_empty(b)) {
+        return 0;
+    }
+    return a.x < (b.x + b.w) && (a.x + a.w) > b.x
+        && a.y < (b.y + b.h) && (a.y + a.h) > b.y;
+}
+
+static inline ui_rect_t ui_rect_intersect(ui_rect_t a, ui_rect_t b) {
+    int x = (a.x > b.x) ? a.x : b.x;
+    int y = (a.y > b.y) ? a.y : b.y;
+    int x2 = ((a.x + a.w) < (b.x + b.w)) ? (a.x + a.w) : (b.x + b.w);
+    int y2 = ((a.y + a.h) < (b.y + b.h)) ? (a.y + a.h) : (b.y + b.h);
+    if (x2 <= x || y2 <= y) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+    return ui_rect_make(x, y, x2 - x, y2 - y);
+}
+
+static inline ui_rect_t ui_rect_union(ui_rect_t a, ui_rect_t b) {
+    int right;
+    int bottom;
+    ui_rect_t out;
+
+    if (ui_rect_is_empty(a)) {
+        return b;
+    }
+    if (ui_rect_is_empty(b)) {
+        return a;
+    }
+
+    out.x = (a.x < b.x) ? a.x : b.x;
+    out.y = (a.y < b.y) ? a.y : b.y;
+    right = ((a.x + a.w) > (b.x + b.w)) ? (a.x + a.w) : (b.x + b.w);
+    bottom = ((a.y + a.h) > (b.y + b.h)) ? (a.y + a.h) : (b.y + b.h);
+    out.w = right - out.x;
+    out.h = bottom - out.y;
+    return out;
+}
+
+static inline int ui_rect_subtract(ui_rect_t rect, ui_rect_t cutout, ui_rect_t* out_rects, int max_rects) {
+    ui_rect_t overlap;
+    int count = 0;
+    int rect_right;
+    int rect_bottom;
+    int overlap_right;
+    int overlap_bottom;
+
+    if (!out_rects || max_rects <= 0 || ui_rect_is_empty(rect)) {
+        return 0;
+    }
+
+    overlap = ui_rect_intersect(rect, cutout);
+    if (ui_rect_is_empty(overlap)) {
+        out_rects[0] = rect;
+        return 1;
+    }
+
+    rect_right = rect.x + rect.w;
+    rect_bottom = rect.y + rect.h;
+    overlap_right = overlap.x + overlap.w;
+    overlap_bottom = overlap.y + overlap.h;
+
+    if (overlap.y > rect.y && count < max_rects) {
+        out_rects[count++] = ui_rect_make(rect.x, rect.y, rect.w, overlap.y - rect.y);
+    }
+    if (overlap_bottom < rect_bottom && count < max_rects) {
+        out_rects[count++] = ui_rect_make(rect.x, overlap_bottom, rect.w, rect_bottom - overlap_bottom);
+    }
+    if (overlap.x > rect.x && count < max_rects) {
+        out_rects[count++] = ui_rect_make(rect.x, overlap.y, overlap.x - rect.x, overlap.h);
+    }
+    if (overlap_right < rect_right && count < max_rects) {
+        out_rects[count++] = ui_rect_make(overlap_right, overlap.y, rect_right - overlap_right, overlap.h);
+    }
+
+    return count;
+}
+
+static inline void ui_dirty_list_init(ui_dirty_list_t* list) {
+    if (!list) {
+        return;
+    }
+    list->count = 0;
+}
+
+static inline int ui_dirty_list_add(ui_dirty_list_t* list, ui_rect_t rect) {
+    int i;
+
+    if (!list || ui_rect_is_empty(rect)) {
+        return 0;
+    }
+
+    for (i = 0; i < list->count; i++) {
+        if (ui_rect_contains_rect(&list->rects[i], &rect)) {
+            return 1;
+        }
+        if (ui_rect_contains_rect(&rect, &list->rects[i])) {
+            list->rects[i] = rect;
+            return 1;
+        }
+    }
+
+    if (list->count < UI_DIRTY_RECTS_MAX) {
+        list->rects[list->count++] = rect;
+        return 1;
+    }
+
+    list->rects[list->count - 1] = ui_rect_union(list->rects[list->count - 1], rect);
+    return 1;
+}
+
+static inline int ui_dirty_list_add_clipped(ui_dirty_list_t* list, ui_rect_t rect, ui_rect_t clip) {
+    return ui_dirty_list_add(list, ui_rect_intersect(rect, clip));
 }
 
 static inline unsigned int ui_rgb(unsigned int r, unsigned int g, unsigned int b) {
@@ -132,6 +268,10 @@ static inline int ui_screen_size(const minidos_app_api_t* api, int* out_w, int* 
 
 static inline void ui_clear(const minidos_app_api_t* api, unsigned int color) {
     (void)app_gfx_clear(api, color);
+}
+
+static inline void ui_present(const minidos_app_api_t* api) {
+    (void)app_gfx_present(api);
 }
 
 static inline void ui_fill_rect(const minidos_app_api_t* api, ui_rect_t rect, unsigned int color) {
@@ -357,7 +497,6 @@ static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_
     }
 
     ui_clear(api, theme->desktop_bg);
-    ui_fill_rect(api, ui_rect_make(0, 0, width, height - 28), theme->desktop_bg);
     ui_fill_rect(api, ui_rect_make(0, 0, width, 2), theme->desktop_accent);
 
     taskbar = ui_rect_make(0, height - 28, width, 28);

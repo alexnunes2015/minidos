@@ -16,7 +16,7 @@ Ativar paging mínimo no kernel sem regressão de boot/shell, com diagnóstico c
 ## Implementação (ordem recomendada)
 
 1. Base de código de paging
-- Criar `src/kernel/paging.h` e `src/kernel/paging.c`.
+- Criar `src/kernel/memory/paging.h` e `src/kernel/memory/paging.c`.
 - Definir flags de entrada (`PRESENT`, `RW`, `USER`).
 - Alocar/definir page directory e page tables alinhados em 4KB.
 

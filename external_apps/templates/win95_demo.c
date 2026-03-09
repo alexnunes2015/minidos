@@ -95,92 +95,6 @@ static void clamp_window(demo_state_t* state) {
     }
 }
 
-static int rect_is_empty(ui_rect_t rect) {
-    return rect.w <= 0 || rect.h <= 0;
-}
-
-static int rects_intersect(ui_rect_t a, ui_rect_t b) {
-    if (rect_is_empty(a) || rect_is_empty(b)) {
-        return 0;
-    }
-
-    return a.x < (b.x + b.w) && (a.x + a.w) > b.x
-        && a.y < (b.y + b.h) && (a.y + a.h) > b.y;
-}
-
-static ui_rect_t rect_union(ui_rect_t a, ui_rect_t b) {
-    int right;
-    int bottom;
-    ui_rect_t out;
-
-    if (rect_is_empty(a)) {
-        return b;
-    }
-    if (rect_is_empty(b)) {
-        return a;
-    }
-
-    out.x = (a.x < b.x) ? a.x : b.x;
-    out.y = (a.y < b.y) ? a.y : b.y;
-    right = ((a.x + a.w) > (b.x + b.w)) ? (a.x + a.w) : (b.x + b.w);
-    bottom = ((a.y + a.h) > (b.y + b.h)) ? (a.y + a.h) : (b.y + b.h);
-    out.w = right - out.x;
-    out.h = bottom - out.y;
-    return out;
-}
-
-static ui_rect_t rect_intersect(ui_rect_t a, ui_rect_t b) {
-    int x = (a.x > b.x) ? a.x : b.x;
-    int y = (a.y > b.y) ? a.y : b.y;
-    int x2 = ((a.x + a.w) < (b.x + b.w)) ? (a.x + a.w) : (b.x + b.w);
-    int y2 = ((a.y + a.h) < (b.y + b.h)) ? (a.y + a.h) : (b.y + b.h);
-    if (x2 <= x || y2 <= y) {
-        return ui_rect_make(0, 0, 0, 0);
-    }
-    return ui_rect_make(x, y, x2 - x, y2 - y);
-}
-
-static void rect_include(ui_rect_t* dst, ui_rect_t add) {
-    if (!dst || rect_is_empty(add)) {
-        return;
-    }
-
-    if (rect_is_empty(*dst)) {
-        *dst = add;
-        return;
-    }
-
-    *dst = rect_union(*dst, add);
-}
-
-static ui_rect_t clamp_rect_to_screen(ui_rect_t rect, int sw, int sh) {
-    int right = rect.x + rect.w;
-    int bottom = rect.y + rect.h;
-
-    if (rect.x < 0) {
-        rect.x = 0;
-    }
-    if (rect.y < 0) {
-        rect.y = 0;
-    }
-    if (right > sw) {
-        right = sw;
-    }
-    if (bottom > sh) {
-        bottom = sh;
-    }
-
-    rect.w = right - rect.x;
-    rect.h = bottom - rect.y;
-    if (rect.w < 0) {
-        rect.w = 0;
-    }
-    if (rect.h < 0) {
-        rect.h = 0;
-    }
-    return rect;
-}
-
 static ui_rect_t text_rect_make(int x, int y, const char* text) {
     return ui_rect_make(x, y, ui_strlen(text) * UI_CHAR_W, UI_CHAR_H);
 }
@@ -341,25 +255,25 @@ static void draw_demo_full(const minidos_app_api_t* api, const demo_state_t* sta
     draw_window_contents(api, state, status, &layout);
 }
 
-static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t dirty) {
+static void redraw_desktop_visible_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t dirty) {
     ui_button_t start_button;
     ui_rect_t taskbar;
     ui_rect_t brand;
     ui_rect_t accent;
 
-    if (rect_is_empty(dirty)) {
+    if (ui_rect_is_empty(dirty)) {
         return;
     }
 
     ui_fill_rect(api, dirty, state->theme.desktop_bg);
 
     accent = ui_rect_make(0, 0, state->sw, 2);
-    if (rects_intersect(dirty, accent)) {
-        ui_fill_rect(api, accent, state->theme.desktop_accent);
+    if (ui_rects_intersect(dirty, accent)) {
+        ui_fill_rect(api, ui_rect_intersect(dirty, accent), state->theme.desktop_accent);
     }
 
     taskbar = ui_rect_make(0, state->sh - 28, state->sw, 28);
-    if (!rects_intersect(dirty, taskbar)) {
+    if (!ui_rects_intersect(dirty, taskbar)) {
         return;
     }
 
@@ -380,6 +294,26 @@ static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state
         state->theme.face);
 }
 
+static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t dirty) {
+    ui_rect_t visible[4];
+    int i;
+    int visible_count;
+
+    if (ui_rect_is_empty(dirty)) {
+        return;
+    }
+
+    if (!ui_rects_intersect(dirty, state->window.bounds)) {
+        redraw_desktop_visible_region(api, state, dirty);
+        return;
+    }
+
+    visible_count = ui_rect_subtract(dirty, state->window.bounds, visible, 4);
+    for (i = 0; i < visible_count; i++) {
+        redraw_desktop_visible_region(api, state, visible[i]);
+    }
+}
+
 static void redraw_title_bar(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_rect_t title_rect = ui_window_title_bar_rect(&state->window);
     ui_rect_t close_rect = ui_window_close_button_rect(&state->window);
@@ -390,7 +324,7 @@ static void redraw_title_bar(const minidos_app_api_t* api, const demo_state_t* s
     ui_draw_text(api, title_rect.x + 6, title_rect.y + 4,
         state->window.title ? state->window.title : "", tfg, tbg);
 
-    if (state->window.has_close_button && !rect_is_empty(close_rect)) {
+    if (state->window.has_close_button && !ui_rect_is_empty(close_rect)) {
         ui_button_t close_btn;
         close_btn.bounds = close_rect;
         close_btn.label = "X";
@@ -410,7 +344,7 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
     int dirty_bottom;
 
     build_layout(state, &layout);
-    if (!rects_intersect(dirty, state->window.bounds)) {
+    if (!ui_rects_intersect(dirty, state->window.bounds)) {
         return;
     }
 
@@ -422,7 +356,7 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
     /* Dirty extends outside the outer window boundary (e.g. window was
      * dragged, or cursor crosses the window edge from the desktop).
      * A full repaint is required. */
-    if (!ui_rect_contains(&state->window.bounds, dirty.x, dirty.y)
+    if (!ui_rect_contains_rect(&state->window.bounds, &dirty)
         || !ui_rect_contains(&state->window.bounds, dirty_right, dirty_bottom)) {
         ui_draw_window(api, &state->theme, &state->window);
         draw_window_contents(api, state, status, &layout);
@@ -434,16 +368,16 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
     /* Title bar / close button dirtied: redraw only those elements.
      * This is the common case when the cursor moves over the title bar;
      * it must NOT trigger a full window + contents repaint. */
-    if (rects_intersect(dirty, title_rect) || rects_intersect(dirty, close_rect)) {
+    if (ui_rects_intersect(dirty, title_rect) || ui_rects_intersect(dirty, close_rect)) {
         redraw_title_bar(api, state);
     }
 
     /* Window border strips (between window.bounds edge and layout.client)
      * dirtied but not by a title-bar overlap: redraw the panel bevel and
      * restore the title that ui_draw_panel would overwrite. */
-    if (!ui_rect_contains(&layout.client, dirty.x, dirty.y)
+    if (!ui_rect_contains_rect(&layout.client, &dirty)
         || !ui_rect_contains(&layout.client, dirty_right, dirty_bottom)) {
-        if (!rects_intersect(dirty, title_rect) && !rects_intersect(dirty, close_rect)) {
+        if (!ui_rects_intersect(dirty, title_rect) && !ui_rects_intersect(dirty, close_rect)) {
             /* Border strip only – cheap: redraw panel bevel then title. */
             ui_draw_panel(api, &state->theme, state->window.bounds, 1);
             redraw_title_bar(api, state);
@@ -451,47 +385,60 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
     }
 
     /* Partial client area redraw clipped to layout.client */
-    client_dirty = rect_intersect(dirty, layout.client);
-    if (rect_is_empty(client_dirty)) {
+    client_dirty = ui_rect_intersect(dirty, layout.client);
+    if (ui_rect_is_empty(client_dirty)) {
         return;
     }
 
     ui_fill_rect(api, client_dirty, state->theme.field_bg);
 
-    if (rects_intersect(client_dirty, layout.label_1)) {
+    if (ui_rects_intersect(client_dirty, layout.label_1)) {
         ui_draw_label(api, layout.label_1.x, layout.label_1.y, k_intro_line_1, &state->theme, state->theme.field_bg);
     }
-    if (rects_intersect(client_dirty, layout.label_2)) {
+    if (ui_rects_intersect(client_dirty, layout.label_2)) {
         ui_draw_label(api, layout.label_2.x, layout.label_2.y, k_intro_line_2, &state->theme, state->theme.field_bg);
     }
-    if (rects_intersect(client_dirty, layout.label_3)) {
+    if (ui_rects_intersect(client_dirty, layout.label_3)) {
         ui_draw_label(api, layout.label_3.x, layout.label_3.y, k_intro_line_3, &state->theme, state->theme.field_bg);
     }
-    if (rects_intersect(client_dirty, layout.text_box)) {
+    if (ui_rects_intersect(client_dirty, layout.text_box)) {
         ui_draw_text_box(api, &state->theme, layout.text_box,
             state->mouse.present ? "Mouse PS/2 ativo" : "Mouse PS/2 nao detetado",
             state->active_control == HIT_NONE);
     }
-    if (rects_intersect(client_dirty, layout.status_box)) {
+    if (ui_rects_intersect(client_dirty, layout.status_box)) {
         ui_draw_panel(api, &state->theme, layout.status_box, 0);
         ui_draw_label(api, layout.status_box.x + 8, layout.status_box.y + 8, status, &state->theme, state->theme.face);
     }
-    if (rects_intersect(client_dirty, layout.ok_button.bounds)) {
+    if (ui_rects_intersect(client_dirty, layout.ok_button.bounds)) {
         ui_draw_button(api, &state->theme, &layout.ok_button);
     }
-    if (rects_intersect(client_dirty, layout.cancel_button.bounds)) {
+    if (ui_rects_intersect(client_dirty, layout.cancel_button.bounds)) {
         ui_draw_button(api, &state->theme, &layout.cancel_button);
     }
 }
 
 static void redraw_scene_region(const minidos_app_api_t* api, const demo_state_t* state, const char* status, ui_rect_t dirty) {
-    dirty = clamp_rect_to_screen(dirty, state->sw, state->sh);
-    if (rect_is_empty(dirty)) {
+    dirty = ui_rect_intersect(dirty, ui_rect_make(0, 0, state->sw, state->sh));
+    if (ui_rect_is_empty(dirty)) {
         return;
     }
 
     redraw_desktop_region(api, state, dirty);
     redraw_window_region(api, state, status, dirty);
+}
+
+static void redraw_scene_dirty_list(const minidos_app_api_t* api, const demo_state_t* state, const char* status,
+    const ui_dirty_list_t* dirty_list) {
+    int i;
+
+    if (!dirty_list) {
+        return;
+    }
+
+    for (i = 0; i < dirty_list->count; i++) {
+        redraw_scene_region(api, state, status, dirty_list->rects[i]);
+    }
 }
 
 int app_main(const minidos_app_api_t* api) {
@@ -524,16 +471,18 @@ int app_main(const minidos_app_api_t* api) {
     if (state.mouse.present) {
         ui_draw_cursor(api, state.mouse.x, state.mouse.y, state.theme.light, state.theme.dark_shadow);
     }
+    ui_present(api);
 
     while (1) {
         app_mouse_state_t previous_mouse = state.mouse;
         ui_rect_t previous_window_bounds = state.window.bounds;
-        ui_rect_t dirty = ui_rect_make(0, 0, 0, 0);
+        ui_dirty_list_t dirty_list;
         demo_layout_t layout;
         int previous_active_control = state.active_control;
         int previous_pointer_down_target = state.pointer_down_target;
         int event_mask;
 
+        ui_dirty_list_init(&dirty_list);
         str_copy(previous_status, status, sizeof(previous_status));
         event_mask = app_wait_event(api, state.mouse.seq);
 
@@ -541,6 +490,7 @@ int app_main(const minidos_app_api_t* api) {
             (void)app_mouse_state(api, &state.mouse);
             if (handle_mouse(&state, &previous_mouse, status, (int)sizeof(status))) {
                 app_gfx_clear(api, 0x000000u);
+                ui_present(api);
                 return 0;
             }
         }
@@ -550,6 +500,7 @@ int app_main(const minidos_app_api_t* api) {
             while (app_get_char_nonblock(api, &c)) {
                 if (handle_keyboard(&state, c, status, (int)sizeof(status))) {
                     app_gfx_clear(api, 0x000000u);
+                    ui_present(api);
                     return 0;
                 }
             }
@@ -561,28 +512,31 @@ int app_main(const minidos_app_api_t* api) {
             || previous_window_bounds.y != state.window.bounds.y
             || previous_window_bounds.w != state.window.bounds.w
             || previous_window_bounds.h != state.window.bounds.h) {
-            rect_include(&dirty, previous_window_bounds);
-            rect_include(&dirty, state.window.bounds);
+            ui_dirty_list_add_clipped(&dirty_list, previous_window_bounds, ui_rect_make(0, 0, state.sw, state.sh));
+            ui_dirty_list_add_clipped(&dirty_list, state.window.bounds, ui_rect_make(0, 0, state.sw, state.sh));
         }
 
         if (!str_equal(previous_status, status)) {
-            rect_include(&dirty, layout.status_box);
+            ui_dirty_list_add_clipped(&dirty_list, layout.status_box, ui_rect_make(0, 0, state.sw, state.sh));
         }
 
         if (previous_active_control != state.active_control
             || previous_pointer_down_target != state.pointer_down_target) {
-            rect_include(&dirty, layout.ok_button.bounds);
-            rect_include(&dirty, layout.cancel_button.bounds);
+            ui_dirty_list_add_clipped(&dirty_list, layout.ok_button.bounds, ui_rect_make(0, 0, state.sw, state.sh));
+            ui_dirty_list_add_clipped(&dirty_list, layout.cancel_button.bounds, ui_rect_make(0, 0, state.sw, state.sh));
         }
 
         if (event_mask & APP_EVENT_MOUSE) {
-            rect_include(&dirty, cursor_rect_from_mouse(&previous_mouse));
-            rect_include(&dirty, cursor_rect_from_mouse(&state.mouse));
+            ui_dirty_list_add_clipped(&dirty_list, cursor_rect_from_mouse(&previous_mouse), ui_rect_make(0, 0, state.sw, state.sh));
+            ui_dirty_list_add_clipped(&dirty_list, cursor_rect_from_mouse(&state.mouse), ui_rect_make(0, 0, state.sw, state.sh));
         }
 
-        redraw_scene_region(api, &state, status, dirty);
-        if (state.mouse.present && !rect_is_empty(dirty)) {
+        redraw_scene_dirty_list(api, &state, status, &dirty_list);
+        if (state.mouse.present && dirty_list.count > 0) {
             ui_draw_cursor(api, state.mouse.x, state.mouse.y, state.theme.light, state.theme.dark_shadow);
+        }
+        if (dirty_list.count > 0) {
+            ui_present(api);
         }
     }
 }

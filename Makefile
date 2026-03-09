@@ -6,19 +6,21 @@ AS = nasm
 OBJCOPY = objcopy
 QEMU = qemu-system-i386
 GDB = gdb
-CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -Isrc/kernel
-CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
-LDFLAGS = -m elf_i386 -T src/kernel/kernel.ld
 
 BOOT_DIR = src/boot
 KERNEL_DIR = src/kernel
+KERNEL_CORE_DIR = $(KERNEL_DIR)/core
 BUILD_DIR = build
 BOOTLOGO_DIR = assets/bootlogo
+KERNEL_INCLUDE_DIRS := $(shell find $(KERNEL_DIR) -type d | sort)
+CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib $(addprefix -I,$(KERNEL_INCLUDE_DIRS))
+CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
+LDFLAGS = -m elf_i386 -T $(KERNEL_CORE_DIR)/kernel.ld
 
-KERNEL_SOURCES_ALL = $(wildcard $(KERNEL_DIR)/*.c)
-KERNEL_SOURCES = $(KERNEL_DIR)/kernel.c $(filter-out $(KERNEL_DIR)/kernel.c $(KERNEL_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
+KERNEL_SOURCES_ALL := $(shell find $(KERNEL_DIR) -name '*.c' | sort)
+KERNEL_SOURCES = $(KERNEL_CORE_DIR)/kernel.c $(filter-out $(KERNEL_CORE_DIR)/kernel.c $(KERNEL_DIR)/storage/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
-KERNEL_ASM = $(BUILD_DIR)/entry.o
+KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o
 QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
 # Ensure drive.o is included
@@ -54,11 +56,17 @@ $(BUILD_DIR)/stage2.bin: $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 	$(AS) -f bin $< -o $@ -l $(BUILD_DIR)/stage2.lst
 
 # Kernel entry point (assembly)
-$(BUILD_DIR)/entry.o: $(KERNEL_DIR)/entry.asm | $(BUILD_DIR)
+$(BUILD_DIR)/core/entry.o: $(KERNEL_CORE_DIR)/entry.asm | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(AS) -f elf32 $< -o $@
+
+$(BUILD_DIR)/video/backbuffer_fill.o: $(KERNEL_DIR)/video/backbuffer_fill.asm | $(BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(AS) -f elf32 $< -o $@
 
 # Kernel objects
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Kernel ELF with symbols

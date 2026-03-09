@@ -36,7 +36,7 @@ def main():
         if args.expect_fault:
             _, matched = read_until(
                 proc,
-                ["[paging] #PF detected", "[paging] CR2=0x00500000"],
+                ["[paging] #PF detected", "[paging] CR2=0x00900000"],
                 args.timeout,
             )
             return 0 if matched else 1

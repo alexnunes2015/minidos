@@ -9,7 +9,13 @@
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
+#define LOWMEM_PAGE_TABLE_COUNT 2
+#define PAGING_TEST_FAULT_ADDR 0x00900000
+#define BOOT_VIDEO_FLAG_ADDR 0x0510
+#define BOOT_VIDEO_HEIGHT_ADDR 0x0514
+#define BOOT_VIDEO_PITCH_ADDR 0x0516
 #define BOOT_VIDEO_FB_ADDR 0x0520
+#define FB_PAGE_TABLE_COUNT 2
 #define STOP_PAGE_FAULT "STOP 0x0000000E"
 #define STOP_KERNEL_EXCEPTION "STOP 0x00000005"
 #define PIC1_COMMAND 0x20
@@ -32,11 +38,12 @@ struct idt_ptr {
 } __attribute__((packed));
 
 static unsigned int page_directory[1024] __attribute__((aligned(4096)));
-static unsigned int first_page_table[1024] __attribute__((aligned(4096)));
-static unsigned int fb_page_table[1024] __attribute__((aligned(4096)));
+static unsigned int lowmem_page_tables[LOWMEM_PAGE_TABLE_COUNT][1024] __attribute__((aligned(4096)));
+static unsigned int fb_page_tables[FB_PAGE_TABLE_COUNT][1024] __attribute__((aligned(4096)));
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 static int interrupt_handlers_ready = 0;
+static int page_fault_in_progress = 0;
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char value;
@@ -57,6 +64,18 @@ static inline unsigned int read_cr2(void) {
 static inline unsigned int read_phys_u32(unsigned int addr) {
     unsigned int value;
     __asm__ volatile ("movl (%1), %0" : "=r"(value) : "r"(addr) : "memory");
+    return value;
+}
+
+static inline unsigned short read_phys_u16(unsigned int addr) {
+    unsigned short value;
+    __asm__ volatile ("movw (%1), %0" : "=r"(value) : "r"(addr) : "memory");
+    return value;
+}
+
+static inline unsigned char read_phys_u8(unsigned int addr) {
+    unsigned char value;
+    __asm__ volatile ("movb (%1), %0" : "=r"(value) : "r"(addr) : "memory");
     return value;
 }
 
@@ -147,6 +166,12 @@ static void bsod_wait_key_then_reboot(void) {
 
 __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, unsigned int eip) {
     unsigned int cr2 = read_cr2();
+
+    if (page_fault_in_progress) {
+        log_serial_raw("[paging] nested #PF halt\n");
+        panic_halt();
+    }
+    page_fault_in_progress = 1;
 
     log_serial_raw("[paging] #PF detected\n");
     log_serial_raw("[paging] CR2=");
@@ -328,24 +353,68 @@ ISR_NOERR_STUB(irq15, 47)
 
 static void paging_setup_structures(void) {
     unsigned int fb_addr;
+    unsigned int fb_size = 0;
 
     for (int i = 0; i < 1024; i++) {
-        first_page_table[i] = (i * 0x1000) | PAGE_PRESENT | PAGE_RW;
-        fb_page_table[i] = 0;
         page_directory[i] = 0;
     }
-
-    page_directory[0] = ((unsigned int)first_page_table) | PAGE_PRESENT | PAGE_RW;
-
-    fb_addr = read_phys_u32(BOOT_VIDEO_FB_ADDR);
-    if (fb_addr >= 0x00400000) {
-        unsigned int fb_base = fb_addr & 0xFFC00000;
-        unsigned int pd_index = fb_base >> 22;
+    for (int table = 0; table < LOWMEM_PAGE_TABLE_COUNT; table++) {
+        unsigned int region_base = table << 22;
 
         for (int i = 0; i < 1024; i++) {
-            fb_page_table[i] = (fb_base + (i * 0x1000)) | PAGE_PRESENT | PAGE_RW;
+            lowmem_page_tables[table][i] = (region_base + (i * 0x1000)) | PAGE_PRESENT | PAGE_RW;
         }
-        page_directory[pd_index] = ((unsigned int)fb_page_table) | PAGE_PRESENT | PAGE_RW;
+        page_directory[table] = ((unsigned int)lowmem_page_tables[table]) | PAGE_PRESENT | PAGE_RW;
+    }
+    for (int table = 0; table < FB_PAGE_TABLE_COUNT; table++) {
+        for (int i = 0; i < 1024; i++) {
+            fb_page_tables[table][i] = 0;
+        }
+    }
+
+    fb_addr = read_phys_u32(BOOT_VIDEO_FB_ADDR);
+    if (read_phys_u8(BOOT_VIDEO_FLAG_ADDR) == 1) {
+        unsigned int height = read_phys_u16(BOOT_VIDEO_HEIGHT_ADDR);
+        unsigned int pitch = read_phys_u16(BOOT_VIDEO_PITCH_ADDR);
+
+        if (height != 0 && pitch != 0) {
+            fb_size = height * pitch;
+        }
+    }
+
+    if (fb_addr != 0 && fb_size != 0) {
+        unsigned int fb_end = fb_addr + fb_size - 1;
+        unsigned int start_pd = fb_addr >> 22;
+        unsigned int end_pd = fb_end >> 22;
+        int table = 0;
+
+        log_serial_raw("[paging] fbmap addr=");
+        serial_print_hex(fb_addr);
+        log_serial_raw(" size=");
+        serial_print_hex(fb_size);
+        log_serial_raw(" start_pd=");
+        serial_print_hex(start_pd);
+        log_serial_raw(" end_pd=");
+        serial_print_hex(end_pd);
+        log_serial_raw("\n");
+
+        for (unsigned int pd_index = start_pd; pd_index <= end_pd; pd_index++) {
+            unsigned int region_base;
+
+            if (pd_index == 0) {
+                continue;
+            }
+            if (table >= FB_PAGE_TABLE_COUNT) {
+                break;
+            }
+
+            region_base = pd_index << 22;
+            for (int i = 0; i < 1024; i++) {
+                fb_page_tables[table][i] = (region_base + (i * 0x1000)) | PAGE_PRESENT | PAGE_RW;
+            }
+            page_directory[pd_index] = ((unsigned int)fb_page_tables[table]) | PAGE_PRESENT | PAGE_RW;
+            table++;
+        }
     }
 }
 
@@ -453,7 +522,7 @@ int paging_init(void) {
 #ifdef PAGING_TEST_PF
     log_serial_raw("[paging] triggering #PF test\n");
     {
-        volatile unsigned int* bad = (volatile unsigned int*)0x500000;
+        volatile unsigned int* bad = (volatile unsigned int*)PAGING_TEST_FAULT_ADDR;
         volatile unsigned int value = *bad;
         (void)value;
     }

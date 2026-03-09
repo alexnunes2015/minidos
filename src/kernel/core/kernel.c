@@ -1,6 +1,6 @@
 #include "video.h"
 #include "keyboard.h"
-#include "shell.h"
+#include "shell/shell.h"
 #include "disk.h"
 #include "drive.h"
 #include "fat16.h"

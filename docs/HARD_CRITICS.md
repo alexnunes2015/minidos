@@ -12,9 +12,9 @@ Se alguem tentasse chamar isto de base seria para um sistema serio, a resposta c
 
 ## 1. Arquitetura: acoplamento excessivo e fronteiras fracas
 
-- `src/kernel/shell.c` com 2209 linhas e `src/kernel/fat16.c` com 1643 linhas sao sinais de ausencia de modularidade, nao de produtividade. Quando um shell vira um centro de gravidade desse tamanho, o projeto perdeu fronteiras arquiteturais.
-- `src/kernel/video.c` com 734 linhas, `src/kernel/keyboard.c` com 683, `src/kernel/paging.c` com 479, `src/kernel/disk.c` com 420 e `src/boot/stage2.asm` com 442 mostram o mesmo padrao: componentes criticos crescem por acumulacao, sem decomposicao clara.
-- `src/kernel/kernel.c` mistura boot UX, panic flow, leitura de input, script autorun e coordenacao de subsistemas. Isto nao e um "kernel main" enxuto; e um ponto de acoplamento que facilita regressao em cadeia.
+- A antiga estrutura plana de `src/kernel/` era um sintoma claro de falta de fronteiras. A organização por subsistema melhora navegação e ownership, e `src/kernel/storage/fat16.c` ja começou a ser dividido por responsabilidade, mas ainda restam modulos grandes a decompor de forma equivalente.
+- `src/kernel/video/video.c`, `src/kernel/input/keyboard.c`, `src/kernel/memory/paging.c`, `src/kernel/storage/disk.c` e `src/boot/stage2.asm` ainda mostram o mesmo padrao: componentes criticos crescem por acumulacao, sem decomposicao clara.
+- `src/kernel/core/kernel.c` continua a misturar boot UX, panic flow, leitura de input, script autorun e coordenacao de subsistemas. Isto nao e um "kernel main" enxuto; e um ponto de acoplamento que facilita regressao em cadeia.
 - A presenca de helpers repetidos de baixo nivel (`inb`, `outb`, leitura fisica, parsing utilitario) espalhados por multiplos ficheiros sugere falta de uma camada minima de infraestrutura comum. Cada modulo parece resolver sozinho problemas que deveriam ter dono unico.
 
 Conclusao: a base esta a crescer lateralmente, nao verticalmente. O resultado inevitavel disso e manutencao lenta, debugging caro e regressao escondida.
@@ -22,7 +22,7 @@ Conclusao: a base esta a crescer lateralmente, nao verticalmente. O resultado in
 ## 2. O projeto fala como sistema, mas entrega como prototipo
 
 - `docs/DESIGN.md` e `docs/ROADMAP.md` usam linguagem de sistema estabilizado em varias areas, mas o codigo exposto ainda tem cheiro claro de fase experimental.
-- A Fase 5 esta marcada como concluida, mas `src/kernel/process.c` tem 16 linhas e basicamente so converte estados para texto. Isso nao invalida o trabalho restante em `scheduler.c`, mas revela um problema de criterio: o projeto celebra marcos cedo demais.
+- A Fase 5 esta marcada como concluida, mas `src/kernel/process/process.c` tem 16 linhas e basicamente so converte estados para texto. Isso nao invalida o trabalho restante em `src/kernel/process/scheduler.c`, mas revela um problema de criterio: o projeto celebra marcos cedo demais.
 - O scheduler atual trabalha com `SCHED_MAX_PROCS 3`, stacks fixas em arrays locais e um self-test interno. Isso pode ser um bom experimento. Nao pode ser vendido com linguagem que sugira preparacao robusta para multitarefa real.
 - O proprio design admite "runtime process population is still minimal" e "scheduler coverage is currently driven mostly by self-tests". Traducao honesta: ainda nao existe base operacional madura, existe uma prova de conceito com logs convincentes.
 
@@ -30,7 +30,7 @@ Conclusao: o projeto sofre de inflacao narrativa. Quando a documentacao promete 
 
 ## 3. O caminho "floppy-first" esta mal resolvido
 
-- O projeto afirma identidade "floppy-first", mas `src/kernel/fat12.c` esta literalmente vazio com a nota "FAT12 support removed". Isso nao e um detalhe; e uma contradicao de produto.
+- O projeto afirma identidade "floppy-first", mas `src/kernel/storage/fat12.c` esta literalmente vazio com a nota "FAT12 support removed". Isso nao e um detalhe; e uma contradicao de produto.
 - Falar em inspiracao MS-DOS e em media principal por floppy enquanto a stack real empurra ATA, BIOS thunk e FAT16 e uma confusao de direcao tecnica.
 - Se o boot medio principal e a disquete, remover FAT12 e continuar a discursar como se isso fosse apenas um detalhe arquitetural e falta de honestidade tecnica.
 
