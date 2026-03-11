@@ -38,7 +38,7 @@ KERNEL_SOURCE_DIRS = \
 KERNEL_SOURCES_ALL := $(shell find $(KERNEL_SOURCE_DIRS) -name '*.c' | sort)
 KERNEL_SOURCES = $(filter-out $(KERNEL_STORAGE_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
-KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o
+KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BUILD_DIR)/video/backbuffer_present.o
 QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
 # Ensure drive.o is included
@@ -79,6 +79,10 @@ $(BUILD_DIR)/core/entry.o: $(KERNEL_CORE_DIR)/entry.asm | $(BUILD_DIR)
 	$(AS) -f elf32 $< -o $@
 
 $(BUILD_DIR)/video/backbuffer_fill.o: $(KERNEL_DIR)/video/backbuffer_fill.asm | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(AS) -f elf32 $< -o $@
+
+$(BUILD_DIR)/video/backbuffer_present.o: $(KERNEL_DIR)/video/backbuffer_present.asm | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(AS) -f elf32 $< -o $@
 

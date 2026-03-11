@@ -8,7 +8,7 @@ unsigned char sector_buffer[SECTOR_SIZE];
 static unsigned char fat_sector_buffer_aux[SECTOR_SIZE];
 
 static int current_drive_letter = 0;  // A:
-static int fat16_debug_enabled = 1;
+static int fat16_debug_enabled = 0;
 static unsigned int current_fat_type = FAT_TYPE_16;
 
 static unsigned int get_total_sectors(void);

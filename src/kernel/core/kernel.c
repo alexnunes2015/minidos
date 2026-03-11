@@ -24,6 +24,10 @@ static const unsigned int BOOT_PROGRESS_STEP_MS = 50;
 #define AUTO_SCRIPT_MAX     2048
 #define AUTO_LINE_MAX       64
 
+#ifndef SHELL_COMMAND_TRACE
+#define SHELL_COMMAND_TRACE 0
+#endif
+
 typedef enum {
     CMD_INPUT_NONE = 0,
     CMD_INPUT_SERIAL = 1,
@@ -390,9 +394,15 @@ void kernel_main() {
             log_write(LOG_LEVEL_DEBUG, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
         }
         
-        log_write(LOG_LEVEL_INFO, "shell", "Command: ", LOG_DEST_SERIAL);
-        log_serial_raw(command);
-        log_serial_raw("\n");
+        if (input == CMD_INPUT_SERIAL) {
+            log_serial_raw("Command: ");
+            log_serial_raw(command);
+            log_serial_raw("\n");
+        } else if (SHELL_COMMAND_TRACE) {
+            log_write(LOG_LEVEL_DEBUG, "shell", "Command: ", LOG_DEST_SERIAL);
+            log_serial_raw(command);
+            log_serial_raw("\n");
+        }
         
         shell_execute(command);
     }

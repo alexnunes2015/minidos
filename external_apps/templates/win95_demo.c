@@ -8,7 +8,7 @@
 #define CURSOR_H  12
 
 static const char k_intro_line_1[] = "GUI CLASSICA DISPONIVEL.";
-static const char k_intro_line_2[] = "Rato: clique, arrasto na barra de titulo, TAB/ENTER ainda funcionam.";
+static const char k_intro_line_2[] = "Rato: clique e arraste. TAB/ENTER navegam.";
 static const char k_intro_line_3[] = "ESC, Q, Cancel ou X saem da demo.";
 
 enum {
@@ -157,7 +157,7 @@ static int hit_test(const demo_state_t* state, int x, int y) {
 
 static int activate_hit(int hit, char* status, int status_len) {
     if (hit == HIT_OK) {
-        str_copy(status, "OK clicado. Fluxo grafico pronto para evoluir.", status_len);
+        str_copy(status, "OK clicado. Fluxo grafico pronto.", status_len);
         return 0;
     }
     if (hit == HIT_CANCEL || hit == HIT_CLOSE) {
@@ -338,58 +338,43 @@ static void redraw_title_bar(const minidos_app_api_t* api, const demo_state_t* s
 static void redraw_window_region(const minidos_app_api_t* api, const demo_state_t* state, const char* status, ui_rect_t dirty) {
     demo_layout_t layout;
     ui_rect_t title_rect;
-    ui_rect_t close_rect;
     ui_rect_t client_dirty;
-    int dirty_right;
-    int dirty_bottom;
 
     build_layout(state, &layout);
     if (!ui_rects_intersect(dirty, state->window.bounds)) {
         return;
     }
 
+    /* Clip dirty to the window; anything outside is handled by
+     * redraw_desktop_region which runs before us. */
+    dirty = ui_rect_intersect(dirty, state->window.bounds);
+    if (ui_rect_is_empty(dirty)) {
+        return;
+    }
+
     title_rect = ui_window_title_bar_rect(&state->window);
-    close_rect = ui_window_close_button_rect(&state->window);
-    dirty_right = dirty.x + dirty.w - 1;
-    dirty_bottom = dirty.y + dirty.h - 1;
 
-    /* Dirty extends outside the outer window boundary (e.g. window was
-     * dragged, or cursor crosses the window edge from the desktop).
-     * A full repaint is required. */
-    if (!ui_rect_contains_rect(&state->window.bounds, &dirty)
-        || !ui_rect_contains(&state->window.bounds, dirty_right, dirty_bottom)) {
-        ui_draw_window(api, &state->theme, &state->window);
-        draw_window_contents(api, state, status, &layout);
-        return;
+    /* Fast path: dirty is fully inside the client area.
+     * Only repaint the affected widgets — no border, no title. */
+    if (ui_rect_contains_rect(&layout.client, &dirty)) {
+        client_dirty = dirty;
+        goto partial_client;
     }
 
-    /* --- dirty is fully inside window.bounds --- */
-
-    /* Title bar / close button dirtied: redraw only those elements.
-     * This is the common case when the cursor moves over the title bar;
-     * it must NOT trigger a full window + contents repaint. */
-    if (ui_rects_intersect(dirty, title_rect) || ui_rects_intersect(dirty, close_rect)) {
+    /* Fast path: dirty is fully inside the title bar. */
+    if (ui_rect_contains_rect(&title_rect, &dirty)) {
         redraw_title_bar(api, state);
-    }
-
-    /* Window border strips (between window.bounds edge and layout.client)
-     * dirtied but not by a title-bar overlap: redraw the panel bevel and
-     * restore the title that ui_draw_panel would overwrite. */
-    if (!ui_rect_contains_rect(&layout.client, &dirty)
-        || !ui_rect_contains(&layout.client, dirty_right, dirty_bottom)) {
-        if (!ui_rects_intersect(dirty, title_rect) && !ui_rects_intersect(dirty, close_rect)) {
-            /* Border strip only – cheap: redraw panel bevel then title. */
-            ui_draw_panel(api, &state->theme, state->window.bounds, 1);
-            redraw_title_bar(api, state);
-        }
-    }
-
-    /* Partial client area redraw clipped to layout.client */
-    client_dirty = ui_rect_intersect(dirty, layout.client);
-    if (ui_rect_is_empty(client_dirty)) {
         return;
     }
 
+    /* Dirty spans the border, title, or multiple zones.
+     * Full window repaint is the safest approach and still fast
+     * thanks to the backbuffer + assembly present. */
+    ui_draw_window(api, &state->theme, &state->window);
+    draw_window_contents(api, state, status, &layout);
+    return;
+
+partial_client:
     ui_fill_rect(api, client_dirty, state->theme.field_bg);
 
     if (ui_rects_intersect(client_dirty, layout.label_1)) {
@@ -466,7 +451,7 @@ int app_main(const minidos_app_api_t* api) {
     state.window.active = 1;
     state.window.has_close_button = 1;
     (void)app_mouse_state(api, &state.mouse);
-    str_copy(status, state.mouse.present ? "Mouse pronto. Clica em OK, Cancel ou na barra de titulo." : "Sem mouse. Teclado continua funcional.", sizeof(status));
+    str_copy(status, state.mouse.present ? "Mouse pronto. Usa OK, Cancel ou barra." : "Sem mouse. Teclado continua funcional.", sizeof(status));
     draw_demo_full(api, &state, status);
     if (state.mouse.present) {
         ui_draw_cursor(api, state.mouse.x, state.mouse.y, state.theme.light, state.theme.dark_shadow);
@@ -512,7 +497,13 @@ int app_main(const minidos_app_api_t* api) {
             || previous_window_bounds.y != state.window.bounds.y
             || previous_window_bounds.w != state.window.bounds.w
             || previous_window_bounds.h != state.window.bounds.h) {
+            /* Window moved or resized: mark the old position for desktop
+             * restore and force a full window redraw at the new position
+             * so that all labels and widgets are repainted correctly. */
             ui_dirty_list_add_clipped(&dirty_list, previous_window_bounds, ui_rect_make(0, 0, state.sw, state.sh));
+            redraw_desktop_region(api, &state, ui_rect_intersect(previous_window_bounds, ui_rect_make(0, 0, state.sw, state.sh)));
+            ui_draw_window(api, &state.theme, &state.window);
+            draw_window_contents(api, &state, status, &layout);
             ui_dirty_list_add_clipped(&dirty_list, state.window.bounds, ui_rect_make(0, 0, state.sw, state.sh));
         }
 
