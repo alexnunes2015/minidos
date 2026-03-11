@@ -2,10 +2,13 @@
 #define MINIDOS_UI_H
 
 #include "minidos_app.h"
+#include "minidos_cursor_bitmap.h"
 
 #define UI_CHAR_W 8
 #define UI_CHAR_H 8
 #define UI_DIRTY_RECTS_MAX 8
+#define UI_WM_MAX_WINDOWS 8
+#define UI_WM_MAX_CONTROLS 64
 
 typedef struct {
     int x;
@@ -53,6 +56,46 @@ typedef struct {
     int focused;
     int enabled;
 } ui_button_t;
+
+enum {
+    UI_CONTROL_LABEL = 1,
+    UI_CONTROL_BUTTON = 2,
+    UI_CONTROL_TEXTINPUT = 3,
+};
+
+typedef struct {
+    int id;
+    int type;
+    int window_id;
+    ui_rect_t bounds;
+    const char* text;
+    char* text_buffer;
+    int text_buffer_len;
+    int text_len;
+    int visible;
+    int enabled;
+    int focused;
+    int pressed;
+} ui_control_t;
+
+typedef struct {
+    int id;
+    ui_window_t window;
+    int visible;
+    int z_order;
+} ui_wm_window_t;
+
+typedef struct {
+    ui_theme_t theme;
+    ui_wm_window_t windows[UI_WM_MAX_WINDOWS];
+    ui_control_t controls[UI_WM_MAX_CONTROLS];
+    int window_count;
+    int control_count;
+    int next_window_id;
+    int next_control_id;
+    int active_window_id;
+    int focused_control_id;
+} ui_window_manager_t;
 
 static inline int ui_strlen(const char* s) {
     int n = 0;
@@ -420,6 +463,448 @@ static inline int ui_window_hit_title(const ui_window_t* window, int x, int y) {
     return window && ui_rect_contains(&title_rect, x, y) && !ui_window_hit_close(window, x, y);
 }
 
+static inline void ui_draw_button(const minidos_app_api_t* api, const ui_theme_t* theme, const ui_button_t* button);
+static inline void ui_draw_window(const minidos_app_api_t* api, const ui_theme_t* theme, const ui_window_t* window);
+static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_t* theme, int width, int height, const char* title);
+
+static inline ui_wm_window_t* ui_wm_find_window(ui_window_manager_t* wm, int window_id) {
+    int i;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->window_count; i++) {
+        if (wm->windows[i].id == window_id) {
+            return &wm->windows[i];
+        }
+    }
+    return 0;
+}
+
+static inline const ui_wm_window_t* ui_wm_find_window_const(const ui_window_manager_t* wm, int window_id) {
+    int i;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->window_count; i++) {
+        if (wm->windows[i].id == window_id) {
+            return &wm->windows[i];
+        }
+    }
+    return 0;
+}
+
+static inline ui_control_t* ui_wm_find_control(ui_window_manager_t* wm, int control_id) {
+    int i;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->control_count; i++) {
+        if (wm->controls[i].id == control_id) {
+            return &wm->controls[i];
+        }
+    }
+    return 0;
+}
+
+static inline const ui_control_t* ui_wm_find_control_const(const ui_window_manager_t* wm, int control_id) {
+    int i;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->control_count; i++) {
+        if (wm->controls[i].id == control_id) {
+            return &wm->controls[i];
+        }
+    }
+    return 0;
+}
+
+static inline void ui_wm_init(ui_window_manager_t* wm, ui_theme_t theme) {
+    int i;
+    if (!wm) {
+        return;
+    }
+    wm->theme = theme;
+    wm->window_count = 0;
+    wm->control_count = 0;
+    wm->next_window_id = 1;
+    wm->next_control_id = 1;
+    wm->active_window_id = 0;
+    wm->focused_control_id = 0;
+    for (i = 0; i < UI_WM_MAX_WINDOWS; i++) {
+        wm->windows[i].id = 0;
+        wm->windows[i].visible = 0;
+        wm->windows[i].z_order = 0;
+    }
+    for (i = 0; i < UI_WM_MAX_CONTROLS; i++) {
+        wm->controls[i].id = 0;
+        wm->controls[i].visible = 0;
+        wm->controls[i].enabled = 0;
+    }
+}
+
+static inline void ui_wm_set_active_window(ui_window_manager_t* wm, int window_id) {
+    int i;
+    if (!wm) {
+        return;
+    }
+    wm->active_window_id = window_id;
+    for (i = 0; i < wm->window_count; i++) {
+        wm->windows[i].window.active = (wm->windows[i].id == window_id);
+    }
+}
+
+static inline int ui_wm_create_window(ui_window_manager_t* wm, ui_rect_t bounds, const char* title, int has_close_button) {
+    ui_wm_window_t* entry;
+    int id;
+
+    if (!wm || wm->window_count >= UI_WM_MAX_WINDOWS) {
+        return 0;
+    }
+
+    entry = &wm->windows[wm->window_count];
+    id = wm->next_window_id++;
+
+    entry->id = id;
+    entry->window.bounds = bounds;
+    entry->window.title = title;
+    entry->window.active = 0;
+    entry->window.has_close_button = has_close_button;
+    entry->visible = 1;
+    entry->z_order = wm->window_count;
+    wm->window_count++;
+
+    ui_wm_set_active_window(wm, id);
+    return id;
+}
+
+static inline void ui_wm_bring_to_front(ui_window_manager_t* wm, int window_id) {
+    int i;
+    int max_z = -1;
+    ui_wm_window_t* target = ui_wm_find_window(wm, window_id);
+    if (!wm || !target) {
+        return;
+    }
+    for (i = 0; i < wm->window_count; i++) {
+        if (wm->windows[i].z_order > max_z) {
+            max_z = wm->windows[i].z_order;
+        }
+    }
+    target->z_order = max_z + 1;
+    ui_wm_set_active_window(wm, window_id);
+}
+
+static inline ui_control_t* ui_wm_alloc_control(ui_window_manager_t* wm, int type, int window_id, ui_rect_t bounds) {
+    ui_control_t* control;
+    if (!wm || wm->control_count >= UI_WM_MAX_CONTROLS || !ui_wm_find_window(wm, window_id)) {
+        return 0;
+    }
+    control = &wm->controls[wm->control_count++];
+    control->id = wm->next_control_id++;
+    control->type = type;
+    control->window_id = window_id;
+    control->bounds = bounds;
+    control->text = "";
+    control->text_buffer = 0;
+    control->text_buffer_len = 0;
+    control->text_len = 0;
+    control->visible = 1;
+    control->enabled = 1;
+    control->focused = 0;
+    control->pressed = 0;
+    return control;
+}
+
+static inline int ui_wm_add_label(ui_window_manager_t* wm, int window_id, ui_rect_t bounds, const char* text) {
+    ui_control_t* control = ui_wm_alloc_control(wm, UI_CONTROL_LABEL, window_id, bounds);
+    if (!control) {
+        return 0;
+    }
+    control->text = text ? text : "";
+    return control->id;
+}
+
+static inline int ui_wm_add_button(ui_window_manager_t* wm, int window_id, ui_rect_t bounds, const char* text) {
+    ui_control_t* control = ui_wm_alloc_control(wm, UI_CONTROL_BUTTON, window_id, bounds);
+    if (!control) {
+        return 0;
+    }
+    control->text = text ? text : "";
+    return control->id;
+}
+
+static inline int ui_wm_add_textinput(ui_window_manager_t* wm, int window_id, ui_rect_t bounds, char* text_buffer, int text_buffer_len) {
+    ui_control_t* control;
+    int len = 0;
+
+    if (!text_buffer || text_buffer_len <= 0) {
+        return 0;
+    }
+
+    control = ui_wm_alloc_control(wm, UI_CONTROL_TEXTINPUT, window_id, bounds);
+    if (!control) {
+        return 0;
+    }
+
+    while (len < (text_buffer_len - 1) && text_buffer[len] != '\0') {
+        len++;
+    }
+    text_buffer[len] = '\0';
+
+    control->text = text_buffer;
+    control->text_buffer = text_buffer;
+    control->text_buffer_len = text_buffer_len;
+    control->text_len = len;
+    return control->id;
+}
+
+static inline ui_rect_t ui_wm_control_abs_bounds(const ui_window_manager_t* wm, const ui_control_t* control) {
+    const ui_wm_window_t* win;
+    ui_rect_t client;
+
+    if (!wm || !control) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    win = ui_wm_find_window_const(wm, control->window_id);
+    if (!win) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    client = ui_window_client_rect(&win->window);
+    return ui_rect_make(client.x + control->bounds.x, client.y + control->bounds.y, control->bounds.w, control->bounds.h);
+}
+
+static inline void ui_wm_set_focus_control(ui_window_manager_t* wm, int control_id) {
+    int i;
+    if (!wm) {
+        return;
+    }
+    wm->focused_control_id = control_id;
+    for (i = 0; i < wm->control_count; i++) {
+        wm->controls[i].focused = (wm->controls[i].id == control_id);
+    }
+}
+
+static inline int ui_wm_hit_test_control(const ui_window_manager_t* wm, int window_id, int x, int y) {
+    int i;
+    int found_id = 0;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->control_count; i++) {
+        const ui_control_t* control = &wm->controls[i];
+        ui_rect_t abs_bounds;
+        if (!control->visible || !control->enabled || control->window_id != window_id) {
+            continue;
+        }
+        abs_bounds = ui_wm_control_abs_bounds(wm, control);
+        if (ui_rect_contains(&abs_bounds, x, y)) {
+            found_id = control->id;
+        }
+    }
+    return found_id;
+}
+
+static inline int ui_wm_top_window_at(const ui_window_manager_t* wm, int x, int y) {
+    int i;
+    int best_id = 0;
+    int best_z = -2147483647;
+    if (!wm) {
+        return 0;
+    }
+    for (i = 0; i < wm->window_count; i++) {
+        const ui_wm_window_t* win = &wm->windows[i];
+        if (!win->visible) {
+            continue;
+        }
+        if (ui_rect_contains(&win->window.bounds, x, y) && win->z_order >= best_z) {
+            best_z = win->z_order;
+            best_id = win->id;
+        }
+    }
+    return best_id;
+}
+
+static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, int left_down, int left_pressed,
+    int left_released, int* out_window_id, int* out_control_id, int* out_hit_close) {
+    int i;
+    int top_window_id;
+    ui_wm_window_t* window;
+    int control_id;
+
+    if (!wm) {
+        return 0;
+    }
+    if (out_window_id) {
+        *out_window_id = 0;
+    }
+    if (out_control_id) {
+        *out_control_id = 0;
+    }
+    if (out_hit_close) {
+        *out_hit_close = 0;
+    }
+
+    top_window_id = ui_wm_top_window_at(wm, x, y);
+    if (!top_window_id) {
+        if (left_released) {
+            for (i = 0; i < wm->control_count; i++) {
+                wm->controls[i].pressed = 0;
+            }
+        }
+        return 0;
+    }
+
+    window = ui_wm_find_window(wm, top_window_id);
+    if (!window || !window->visible) {
+        return 0;
+    }
+
+    if (left_pressed) {
+        ui_wm_bring_to_front(wm, top_window_id);
+    }
+    if (out_window_id) {
+        *out_window_id = top_window_id;
+    }
+
+    if (ui_window_hit_close(&window->window, x, y)) {
+        if (out_hit_close) {
+            *out_hit_close = 1;
+        }
+        return left_released ? 1 : 0;
+    }
+
+    control_id = ui_wm_hit_test_control(wm, top_window_id, x, y);
+    if (control_id) {
+        ui_control_t* control = ui_wm_find_control(wm, control_id);
+        if (control && left_pressed) {
+            ui_wm_set_focus_control(wm, control_id);
+            if (control->type == UI_CONTROL_BUTTON) {
+                control->pressed = left_down ? 1 : 0;
+            }
+        }
+
+        if (control && control->type == UI_CONTROL_BUTTON && left_down) {
+            control->pressed = 1;
+        }
+
+        if (control && left_released) {
+            int activated = control->pressed && (control->type == UI_CONTROL_BUTTON);
+            control->pressed = 0;
+            if (out_control_id) {
+                *out_control_id = control_id;
+            }
+            return activated ? 1 : 0;
+        }
+
+        if (out_control_id) {
+            *out_control_id = control_id;
+        }
+    }
+
+    if (left_released) {
+        for (i = 0; i < wm->control_count; i++) {
+            wm->controls[i].pressed = 0;
+        }
+    }
+
+    return 0;
+}
+
+static inline int ui_wm_dispatch_key(ui_window_manager_t* wm, char key) {
+    ui_control_t* focused;
+
+    if (!wm || wm->focused_control_id == 0) {
+        return 0;
+    }
+
+    focused = ui_wm_find_control(wm, wm->focused_control_id);
+    if (!focused || focused->type != UI_CONTROL_TEXTINPUT || !focused->enabled || !focused->text_buffer || focused->text_buffer_len <= 0) {
+        return 0;
+    }
+
+    if (key == 8) {
+        if (focused->text_len > 0) {
+            focused->text_len--;
+            focused->text_buffer[focused->text_len] = '\0';
+            return 1;
+        }
+        return 0;
+    }
+
+    if (key >= 32 && key <= 126) {
+        if (focused->text_len < (focused->text_buffer_len - 1)) {
+            focused->text_buffer[focused->text_len++] = key;
+            focused->text_buffer[focused->text_len] = '\0';
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static inline void ui_wm_close_window(ui_window_manager_t* wm, int window_id) {
+    int i;
+    if (!wm) {
+        return;
+    }
+    for (i = 0; i < wm->window_count; i++) {
+        if (wm->windows[i].id == window_id) {
+            wm->windows[i].visible = 0;
+            if (wm->active_window_id == window_id) {
+                wm->active_window_id = 0;
+            }
+            break;
+        }
+    }
+}
+
+static inline void ui_wm_draw(const minidos_app_api_t* api, const ui_window_manager_t* wm, int screen_w, int screen_h, const char* desktop_title) {
+    int i;
+    int z;
+    if (!wm) {
+        return;
+    }
+
+    ui_draw_desktop(api, &wm->theme, screen_w, screen_h, desktop_title);
+
+    for (z = 0; z <= (wm->window_count + 2); z++) {
+        for (i = 0; i < wm->window_count; i++) {
+            const ui_wm_window_t* win = &wm->windows[i];
+            int c;
+            if (!win->visible || win->z_order != z) {
+                continue;
+            }
+
+            ui_draw_window(api, &wm->theme, &win->window);
+
+            for (c = 0; c < wm->control_count; c++) {
+                const ui_control_t* control = &wm->controls[c];
+                ui_rect_t abs_bounds;
+                if (!control->visible || control->window_id != win->id) {
+                    continue;
+                }
+                abs_bounds = ui_wm_control_abs_bounds(wm, control);
+
+                if (control->type == UI_CONTROL_LABEL) {
+                    ui_draw_label(api, abs_bounds.x, abs_bounds.y, control->text ? control->text : "", &wm->theme, wm->theme.field_bg);
+                } else if (control->type == UI_CONTROL_BUTTON) {
+                    ui_button_t button;
+                    button.bounds = abs_bounds;
+                    button.label = control->text ? control->text : "";
+                    button.pressed = control->pressed;
+                    button.focused = control->focused;
+                    button.enabled = control->enabled;
+                    ui_draw_button(api, &wm->theme, &button);
+                } else if (control->type == UI_CONTROL_TEXTINPUT) {
+                    ui_draw_text_box(api, &wm->theme, abs_bounds, control->text ? control->text : "", control->focused);
+                }
+            }
+        }
+    }
+}
+
 static inline void ui_draw_button(const minidos_app_api_t* api, const ui_theme_t* theme, const ui_button_t* button) {
     ui_rect_t inner;
     unsigned int fg;
@@ -515,14 +1000,24 @@ static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_
 }
 
 static inline void ui_draw_cursor(const minidos_app_api_t* api, int x, int y, unsigned int fill, unsigned int outline) {
-    ui_fill_rect(api, ui_rect_make(x, y, 1, 12), outline);
-    ui_fill_rect(api, ui_rect_make(x + 1, y + 1, 1, 10), fill);
-    ui_fill_rect(api, ui_rect_make(x + 2, y + 2, 1, 8), fill);
-    ui_fill_rect(api, ui_rect_make(x + 3, y + 3, 1, 6), fill);
-    ui_fill_rect(api, ui_rect_make(x + 4, y + 4, 1, 4), fill);
-    ui_fill_rect(api, ui_rect_make(x + 5, y + 5, 1, 2), fill);
-    ui_fill_rect(api, ui_rect_make(x + 2, y + 10, 4, 1), outline);
-    ui_fill_rect(api, ui_rect_make(x + 3, y + 11, 3, 1), outline);
+    int row;
+    int col;
+    int draw_x = x - UI_CURSOR_HOTSPOT_X;
+    int draw_y = y - UI_CURSOR_HOTSPOT_Y;
+
+    for (row = 0; row < UI_CURSOR_BITMAP_HEIGHT; row++) {
+        for (col = 0; col < UI_CURSOR_BITMAP_WIDTH; col++) {
+            unsigned char pixel = ui_cursor_bitmap[(row * UI_CURSOR_BITMAP_WIDTH) + col];
+            unsigned int color;
+
+            if (pixel == UI_CURSOR_PIXEL_TRANSPARENT) {
+                continue;
+            }
+
+            color = (pixel == UI_CURSOR_PIXEL_OUTLINE) ? outline : fill;
+            ui_fill_rect(api, ui_rect_make(draw_x + col, draw_y + row, 1, 1), color);
+        }
+    }
 }
 
 #endif

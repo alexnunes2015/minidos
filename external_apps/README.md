@@ -44,6 +44,10 @@ The utility will:
 1. Build a 32-bit ELF app.
 2. Copy it to `A:` inside `minidos.img` as `.ELF`.
 
+If `assets/cursor/cursor.png` exists, the app build also regenerates
+`external_apps/runtime/minidos_cursor_bitmap.h` automatically before compilation.
+If the PNG is absent, `assets/cursor/cursor.bmp` is used as fallback.
+
 After booting MiniDOS, execute by typing:
 
 ```text

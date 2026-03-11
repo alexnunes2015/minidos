@@ -27,6 +27,35 @@ app_elf_path() {
     printf '%s/%s.ELF' "$app_dir" "$1"
 }
 
+find_cursor_source() {
+    local png_src="$ROOT_DIR/assets/cursor/cursor.png"
+    local bmp_src="$ROOT_DIR/assets/cursor/cursor.bmp"
+
+    if [ -f "$png_src" ]; then
+        printf '%s' "$png_src"
+        return
+    fi
+    if [ -f "$bmp_src" ]; then
+        printf '%s' "$bmp_src"
+        return
+    fi
+}
+
+prepare_cursor_bitmap() {
+    local cursor_src
+    local cursor_header="$ROOT_DIR/external_apps/runtime/minidos_cursor_bitmap.h"
+
+    cursor_src="$(find_cursor_source)"
+
+    if [ -z "$cursor_src" ] || [ ! -f "$cursor_src" ]; then
+        return
+    fi
+
+    echo "Preparing cursor bitmap..."
+    chmod +x "$ROOT_DIR/assets/cursor/convert_cursor.sh"
+    "$ROOT_DIR/assets/cursor/convert_cursor.sh" "$cursor_src" "$cursor_header"
+}
+
 ensure_app_toolchain() {
     if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
         echo "ERROR: Missing toolchain for bundled apps (gcc/ld/nasm)." >&2
@@ -64,6 +93,7 @@ build_bundled_apps() {
     local template_rel
 
     ensure_app_toolchain
+    prepare_cursor_bitmap
     while IFS='|' read -r app_name app_subdir template_rel; do
         [ -n "$app_name" ] || continue
         build_app "$app_name" "$template_rel"

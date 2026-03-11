@@ -18,6 +18,35 @@ need_cmd() {
     fi
 }
 
+find_cursor_source() {
+    local png_src="$ROOT_DIR/assets/cursor/cursor.png"
+    local bmp_src="$ROOT_DIR/assets/cursor/cursor.bmp"
+
+    if [[ -f "$png_src" ]]; then
+        printf '%s' "$png_src"
+        return
+    fi
+    if [[ -f "$bmp_src" ]]; then
+        printf '%s' "$bmp_src"
+        return
+    fi
+}
+
+prepare_cursor_bitmap() {
+    local cursor_src
+    local cursor_header="$ROOT_DIR/external_apps/runtime/minidos_cursor_bitmap.h"
+
+    cursor_src="$(find_cursor_source)"
+
+    if [[ -z "$cursor_src" || ! -f "$cursor_src" ]]; then
+        return
+    fi
+
+    echo "Preparing cursor bitmap..."
+    chmod +x "$ROOT_DIR/assets/cursor/convert_cursor.sh"
+    "$ROOT_DIR/assets/cursor/convert_cursor.sh" "$cursor_src" "$cursor_header"
+}
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
     exit 1
@@ -75,6 +104,8 @@ APP_ELF="$APP_BUILD_DIR/$APP_BASE.elf"
 APP_DST="$APP_BUILD_DIR/$APP_BASE.ELF"
 
 echo "Building $APP_BASE from $SRC_PATH..."
+
+prepare_cursor_bitmap
 
 nasm -f elf32 "$TOOLS_DIR/entry.asm" -o "$ENTRY_OBJ"
 

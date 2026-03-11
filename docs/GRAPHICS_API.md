@@ -22,6 +22,8 @@ Current goals:
 - stable pixel-space drawing API for apps
 - classic Win95-like theme defaults
 - reusable window, panel, button, label, and text-box helpers
+- retained-mode window manager for app-level UI composition
+- explicit parent/child controls (label, button, text input)
 - mouse snapshots and waitable input events for GUI apps
 - predictable dirty-rect invalidation for software-cursor apps
 - real backbuffered presentation for GUI frames
@@ -32,13 +34,14 @@ Non-goals for this phase:
 
 - CSS parsing
 - automatic layout/reflow
-- compositing/window manager
 - overlapping window invalidation
 
 ## Files
 
 - `external_apps/runtime/minidos_ui.h`: header-only UI toolkit for external apps
+- `external_apps/runtime/minidos_cursor_bitmap.h`: generated cursor bitmap header used by the UI runtime
 - `external_apps/templates/win95_demo.c`: reference app that exercises the toolkit
+- `assets/cursor/`: cursor bitmap source + conversion kit
 
 ## Main Types
 
@@ -84,6 +87,21 @@ Describes a push button:
 - pressed state
 - focus state
 - enabled state
+
+### `ui_window_manager_t`
+
+Header-only retained-mode manager for app-side GUI state:
+
+- fixed-capacity windows (`UI_WM_MAX_WINDOWS`)
+- fixed-capacity controls (`UI_WM_MAX_CONTROLS`)
+- no dynamic allocation
+- tracks active window and focused control
+
+Children are represented by `ui_control_t` and support:
+
+- `UI_CONTROL_LABEL`
+- `UI_CONTROL_BUTTON`
+- `UI_CONTROL_TEXTINPUT`
 
 ## Primitive Helpers
 
@@ -135,6 +153,33 @@ The initial reusable widget layer includes:
 - `ui_draw_label_centered`
 - `ui_draw_text_box`
 - `ui_draw_cursor`
+
+`ui_draw_cursor` now renders from a generated `16x16` bitmap header. The default asset pipeline is:
+
+1. place `cursor.png` in `assets/cursor/` for alpha transparency, or `cursor.bmp` as fallback
+2. run `make` or `./external_apps/add_app.sh ...`
+3. let `assets/cursor/convert_cursor.sh` regenerate `external_apps/runtime/minidos_cursor_bitmap.h`
+
+The converter maps the source image to three cursor states:
+
+- transparent
+- outline
+- fill
+
+Window-manager API additions:
+
+- `ui_wm_init`
+- `ui_wm_create_window`
+- `ui_wm_bring_to_front`
+- `ui_wm_add_label`
+- `ui_wm_add_button`
+- `ui_wm_add_textinput`
+- `ui_wm_set_focus_control`
+- `ui_wm_hit_test_control`
+- `ui_wm_dispatch_mouse`
+- `ui_wm_dispatch_key`
+- `ui_wm_close_window`
+- `ui_wm_draw`
 
 These helpers intentionally assume the current MiniDOS text cell size of `8x8` pixels for text positioning and centering.
 
