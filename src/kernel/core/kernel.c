@@ -133,25 +133,6 @@ static void show_boot_logo() {
     }
 
     cls();
-    print_string("\n");
-    print_string("========================================\n");
-    if (video_is_graphics()) {
-        print_string("      MiniDOS VESA Framebuffer Boot     \n");
-    } else {
-        print_string("           MiniDOS Text Boot            \n");
-    }
-    print_string("========================================\n");
-    print_string("\nStarting kernel services...\n\n");
-
-    print_string("[");
-    for (int i = 0; i < 28; i++) {
-        print_char('#');
-        timer_sleep_ms(BOOT_PROGRESS_STEP_MS);
-    }
-    print_string("] READY\n");
-
-    timer_sleep_ms(BOOT_SPLASH_MS);
-    cls();
 }
 
 static int is_space(char c) {
@@ -353,9 +334,7 @@ void kernel_main() {
     scheduler_enable_preemption(5);
     
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
-    print_string("MiniDOS v0.1 Kernel Started\n");
-    print_string("Welcome to your minimalist 16/32-bit OS.\n\n");
-    
+
     log_write(LOG_LEVEL_INFO, "kernel", "Initializing disk driver...\n", LOG_DEST_SERIAL);
     disk_init();
     {
