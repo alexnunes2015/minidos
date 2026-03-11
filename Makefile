@@ -20,6 +20,7 @@ KERNEL_TIME_DIR = $(KERNEL_DIR)/time
 KERNEL_VIDEO_DIR = $(KERNEL_DIR)/video
 BUILD_DIR = build
 BOOTLOGO_DIR = assets/bootlogo
+CURSOR_ASSETS_DIR = assets/cursor
 KERNEL_INCLUDE_DIRS := $(shell find $(KERNEL_DIR) -type d | sort)
 CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib $(addprefix -I,$(KERNEL_INCLUDE_DIRS))
 CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
@@ -39,6 +40,9 @@ KERNEL_SOURCES_ALL := $(shell find $(KERNEL_SOURCE_DIRS) -name '*.c' | sort)
 KERNEL_SOURCES = $(filter-out $(KERNEL_STORAGE_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
 KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BUILD_DIR)/video/backbuffer_present.o
+APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
+APP_TEMPLATE_SOURCES := $(shell find external_apps/templates -type f | sort)
+CURSOR_ASSETS := $(shell find $(CURSOR_ASSETS_DIR) -type f | sort)
 QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
 # Ensure drive.o is included
@@ -100,7 +104,7 @@ $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
 # Disk image - create 1.44MB FAT12 floppy image
-minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh
+minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_TEMPLATE_SOURCES) $(CURSOR_ASSETS)
 	@# Convert boot logo if BMP exists
 	@if [ -f "$(BOOTLOGO_DIR)/boot_logo.bmp" ]; then \
 		echo "Converting boot logo..."; \

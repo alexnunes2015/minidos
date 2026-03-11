@@ -95,6 +95,9 @@ typedef struct {
     int next_control_id;
     int active_window_id;
     int focused_control_id;
+    int pressed_window_id;
+    int pressed_control_id;
+    int pressed_hit_close;
 } ui_window_manager_t;
 
 static inline int ui_strlen(const char* s) {
@@ -531,6 +534,9 @@ static inline void ui_wm_init(ui_window_manager_t* wm, ui_theme_t theme) {
     wm->next_control_id = 1;
     wm->active_window_id = 0;
     wm->focused_control_id = 0;
+    wm->pressed_window_id = 0;
+    wm->pressed_control_id = 0;
+    wm->pressed_hit_close = 0;
     for (i = 0; i < UI_WM_MAX_WINDOWS; i++) {
         wm->windows[i].id = 0;
         wm->windows[i].visible = 0;
@@ -732,10 +738,12 @@ static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, in
     int top_window_id;
     ui_wm_window_t* window;
     int control_id;
+    int hit_close;
 
     if (!wm) {
         return 0;
     }
+    (void)left_down;
     if (out_window_id) {
         *out_window_id = 0;
     }
@@ -752,6 +760,13 @@ static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, in
             for (i = 0; i < wm->control_count; i++) {
                 wm->controls[i].pressed = 0;
             }
+            wm->pressed_window_id = 0;
+            wm->pressed_control_id = 0;
+            wm->pressed_hit_close = 0;
+        } else if (left_pressed) {
+            wm->pressed_window_id = 0;
+            wm->pressed_control_id = 0;
+            wm->pressed_hit_close = 0;
         }
         return 0;
     }
@@ -768,30 +783,51 @@ static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, in
         *out_window_id = top_window_id;
     }
 
-    if (ui_window_hit_close(&window->window, x, y)) {
+    hit_close = ui_window_hit_close(&window->window, x, y);
+    if (hit_close) {
         if (out_hit_close) {
             *out_hit_close = 1;
         }
-        return left_released ? 1 : 0;
+        if (left_pressed) {
+            wm->pressed_window_id = top_window_id;
+            wm->pressed_control_id = 0;
+            wm->pressed_hit_close = 1;
+        }
+        if (left_released) {
+            int activated = wm->pressed_hit_close && (wm->pressed_window_id == top_window_id);
+            wm->pressed_window_id = 0;
+            wm->pressed_control_id = 0;
+            wm->pressed_hit_close = 0;
+            return activated ? 1 : 0;
+        }
+        return 0;
     }
 
     control_id = ui_wm_hit_test_control(wm, top_window_id, x, y);
     if (control_id) {
         ui_control_t* control = ui_wm_find_control(wm, control_id);
         if (control && left_pressed) {
+            wm->pressed_window_id = top_window_id;
+            wm->pressed_control_id = control_id;
+            wm->pressed_hit_close = 0;
             ui_wm_set_focus_control(wm, control_id);
+            for (i = 0; i < wm->control_count; i++) {
+                wm->controls[i].pressed = 0;
+            }
             if (control->type == UI_CONTROL_BUTTON) {
-                control->pressed = left_down ? 1 : 0;
+                control->pressed = 1;
             }
         }
 
-        if (control && control->type == UI_CONTROL_BUTTON && left_down) {
-            control->pressed = 1;
-        }
-
         if (control && left_released) {
-            int activated = control->pressed && (control->type == UI_CONTROL_BUTTON);
+            int activated = (control->type == UI_CONTROL_BUTTON)
+                && (wm->pressed_window_id == top_window_id)
+                && (wm->pressed_control_id == control_id)
+                && control->pressed;
             control->pressed = 0;
+            wm->pressed_window_id = 0;
+            wm->pressed_control_id = 0;
+            wm->pressed_hit_close = 0;
             if (out_control_id) {
                 *out_control_id = control_id;
             }
@@ -803,10 +839,22 @@ static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, in
         }
     }
 
+    if (left_pressed) {
+        wm->pressed_window_id = top_window_id;
+        wm->pressed_control_id = 0;
+        wm->pressed_hit_close = 0;
+        for (i = 0; i < wm->control_count; i++) {
+            wm->controls[i].pressed = 0;
+        }
+    }
+
     if (left_released) {
         for (i = 0; i < wm->control_count; i++) {
             wm->controls[i].pressed = 0;
         }
+        wm->pressed_window_id = 0;
+        wm->pressed_control_id = 0;
+        wm->pressed_hit_close = 0;
     }
 
     return 0;

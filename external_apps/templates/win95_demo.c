@@ -17,6 +17,7 @@ typedef struct {
     int button_cancel_id;
     int input_id;
     int dragging;
+    int mouse_pressed_control_id;
     int drag_offset_x;
     int drag_offset_y;
     char mouse_text[48];
@@ -48,6 +49,114 @@ static void update_mouse_label_text(demo_state_t* state) {
     if (control) {
         control->text = state->mouse_text;
     }
+}
+
+static void str_append(char* dst, int max_len, const char* src) {
+    int i = 0;
+    int j;
+
+    if (!dst || max_len <= 0 || !src) {
+        return;
+    }
+
+    while (i < (max_len - 1) && dst[i] != '\0') {
+        i++;
+    }
+
+    j = 0;
+    while (i < (max_len - 1) && src[j] != '\0') {
+        dst[i++] = src[j++];
+    }
+    dst[i] = '\0';
+}
+
+static void str_append_uint(char* dst, int max_len, unsigned int value) {
+    char digits[16];
+    int i = 0;
+
+    if (!dst || max_len <= 0) {
+        return;
+    }
+
+    if (value == 0) {
+        str_append(dst, max_len, "0");
+        return;
+    }
+
+    while (value > 0 && i < (int)sizeof(digits)) {
+        digits[i++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+
+    while (i > 0) {
+        char digit_text[2];
+        digit_text[0] = digits[--i];
+        digit_text[1] = '\0';
+        str_append(dst, max_len, digit_text);
+    }
+}
+
+static void str_append_int(char* dst, int max_len, int value) {
+    if (value < 0) {
+        str_append(dst, max_len, "-");
+        str_append_uint(dst, max_len, (unsigned int)(-value));
+        return;
+    }
+    str_append_uint(dst, max_len, (unsigned int)value);
+}
+
+static void log_mouse_debug(const minidos_app_api_t* api, const char* phase, int activated,
+    int out_window_id, int out_control_id, int out_hit_close, const demo_state_t* state) {
+    char message[160];
+
+    if (!api || !phase || !state) {
+        return;
+    }
+
+    message[0] = '\0';
+    str_append(message, (int)sizeof(message), "[win95ui] ");
+    str_append(message, (int)sizeof(message), phase);
+    str_append(message, (int)sizeof(message), " act=");
+    str_append_int(message, (int)sizeof(message), activated);
+    str_append(message, (int)sizeof(message), " win=");
+    str_append_int(message, (int)sizeof(message), out_window_id);
+    str_append(message, (int)sizeof(message), " ctrl=");
+    str_append_int(message, (int)sizeof(message), out_control_id);
+    str_append(message, (int)sizeof(message), " close=");
+    str_append_int(message, (int)sizeof(message), out_hit_close);
+    str_append(message, (int)sizeof(message), " focus=");
+    str_append_int(message, (int)sizeof(message), state->wm.focused_control_id);
+    str_append(message, (int)sizeof(message), " mx=");
+    str_append_int(message, (int)sizeof(message), state->mouse.x);
+    str_append(message, (int)sizeof(message), " my=");
+    str_append_int(message, (int)sizeof(message), state->mouse.y);
+    app_puts(api, message);
+}
+
+static void log_key_debug(const minidos_app_api_t* api, char c, const demo_state_t* state) {
+    char message[160];
+
+    if (!api || !state) {
+        return;
+    }
+
+    message[0] = '\0';
+    str_append(message, (int)sizeof(message), "[win95ui] key code=");
+    str_append_int(message, (int)sizeof(message), (unsigned char)c);
+    str_append(message, (int)sizeof(message), " focus=");
+    str_append_int(message, (int)sizeof(message), state->wm.focused_control_id);
+    str_append(message, (int)sizeof(message), " char=");
+    if (c >= 32 && c <= 126) {
+        {
+            char text[2];
+            text[0] = c;
+            text[1] = '\0';
+            str_append(message, (int)sizeof(message), text);
+        }
+    } else {
+        str_append(message, (int)sizeof(message), "?");
+    }
+    app_puts(api, message);
 }
 
 static void update_status_text(demo_state_t* state, const char* text) {
@@ -142,8 +251,11 @@ static void cycle_focus(demo_state_t* state) {
     update_status_text(state, "Foco movido por teclado.");
 }
 
-static int handle_keyboard(demo_state_t* state, char c) {
+static int handle_keyboard(demo_state_t* state, const minidos_app_api_t* api, char c) {
+    log_key_debug(api, c, state);
+
     if (c == 'q' || c == 'Q' || c == KEY_ESC) {
+        app_puts(api, "[win95ui] exit by keyboard shortcut");
         return 1;
     }
 
@@ -154,6 +266,7 @@ static int handle_keyboard(demo_state_t* state, char c) {
 
     if (c == KEY_ENTER || c == KEY_SPACE) {
         if (state->wm.focused_control_id == state->button_ok_id || state->wm.focused_control_id == state->button_cancel_id) {
+            app_puts(api, "[win95ui] activate focused button by keyboard");
             return handle_activated_control(state, state->wm.focused_control_id);
         }
     }
@@ -162,7 +275,7 @@ static int handle_keyboard(demo_state_t* state, char c) {
     return 0;
 }
 
-static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_mouse) {
+static int handle_mouse(demo_state_t* state, const minidos_app_api_t* api, const app_mouse_state_t* previous_mouse) {
     int out_window_id = 0;
     int out_control_id = 0;
     int out_hit_close = 0;
@@ -171,6 +284,8 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     int left_pressed;
     int left_released;
     ui_wm_window_t* win;
+    const ui_control_t* pressed_control;
+    ui_rect_t pressed_bounds;
 
     if (!state || !previous_mouse) {
         return 0;
@@ -190,12 +305,26 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
         &out_control_id,
         &out_hit_close);
 
+    if (left_pressed || left_released) {
+        log_mouse_debug(api, left_pressed ? "mouse-down" : "mouse-up",
+            activated, out_window_id, out_control_id, out_hit_close, state);
+    }
+
+    if (left_pressed) {
+        if (out_control_id == state->button_ok_id || out_control_id == state->button_cancel_id) {
+            state->mouse_pressed_control_id = out_control_id;
+        } else {
+            state->mouse_pressed_control_id = 0;
+        }
+    }
+
     win = ui_wm_find_window(&state->wm, state->window_id);
+
     if (win && left_pressed
         && out_window_id == state->window_id
         && out_control_id == 0
-        && ui_window_hit_title(&win->window, state->mouse.x, state->mouse.y)
-        && !ui_window_hit_close(&win->window, state->mouse.x, state->mouse.y)) {
+        && !out_hit_close
+        && ui_window_hit_title(&win->window, state->mouse.x, state->mouse.y)) {
         state->dragging = 1;
         state->drag_offset_x = state->mouse.x - win->window.bounds.x;
         state->drag_offset_y = state->mouse.y - win->window.bounds.y;
@@ -210,13 +339,34 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
 
     if (left_released) {
         state->dragging = 0;
+
+        if (!activated
+            && state->mouse_pressed_control_id != 0) {
+            pressed_control = ui_wm_find_control_const(&state->wm, state->mouse_pressed_control_id);
+            pressed_bounds = ui_wm_control_abs_bounds(&state->wm, pressed_control);
+            if (pressed_control && ui_rect_contains(&pressed_bounds, state->mouse.x, state->mouse.y)) {
+                app_puts(api, "[win95ui] fallback button activation");
+                activated = 1;
+                out_control_id = state->mouse_pressed_control_id;
+            }
+        }
+
+        state->mouse_pressed_control_id = 0;
     }
 
     if (out_hit_close && activated) {
+        app_puts(api, "[win95ui] exit by close button");
         return 1;
     }
 
     if (activated && out_control_id != 0) {
+        if (out_control_id == state->button_cancel_id) {
+            app_puts(api, "[win95ui] cancel button activated");
+        } else if (out_control_id == state->button_ok_id) {
+            app_puts(api, "[win95ui] ok button activated");
+        } else if (out_control_id == state->input_id) {
+            app_puts(api, "[win95ui] textbox reported activation");
+        }
         return handle_activated_control(state, out_control_id);
     }
 
@@ -232,6 +382,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->sw = 640;
     state->sh = 480;
     state->dragging = 0;
+    state->mouse_pressed_control_id = 0;
     state->drag_offset_x = 0;
     state->drag_offset_y = 0;
     (void)ui_screen_size(api, &state->sw, &state->sh);
@@ -295,6 +446,7 @@ int app_main(const minidos_app_api_t* api) {
     }
 
     init_demo(&state, api);
+    app_puts(api, "[win95ui] mouse debug logging enabled");
     render(api, &state);
 
     while (1) {
@@ -304,7 +456,7 @@ int app_main(const minidos_app_api_t* api) {
             app_mouse_state_t previous_mouse = state.mouse;
             (void)app_mouse_state(api, &state.mouse);
             update_mouse_label_text(&state);
-            if (handle_mouse(&state, &previous_mouse)) {
+            if (handle_mouse(&state, api, &previous_mouse)) {
                 app_gfx_clear(api, 0x000000u);
                 ui_present(api);
                 return 0;
@@ -314,7 +466,7 @@ int app_main(const minidos_app_api_t* api) {
         if (event_mask & APP_EVENT_KEY) {
             char c = 0;
             while (app_get_char_nonblock(api, &c)) {
-                if (handle_keyboard(&state, c)) {
+                if (handle_keyboard(&state, api, c)) {
                     app_gfx_clear(api, 0x000000u);
                     ui_present(api);
                     return 0;

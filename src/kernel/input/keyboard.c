@@ -356,7 +356,7 @@ static char keyboard_process_scancode_set1(unsigned char scancode) {
     }
     if (scancode == 0x38) {
         alt_pressed = 1;
-        return 0x14; // KEY_ALT_TOGGLE
+        return 0;
     }
     if (scancode == 0xB8) {
         alt_pressed = 0;
@@ -448,7 +448,7 @@ static char keyboard_process_scancode_set2(unsigned char scancode) {
     if (scancode == 0x11) {
         alt_pressed = break_code ? 0 : 1;
         break_code = 0;
-        return alt_pressed ? 0x14 : 0;
+        return 0;
     }
     if (scancode == 0x58) {
         if (!break_code) {
