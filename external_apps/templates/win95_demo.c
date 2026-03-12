@@ -4,6 +4,29 @@
 #define KEY_ENTER 13
 #define KEY_ESC   27
 #define KEY_SPACE 32
+#define TASKBAR_H 28
+#define START_BUTTON_W 74
+#define START_BUTTON_H 20
+#define START_MENU_W 220
+#define START_MENU_H 188
+#define START_MENU_STRIP_W 28
+#define START_MENU_ITEM_NONE (-1)
+#define START_MENU_ITEM_COUNT 4
+
+enum {
+    START_MENU_ITEM_PROGRAMAS = 0,
+    START_MENU_ITEM_DOCUMENTOS = 1,
+    START_MENU_ITEM_DEFINICOES = 2,
+    START_MENU_ITEM_AJUDA = 3,
+    START_MENU_ITEM_BACK_TO_DOS = 4,
+};
+
+static const char* g_start_menu_items[START_MENU_ITEM_COUNT] = {
+    "Programas",
+    "Documentos",
+    "Definicoes",
+    "Ajuda",
+};
 
 typedef struct {
     ui_window_manager_t wm;
@@ -20,6 +43,10 @@ typedef struct {
     int mouse_pressed_control_id;
     int drag_offset_x;
     int drag_offset_y;
+    int start_menu_open;
+    int start_button_pressed;
+    int start_menu_pressed_item;
+    int start_menu_hot_item;
     char mouse_text[48];
     char status_text[96];
     char input_text[64];
@@ -173,6 +200,150 @@ static void update_status_text(demo_state_t* state, const char* text) {
     }
 }
 
+static ui_rect_t taskbar_rect(const demo_state_t* state) {
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+    return ui_rect_make(0, state->sh - TASKBAR_H, state->sw, TASKBAR_H);
+}
+
+static ui_rect_t start_button_rect(const demo_state_t* state) {
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+    return ui_rect_make(4, state->sh - 24, START_BUTTON_W, START_BUTTON_H);
+}
+
+static ui_rect_t start_menu_rect(const demo_state_t* state) {
+    int menu_y;
+
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    menu_y = state->sh - TASKBAR_H - START_MENU_H;
+    if (menu_y < 4) {
+        menu_y = 4;
+    }
+
+    return ui_rect_make(2, menu_y, START_MENU_W, START_MENU_H);
+}
+
+static ui_rect_t start_menu_item_rect(const demo_state_t* state, int item_index) {
+    ui_rect_t menu;
+
+    if (!state || item_index < 0 || item_index >= START_MENU_ITEM_COUNT) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    menu = start_menu_rect(state);
+    return ui_rect_make(menu.x + START_MENU_STRIP_W + 10,
+        menu.y + 12 + (item_index * 24),
+        menu.w - START_MENU_STRIP_W - 20,
+        22);
+}
+
+static ui_rect_t start_menu_exit_rect(const demo_state_t* state) {
+    ui_rect_t menu;
+
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    menu = start_menu_rect(state);
+    return ui_rect_make(menu.x + START_MENU_STRIP_W + 14,
+        menu.y + menu.h - 40,
+        menu.w - START_MENU_STRIP_W - 28,
+        26);
+}
+
+static void dismiss_start_menu(demo_state_t* state) {
+    if (!state) {
+        return;
+    }
+
+    state->start_menu_open = 0;
+    state->start_button_pressed = 0;
+    state->start_menu_pressed_item = START_MENU_ITEM_NONE;
+    state->start_menu_hot_item = START_MENU_ITEM_NONE;
+}
+
+static void open_start_menu(demo_state_t* state) {
+    if (!state) {
+        return;
+    }
+
+    state->start_menu_open = 1;
+    state->start_button_pressed = 0;
+    state->start_menu_pressed_item = START_MENU_ITEM_NONE;
+    state->start_menu_hot_item = START_MENU_ITEM_NONE;
+    update_status_text(state, "Menu Iniciar aberto.");
+}
+
+static void close_start_menu(demo_state_t* state, const char* reason) {
+    dismiss_start_menu(state);
+    if (reason) {
+        update_status_text(state, reason);
+    }
+}
+
+static int start_menu_hit_test(const demo_state_t* state, int x, int y) {
+    int item_index;
+    ui_rect_t rect;
+
+    if (!state || !state->start_menu_open) {
+        return START_MENU_ITEM_NONE;
+    }
+
+    for (item_index = 0; item_index < START_MENU_ITEM_COUNT; item_index++) {
+        rect = start_menu_item_rect(state, item_index);
+        if (ui_rect_contains(&rect, x, y)) {
+            return item_index;
+        }
+    }
+
+    rect = start_menu_exit_rect(state);
+    if (ui_rect_contains(&rect, x, y)) {
+        return START_MENU_ITEM_BACK_TO_DOS;
+    }
+
+    return START_MENU_ITEM_NONE;
+}
+
+static int handle_start_menu_action(demo_state_t* state, const minidos_app_api_t* api, int action_id) {
+    if (!state) {
+        return 0;
+    }
+
+    if (action_id == START_MENU_ITEM_PROGRAMAS) {
+        app_puts(api, "[win95ui] start menu -> programas");
+        close_start_menu(state, "Programas destacados na shell grafica.");
+        return 0;
+    }
+    if (action_id == START_MENU_ITEM_DOCUMENTOS) {
+        app_puts(api, "[win95ui] start menu -> documentos");
+        close_start_menu(state, "Documentos prontos para navegar.");
+        return 0;
+    }
+    if (action_id == START_MENU_ITEM_DEFINICOES) {
+        app_puts(api, "[win95ui] start menu -> definicoes");
+        close_start_menu(state, "Definicoes em estilo classico.");
+        return 0;
+    }
+    if (action_id == START_MENU_ITEM_AJUDA) {
+        app_puts(api, "[win95ui] start menu -> ajuda");
+        close_start_menu(state, "Ajuda: arrasta a janela e usa o Iniciar.");
+        return 0;
+    }
+    if (action_id == START_MENU_ITEM_BACK_TO_DOS) {
+        app_puts(api, "[win95ui] exit via start menu");
+        dismiss_start_menu(state);
+        return 1;
+    }
+
+    return 0;
+}
+
 static void clamp_window(demo_state_t* state) {
     ui_wm_window_t* win;
 
@@ -194,8 +365,8 @@ static void clamp_window(demo_state_t* state) {
     if (win->window.bounds.x + win->window.bounds.w > state->sw) {
         win->window.bounds.x = state->sw - win->window.bounds.w;
     }
-    if (win->window.bounds.y + win->window.bounds.h > state->sh - 28) {
-        win->window.bounds.y = (state->sh - 28) - win->window.bounds.h;
+    if (win->window.bounds.y + win->window.bounds.h > state->sh - TASKBAR_H) {
+        win->window.bounds.y = (state->sh - TASKBAR_H) - win->window.bounds.h;
     }
     if (win->window.bounds.x < 0) {
         win->window.bounds.x = 0;
@@ -205,13 +376,121 @@ static void clamp_window(demo_state_t* state) {
     }
 }
 
+static void draw_start_menu_item(const minidos_app_api_t* api, const demo_state_t* state,
+    int item_id, const char* label, unsigned int icon_color) {
+    ui_rect_t item_rect;
+    ui_rect_t icon_rect;
+    const ui_theme_t* theme;
+    unsigned int bg;
+    unsigned int fg;
+
+    if (!api || !state || !label) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    item_rect = start_menu_item_rect(state, item_id);
+    bg = theme->field_bg;
+    fg = theme->text;
+
+    if (state->start_menu_hot_item == item_id) {
+        bg = theme->selection_bg;
+        fg = theme->selection_text;
+        ui_fill_rect(api, item_rect, bg);
+    } else {
+        ui_fill_rect(api, item_rect, bg);
+    }
+
+    icon_rect = ui_rect_make(item_rect.x + 4, item_rect.y + 3, 16, 16);
+    ui_fill_rect(api, icon_rect, icon_color);
+    ui_frame_rect(api, icon_rect, theme->dark_shadow);
+    ui_draw_text(api, item_rect.x + 28, item_rect.y + 7, label, fg, bg);
+    ui_draw_text(api, item_rect.x + item_rect.w - 12, item_rect.y + 7, ">", fg, bg);
+}
+
+static void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
+    ui_rect_t menu;
+    ui_rect_t strip;
+    ui_rect_t divider;
+    ui_rect_t exit_rect;
+    ui_button_t exit_button;
+    const ui_theme_t* theme;
+
+    if (!api || !state || !state->start_menu_open) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    menu = start_menu_rect(state);
+    strip = ui_rect_make(menu.x + 4, menu.y + 4, START_MENU_STRIP_W, menu.h - 8);
+    divider = ui_rect_make(menu.x + START_MENU_STRIP_W + 12, menu.y + menu.h - 48, menu.w - START_MENU_STRIP_W - 24, 2);
+    exit_rect = start_menu_exit_rect(state);
+
+    ui_draw_panel(api, theme, menu, 1);
+    ui_fill_rect(api, strip, theme->title_active_bg);
+    ui_draw_text(api, strip.x + 4, strip.y + 12, "MiniDOS", theme->title_active_text, theme->title_active_bg);
+    ui_draw_text(api, strip.x + 9, strip.y + 28, "95", theme->title_active_text, theme->title_active_bg);
+
+    draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS], ui_rgb(255, 0, 0));
+    draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS], ui_rgb(255, 255, 0));
+    draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES], ui_rgb(0, 128, 255));
+    draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA], ui_rgb(0, 180, 0));
+
+    ui_fill_rect(api, ui_rect_make(divider.x, divider.y, divider.w, 1), theme->shadow);
+    ui_fill_rect(api, ui_rect_make(divider.x, divider.y + 1, divider.w, 1), theme->light);
+
+    exit_button.bounds = exit_rect;
+    exit_button.label = "Voltar para DOS";
+    exit_button.pressed = (state->start_menu_pressed_item == START_MENU_ITEM_BACK_TO_DOS);
+    exit_button.focused = (state->start_menu_hot_item == START_MENU_ITEM_BACK_TO_DOS);
+    exit_button.enabled = 1;
+    ui_draw_button(api, theme, &exit_button);
+}
+
+static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_t* state) {
+    ui_rect_t taskbar;
+    ui_rect_t start_rect;
+    ui_rect_t task_rect;
+    ui_rect_t brand_rect;
+    ui_button_t start_button;
+    const ui_theme_t* theme;
+
+    if (!api || !state) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    taskbar = taskbar_rect(state);
+    start_rect = start_button_rect(state);
+    task_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, 170, 20);
+    brand_rect = ui_rect_make(state->sw - 120, taskbar.y + 4, 112, 20);
+
+    ui_draw_panel(api, theme, taskbar, 1);
+
+    start_button.bounds = start_rect;
+    start_button.label = "Iniciar";
+    start_button.pressed = state->start_button_pressed || state->start_menu_open;
+    start_button.focused = 0;
+    start_button.enabled = 1;
+    ui_draw_button(api, theme, &start_button);
+
+    ui_draw_panel(api, theme, task_rect, 0);
+    ui_draw_text(api, task_rect.x + 8, task_rect.y + 6, "MiniDOS 95 Demo", theme->text, theme->face);
+
+    ui_draw_panel(api, theme, brand_rect, 0);
+    ui_draw_label_centered(api, brand_rect, "A:\\ GUI", theme->text, theme->face);
+}
+
 static void render(const minidos_app_api_t* api, const demo_state_t* state) {
     if (!api || !state) {
         return;
     }
 
     ui_wm_draw(api, &state->wm, state->sw, state->sh,
-        state->mouse.present ? "MiniDOS Mouse" : "MiniDOS UI");
+        "MiniDOS 95");
+
+    draw_taskbar_overlay(api, state);
+    draw_start_menu(api, state);
 
     if (state->mouse.present) {
         ui_draw_cursor(api, state->mouse.x, state->mouse.y,
@@ -223,10 +502,12 @@ static void render(const minidos_app_api_t* api, const demo_state_t* state) {
 
 static int handle_activated_control(demo_state_t* state, int control_id) {
     if (control_id == state->button_ok_id) {
+        dismiss_start_menu(state);
         update_status_text(state, "OK clicado. Fluxo grafico pronto.");
         return 0;
     }
     if (control_id == state->button_cancel_id) {
+        dismiss_start_menu(state);
         return 1;
     }
     return 0;
@@ -283,6 +564,12 @@ static int handle_mouse(demo_state_t* state, const minidos_app_api_t* api, const
     int left_down;
     int left_pressed;
     int left_released;
+    int chrome_consumed = 0;
+    int menu_hit = START_MENU_ITEM_NONE;
+    ui_rect_t start_rect;
+    ui_rect_t menu_rect;
+    int over_start;
+    int over_menu;
     ui_wm_window_t* win;
     const ui_control_t* pressed_control;
     ui_rect_t pressed_bounds;
@@ -294,6 +581,62 @@ static int handle_mouse(demo_state_t* state, const minidos_app_api_t* api, const
     left_down = ui_mouse_left_down(&state->mouse);
     left_pressed = ui_mouse_left_pressed(previous_mouse, &state->mouse);
     left_released = ui_mouse_left_released(previous_mouse, &state->mouse);
+    start_rect = start_button_rect(state);
+    menu_rect = start_menu_rect(state);
+    over_start = ui_rect_contains(&start_rect, state->mouse.x, state->mouse.y);
+    over_menu = state->start_menu_open && ui_rect_contains(&menu_rect, state->mouse.x, state->mouse.y);
+
+    if (state->start_menu_open) {
+        menu_hit = start_menu_hit_test(state, state->mouse.x, state->mouse.y);
+        state->start_menu_hot_item = menu_hit;
+    } else {
+        state->start_menu_hot_item = START_MENU_ITEM_NONE;
+    }
+
+    if (left_pressed) {
+        if (over_start) {
+            state->start_button_pressed = 1;
+            state->start_menu_pressed_item = START_MENU_ITEM_NONE;
+            chrome_consumed = 1;
+        } else if (over_menu) {
+            state->start_menu_pressed_item = menu_hit;
+            state->start_button_pressed = 0;
+            chrome_consumed = 1;
+        } else if (state->start_menu_open) {
+            close_start_menu(state, "Menu Iniciar fechado.");
+        }
+    }
+
+    if (left_released) {
+        if (state->start_button_pressed) {
+            state->start_button_pressed = 0;
+            if (over_start) {
+                if (state->start_menu_open) {
+                    app_puts(api, "[win95ui] start menu closed");
+                    close_start_menu(state, "Menu Iniciar fechado.");
+                } else {
+                    app_puts(api, "[win95ui] start menu opened");
+                    open_start_menu(state);
+                }
+                return 0;
+            }
+        }
+
+        if (state->start_menu_pressed_item != START_MENU_ITEM_NONE) {
+            int pressed_item = state->start_menu_pressed_item;
+            state->start_menu_pressed_item = START_MENU_ITEM_NONE;
+            chrome_consumed = 1;
+            if (over_menu && pressed_item == menu_hit) {
+                return handle_start_menu_action(state, api, pressed_item);
+            }
+        } else if (over_menu) {
+            chrome_consumed = 1;
+        }
+    }
+
+    if (chrome_consumed) {
+        return 0;
+    }
 
     activated = ui_wm_dispatch_mouse(&state->wm,
         state->mouse.x,
@@ -361,7 +704,7 @@ static int handle_mouse(demo_state_t* state, const minidos_app_api_t* api, const
 
     if (activated && out_control_id != 0) {
         if (out_control_id == state->button_cancel_id) {
-            app_puts(api, "[win95ui] cancel button activated");
+            app_puts(api, "[win95ui] fechar button activated");
         } else if (out_control_id == state->button_ok_id) {
             app_puts(api, "[win95ui] ok button activated");
         } else if (out_control_id == state->input_id) {
@@ -385,6 +728,10 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->mouse_pressed_control_id = 0;
     state->drag_offset_x = 0;
     state->drag_offset_y = 0;
+    state->start_menu_open = 0;
+    state->start_button_pressed = 0;
+    state->start_menu_pressed_item = START_MENU_ITEM_NONE;
+    state->start_menu_hot_item = START_MENU_ITEM_NONE;
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
@@ -393,20 +740,20 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     y = (state->sh - window_h) / 2;
     state->window_id = ui_wm_create_window(&state->wm,
         ui_rect_make(x, y, window_w, window_h),
-        "MiniDOS Setup",
+        "MiniDOS 95",
         1);
 
     (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 12, ui_strlen("GUI CLASSICA DISPONIVEL.") * UI_CHAR_W, UI_CHAR_H),
-        "GUI CLASSICA DISPONIVEL.");
+        ui_rect_make(12, 12, ui_strlen("MENU INICIAR DISPONIVEL.") * UI_CHAR_W, UI_CHAR_H),
+        "MENU INICIAR DISPONIVEL.");
     (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 28, ui_strlen("Rato: clique e arraste. TAB/ENTER navegam.") * UI_CHAR_W, UI_CHAR_H),
-        "Rato: clique e arraste. TAB/ENTER navegam.");
+        ui_rect_make(12, 28, ui_strlen("Rato: clique, arraste e abre o Iniciar.") * UI_CHAR_W, UI_CHAR_H),
+        "Rato: clique, arraste e abre o Iniciar.");
     (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 44, ui_strlen("ESC, Q, Cancel ou X saem da demo.") * UI_CHAR_W, UI_CHAR_H),
-        "ESC, Q, Cancel ou X saem da demo.");
+        ui_rect_make(12, 44, ui_strlen("ESC, Q, Fechar ou Voltar para DOS saem.") * UI_CHAR_W, UI_CHAR_H),
+        "ESC, Q, Fechar ou Voltar para DOS saem.");
 
-    str_copy(state->input_text, "MiniDOS GUI", (int)sizeof(state->input_text));
+    str_copy(state->input_text, "MiniDOS 95", (int)sizeof(state->input_text));
     state->input_id = ui_wm_add_textinput(&state->wm, state->window_id,
         ui_rect_make(12, 68, window_w - 32, 28),
         state->input_text,
@@ -426,7 +773,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
 
     state->button_cancel_id = ui_wm_add_button(&state->wm, state->window_id,
         ui_rect_make(window_w - 96, 158, 76, 24),
-        "Cancel");
+        "Fechar");
 
     ui_wm_set_focus_control(&state->wm, state->button_ok_id);
 
@@ -434,7 +781,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     update_mouse_label_text(state);
     update_status_text(state,
         state->mouse.present
-            ? "Mouse pronto. Usa OK, Cancel ou barra."
+            ? "Mouse pronto. Usa OK, Fechar ou o menu Iniciar."
             : "Sem mouse. Teclado continua funcional.");
 }
 
