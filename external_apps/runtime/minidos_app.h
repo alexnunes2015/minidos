@@ -33,11 +33,13 @@ enum {
     MINIDOS_SYSCALL_GET_MOUSE_STATE = 25,
     MINIDOS_SYSCALL_WAIT_EVENT = 26,
     MINIDOS_SYSCALL_GFX_PRESENT = 27,
+    MINIDOS_SYSCALL_GET_TIME = 28,
 };
 
 enum {
     APP_EVENT_KEY = 1,
     APP_EVENT_MOUSE = 2,
+    APP_EVENT_TIMER = 4,
 };
 
 enum {
@@ -71,6 +73,12 @@ typedef struct {
     unsigned int seq;
     int present;
 } app_mouse_state_t;
+
+typedef struct {
+    unsigned char hours;
+    unsigned char minutes;
+    unsigned char seconds;
+} app_time_t;
 
 static inline int app_syscall(const minidos_app_api_t* api, unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
     if (api && api->syscall) {
@@ -146,6 +154,14 @@ static inline int app_mouse_state(const minidos_app_api_t* api, app_mouse_state_
 
 static inline int app_wait_event(const minidos_app_api_t* api, unsigned int last_mouse_seq) {
     return app_syscall(api, MINIDOS_SYSCALL_WAIT_EVENT, last_mouse_seq, 0, 0);
+}
+
+static inline int app_wait_event_timeout(const minidos_app_api_t* api, unsigned int last_mouse_seq, unsigned int timeout_ms) {
+    return app_syscall(api, MINIDOS_SYSCALL_WAIT_EVENT, last_mouse_seq, timeout_ms, 0);
+}
+
+static inline int app_get_time(const minidos_app_api_t* api, app_time_t* out) {
+    return app_syscall(api, MINIDOS_SYSCALL_GET_TIME, (unsigned int)out, 0, 0);
 }
 
 static inline int app_chdir(const minidos_app_api_t* api, const char* dir_name) {

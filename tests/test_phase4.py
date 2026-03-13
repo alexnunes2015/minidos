@@ -98,6 +98,10 @@ def main():
         if "MiniDOS Version 0.1" not in out:
             raise RuntimeError("shell did not resume after EDIT input")
 
+        out = send_cmd(proc, "ed", ["Bad command or file name"])
+        if "Bad command or file name" not in out:
+            raise RuntimeError("short app prefix unexpectedly matched EDIT")
+
         print("PASS: phase4 ELF apps executed successfully")
         return 0
     finally:

@@ -118,6 +118,7 @@ Check:
 - `APPIN001` after `WIN95UI` starts
 - `APPRET001` after the click closes `WIN95UI` or after `q` / `ESC` return from the other apps
 - `[mouse] first packet received` after QMP moves the pointer
+- no `[win95ui]` serial debug lines while the demo runs
 - shell accepts `ver` after the test clicks `Cancel`
 - `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app
 

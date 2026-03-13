@@ -195,7 +195,7 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
         log += extra
 
     last_cmd = _extract_last_command_line(log)
-    if last_cmd != cmd:
+    if last_cmd is not None and last_cmd != cmd:
         raise RuntimeError(f"command mismatch (expected {cmd!r}, got {last_cmd!r})")
 
     for pattern in expected_patterns:
@@ -211,6 +211,11 @@ def _install_demo_app():
         cwd=repo_root(),
         check=True,
     )
+
+
+def _assert_no_win95ui_debug(log_text):
+    if "[win95ui]" in log_text:
+        raise RuntimeError("unexpected WIN95UI debug output on serial")
 
 
 def _wait_for_app_ready(proc, name, timeout_s, *, echo):
@@ -229,6 +234,7 @@ def _wait_for_app_ready(proc, name, timeout_s, *, echo):
     )
     if not matched:
         raise RuntimeError(f"timeout waiting for {name} input readiness")
+    _assert_no_win95ui_debug(log_after)
     return log_after
 
 
@@ -315,6 +321,7 @@ def main():
         )
         if not matched:
             raise RuntimeError("timeout waiting for WIN95UI app return")
+        _assert_no_win95ui_debug(log_after)
 
         _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
         _wait_for_command_result(

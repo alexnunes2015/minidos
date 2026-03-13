@@ -100,6 +100,7 @@ Valida o caminho completo de rato para GUI:
 - espera `APPIN001`;
 - espera `APPRET001` depois do clique ou do input de saída;
 - injeta movimento relativo e clique esquerdo por `input-send-event`;
+- rejeita qualquer debug `[win95ui]` na serial durante a execução da app;
 - confirma que a app devolve controlo ao shell e que `ver` volta a ser aceite;
 - move o rato dentro de `DOSSHELL` e `EDIT` e confirma que `q` / `ESC` continuam a sair das apps sem injetar teclas espúrias.
 

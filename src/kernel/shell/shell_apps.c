@@ -7,6 +7,7 @@
 #include "mouse.h"
 #include "scheduler.h"
 #include "serial.h"
+#include "rtc.h"
 #include "timer.h"
 #include "video.h"
 #include "../../../external_apps/runtime/minidos_app.h"
@@ -279,8 +280,10 @@ static int shell_apps_get_mouse_state(app_mouse_state_t* out) {
     return 1;
 }
 
-static int shell_apps_wait_event(unsigned int last_mouse_seq) {
+static int shell_apps_wait_event(unsigned int last_mouse_seq, unsigned int timeout_ms) {
     mouse_state_t state;
+    unsigned int start_ticks = scheduler_get_ticks();
+    unsigned int timeout_ticks = timeout_ms ? timer_ms_to_ticks_ceil(timeout_ms) : 0;
 
     if (!shell_apps_host_valid(active_host)) {
         return 0;
@@ -299,6 +302,10 @@ static int shell_apps_wait_event(unsigned int last_mouse_seq) {
 
         if (mouse_get_state(&state) && state.present && state.seq != last_mouse_seq) {
             flags |= APP_EVENT_MOUSE;
+        }
+
+        if (timeout_ticks > 0 && (unsigned int)(scheduler_get_ticks() - start_ticks) >= timeout_ticks) {
+            flags |= APP_EVENT_TIMER;
         }
 
         if (flags != 0) {
@@ -355,12 +362,26 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     }
 
     if (num == MINIDOS_SYSCALL_WAIT_EVENT) {
-        return shell_apps_wait_event(a0);
+        return shell_apps_wait_event(a0, a1);
     }
 
     if (num == MINIDOS_SYSCALL_GET_TICKS) {
         shell_apps_flush_graphics();
         return (int)scheduler_get_ticks();
+    }
+
+    if (num == MINIDOS_SYSCALL_GET_TIME) {
+        rtc_time_t time;
+        app_time_t* out = (app_time_t*)a0;
+
+        if (!out || !rtc_read_time(&time)) {
+            return 0;
+        }
+
+        out->hours = time.hours;
+        out->minutes = time.minutes;
+        out->seconds = time.seconds;
+        return 1;
     }
 
     if (num == MINIDOS_SYSCALL_RANDOM) {

@@ -385,6 +385,6 @@ void shell_execute(char* cmd) {
         if (shell_apps_try_execute(&host, command, args)) {
             return;
         }
-        print_string("Bad command or file name\n");
+        shell_out_both("Bad command or file name\n");
     }
 }

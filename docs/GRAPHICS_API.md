@@ -14,6 +14,8 @@ The kernel already exposes low-level graphics syscalls for applications through 
 - `app_gfx_present`
 - `app_mouse_state`
 - `app_wait_event`
+- `app_wait_event_timeout`
+- `app_get_time`
 
 The new layer lives in `external_apps/runtime/minidos_ui.h` and builds classic desktop widgets on top of those primitives.
 
@@ -25,6 +27,7 @@ Current goals:
 - retained-mode window manager for app-level UI composition
 - explicit parent/child controls (label, button, text input)
 - mouse snapshots and waitable input events for GUI apps
+- RTC time reads for UI elements such as taskbar clocks
 - predictable dirty-rect invalidation for software-cursor apps
 - real backbuffered presentation for GUI frames
 - zero dynamic allocation
@@ -244,6 +247,8 @@ Automated validation:
 ```bash
 make test-mouse
 ```
+
+The `win95ui` demo also uses `app_wait_event_timeout(api, ..., 1000)` plus `app_get_time(api, ...)` to refresh the taskbar clock once per second without blocking on user input forever.
 
 ## Design Notes
 

@@ -39,6 +39,7 @@ static void print_entry_name(const FAT16_DirectoryEntry* entry) {
 int fat16_match_name(const char* filename, const FAT16_DirectoryEntry* entry) {
     int match = 1;
     int name_len = 0;
+    int dir_name_end = 8;
 
     if (filename[0] == '.' && filename[1] == '\0') {
         if (entry->name[0] != '.' || entry->name[1] != ' ') return 0;
@@ -66,10 +67,12 @@ int fat16_match_name(const char* filename, const FAT16_DirectoryEntry* entry) {
 
     if (!match) return 0;
 
-    {
-        int dir_name_end = 8;
-        while (dir_name_end > 0 && entry->name[dir_name_end - 1] == ' ') dir_name_end--;
+    while (dir_name_end > 0 && entry->name[dir_name_end - 1] == ' ') dir_name_end--;
+    if (name_len != dir_name_end) {
+        return 0;
+    }
 
+    {
         if (filename[name_len] == '.') {
             int ext_pos;
 
