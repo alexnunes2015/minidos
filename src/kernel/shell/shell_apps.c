@@ -218,6 +218,14 @@ static void shell_apps_note_session_return(void) {
     app_input_ready_logged = 0;
 }
 
+static void shell_apps_begin_scheduler_origin(const char* origin_name) {
+    scheduler_set_current_origin(origin_name, 1);
+}
+
+static void shell_apps_end_scheduler_origin(void) {
+    scheduler_set_current_origin(0, 0);
+}
+
 static void shell_apps_ensure_interrupts_enabled(void) {
     if ((read_eflags() & EFLAGS_IF) == 0U) {
         __asm__ volatile ("sti");
@@ -747,6 +755,7 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
+    shell_apps_begin_scheduler_origin(filename);
     active_host = host;
     shell_apps_begin_input_session();
     shell_apps_ensure_interrupts_enabled();
@@ -761,6 +770,7 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     shell_apps_note_session_return();
     active_host = 0;
     app_input_ready_logged = 0;
+    shell_apps_end_scheduler_origin();
     (void)exit_code;
     return 1;
 }
@@ -808,6 +818,7 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
+    shell_apps_begin_scheduler_origin(filename);
     active_host = host;
     shell_apps_begin_input_session();
     shell_apps_ensure_interrupts_enabled();
@@ -820,6 +831,7 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
         video_set_deferred_present(0);
         active_host = 0;
         app_input_ready_logged = 0;
+        shell_apps_end_scheduler_origin();
         shell_apps_out_both(host, "Invalid ELF or load error\n");
         return 1;
     }
@@ -829,6 +841,7 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     shell_apps_note_session_return();
     active_host = 0;
     app_input_ready_logged = 0;
+    shell_apps_end_scheduler_origin();
     (void)exit_code;
     return 1;
 }

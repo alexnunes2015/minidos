@@ -20,7 +20,7 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 - **Paging (Current)**: Minimal paging is active. The kernel installs an identity map for the first `8 MiB` of physical memory plus the VESA framebuffer region, then enables `CR0.PG` after serial/log init.
 - **Graphics Scratch Buffer (Current)**: The software backbuffer no longer lives in the kernel `.bss`. It uses a dedicated scratch window starting at `0x00400000`, which keeps the early boot stack and the app load window (`0x00200000..0x00300000`) separate from large GUI frame buffers while staying inside the initial identity map.
 - **Interrupt Handling (Current)**: A runtime IDT/ISR path is active for CPU exceptions (`0-31`) and PIC IRQs (`32-47`), with serial diagnostics and controlled panic behavior for kernel exceptions.
-- **Scheduler Prep (Current Baseline)**: A phase-5 scheduler base is present with process metadata (`PID`, state, saved `ESP`), PIT setup on IRQ0, cooperative context-switch self-test at boot, and an initial IRQ-return preemption hook driven by quantum ticks. This is groundwork for multitasking, not a claim that the runtime process model is complete.
+- **Scheduler Runtime (Current)**: Phase 5 now boots a real kernel-thread runtime on top of IRQ0. The scheduler keeps the bootstrap thread plus an idle thread, can spawn additional kernel workers from fabricated IRQ-return frames, supports blocking-by-tick plus voluntary yield through a software interrupt, and keeps every scheduler-managed kernel stack behind an unmapped guard page in a reserved arena at `0x00600000`. This is meaningful multitasking groundwork, but it is still kernel-only and not yet a ring3 process model.
 - **Kernel Time Base (Current)**: Runtime delays, shell `sleep`, splash pacing, and panic grace periods now derive from the IRQ0 kernel tick instead of local PIT polling or CPU-speed-dependent busy loops.
 
 ### 3. Drivers
@@ -43,11 +43,12 @@ As requested, C++ is not directly used due to the lack of a standard runtime in 
 
 ## Current Limitations
 - ELF loader is intentionally minimal (ELF32 `ET_EXEC`, fixed low-memory window, no relocations/dynamic linking).
-- Preemption hook is active, but runtime process population is still minimal and scheduler coverage is currently driven mostly by self-tests and kernel-managed tasks.
+- The scheduler now has real kernel-thread runtime state and guard-page protection for managed stacks, but userland ELF apps still run inside the bootstrap kernel thread and do not yet have their own protected address spaces.
+- The bootstrap shell thread still uses the early boot stack; guard pages currently protect scheduler-managed worker stacks, not every kernel execution context.
 - The boot floppy path depends on BIOS INT 13h through the thunk. That is sufficient for the current product model, but it is not a substitute for a native floppy controller driver if hardware coverage becomes a goal.
 
 ## Next Technical Steps
-- Expand syscall surface and isolate user/kernel memory domains as preparation for multitasking.
-- Evolve phase-5 scheduler from cooperative validation to preemptive round-robin driven by IRQ0 quantum.
+- Move ELF/userland execution onto the scheduler runtime instead of the bootstrap kernel thread.
+- Introduce ring3/user page permissions and a syscall transition that enforces user/kernel memory separation.
 - Strengthen interrupt diagnostics and add targeted automated tests for exception/IRQ regressions.
 - Keep build, test, and debug contracts synchronized with [docs/DEVELOPMENT_PROTOCOL.md](docs/DEVELOPMENT_PROTOCOL.md).

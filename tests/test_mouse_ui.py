@@ -237,6 +237,18 @@ def _wait_for_app_ready(proc, name, timeout_s, *, echo):
     _assert_no_win95ui_debug(log_after)
     return log_after
 
+def _wait_for_default_gui(proc, timeout_s, *, echo):
+    log_after, matched = read_until(
+        proc,
+        ["APPIN001"],
+        min(timeout_s, 1.0),
+        echo=echo,
+    )
+    if not matched:
+        return None
+    _assert_no_win95ui_debug(log_after)
+    return log_after
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -303,8 +315,11 @@ def main():
                 return 0
             raise
 
-        _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)
-        _wait_for_app_ready(proc, "win95ui", args.cmd_timeout, echo=not args.quiet)
+        _assert_no_win95ui_debug(log)
+        if "APPIN001" not in log:
+            if _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is None:
+                _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)
+                _wait_for_app_ready(proc, "win95ui", args.cmd_timeout, echo=not args.quiet)
 
         # Exercise repeated hover redraws over the title bar/client before the exit click.
         _send_mouse_move(qmp_sock, -150, -100)

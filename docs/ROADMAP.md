@@ -144,10 +144,12 @@ Status: baseline entregue em 28/02/2026; fase ainda aberta.
 
 Baseline entregue:
 - Estrutura de processo adicionada (`process_t`) com PID, estado e contexto mínimo salvo (`ESP`).
-- Protótipo de troca de contexto cooperativa no kernel (`scheduler_phase5_self_test`) validado via serial.
+- Runtime inicial do scheduler agora inclui thread de bootstrap + idle thread e criação de kernel threads sobre frames reais de retorno de IRQ.
 - Timer PIT configurado e IRQ0 habilitado para base de round-robin (coleta de ticks em `scheduler_on_timer_tick`).
-- Quantum de preempção conectado ao retorno de IRQ0 (dispatcher pode retornar `ESP` de próximo contexto).
-- Registro de processos de runtime integrado (tarefas kernel de demonstração) para round-robin fora do self-test.
+- Quantum de preempção conectado ao retorno de IRQ0 e `yield` voluntário por software interrupt (`int 0x81`).
+- Kernel threads do scheduler usam stacks dedicadas numa arena reservada, cada uma protegida por uma guard page não mapeada.
+- Sleep/bloqueio por ticks integrado ao scheduler para permitir wakeup determinístico por IRQ0.
+- Regressão automatizada da fase adicionada (`tests/test_phase5.py` / `make test-phase5`), incluindo cenário negativo de guard page.
 - Documento técnico da fase criado em `docs/SCHEDULER_PHASE5.md`.
 
 Checklist crítico de validação (Fase 5):
@@ -155,16 +157,16 @@ Checklist crítico de validação (Fase 5):
 - [x] Self-test de troca de contexto executado no boot com confirmação em log serial.
 - [x] IRQ0 habilitada com PIT configurado sem regressão de boot/shell.
 - [x] Quantum de preempção conectado ao caminho de retorno de interrupção.
-- [x] Separação completa de stack kernel/user por processo.
+- [x] Stacks de kernel por thread com guard page e teste negativo de fault.
 
 Critério para encerrar a fase:
 - População de processos em runtime não pode depender só de tarefas de demonstração e self-tests.
 - Cobertura automatizada precisa validar round-robin real e regressões de preempção fora do caminho de boot.
-- A separação kernel/user precisa ser descrita e exercitada para além do contexto mínimo salvo no PCB.
+- A separação kernel/user precisa ser descrita e exercitada com ring3, syscalls e memória com permissões distintas.
 - Documento de design técnico e testes têm de refletir o estado final, não apenas a base inicial.
 
 Validação atual da baseline:
-- Build com separação explícita de stack kernel/user no PCB (`user_esp`, limites base/top por stack) e self-test de scheduler validando stacks distintas entre processos de runtime.
+- Build com kernel threads reais sobre frames de IRQ fabricados, stacks guardadas por páginas não mapeadas e suíte `make test-phase5` cobrindo caminho positivo e fault controlado.
 
 ## Ordem Recomendada de Execução
 

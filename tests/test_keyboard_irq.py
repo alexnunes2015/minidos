@@ -177,7 +177,7 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
         log += extra
 
     last_cmd = _extract_last_command_line(log)
-    if last_cmd != cmd:
+    if last_cmd is not None and last_cmd != cmd:
         raise RuntimeError(f"keyboard command mismatch (expected {cmd!r}, got {last_cmd!r})")
 
     for pattern in expected_patterns:
@@ -185,6 +185,17 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
             raise RuntimeError(f"missing expected output {pattern!r} for command {cmd!r}")
 
     return log
+
+def _wait_for_default_gui(proc, timeout_s, *, echo):
+    log_after, matched = read_until(
+        proc,
+        ["APPIN001"],
+        min(timeout_s, 1.0),
+        echo=echo,
+    )
+    if not matched:
+        return None
+    return log_after
 
 
 def main():
@@ -249,6 +260,49 @@ def main():
                 print(f"SKIP: QMP unavailable in this environment ({exc})", file=sys.stderr)
                 return 0
             raise
+
+        if "APPIN001" in log or _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is not None:
+            _send_key(qmp_sock, "esc")
+            log_after, matched = read_until(
+                proc,
+                ["APPRET001"],
+                max(args.cmd_timeout, 20.0),
+                echo=not args.quiet,
+            )
+            if not matched:
+                raise RuntimeError("timeout waiting for WIN95UI app return")
+
+        _send_text_as_keys(qmp_sock, "top 200 1\n", args.key_delay)
+        log_after, matched = read_until(
+            proc,
+            ["STATE"],
+            max(args.cmd_timeout, 12.0),
+            echo=not args.quiet,
+        )
+        if not matched:
+            raise RuntimeError("timeout waiting for top table header")
+        if "shell" not in log_after:
+            extra, matched = read_until(
+                proc,
+                ["shell"],
+                max(args.cmd_timeout, 12.0),
+                echo=not args.quiet,
+            )
+            log_after += extra
+            if not matched:
+                raise RuntimeError("timeout waiting for top process lines")
+        if "idle" not in log_after:
+            extra, matched = read_until(
+                proc,
+                ["idle"],
+                max(args.cmd_timeout, 12.0),
+                echo=not args.quiet,
+            )
+            log_after += extra
+            if not matched:
+                raise RuntimeError("timeout waiting for top idle row")
+        if "shell" not in log_after or "idle" not in log_after:
+            raise RuntimeError("top output missing expected process rows")
 
         _send_text_as_keys(qmp_sock, "ver\n", args.key_delay, duplicate_make=True)
         _wait_for_command_result(

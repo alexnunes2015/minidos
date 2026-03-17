@@ -7,6 +7,7 @@ This guide is for fast diagnosis in an AI-agent-first workflow. Use the shortest
 ```sh
 make verify-image
 make phase0-check
+make test-phase5
 make run-no-reboot
 make run-trace
 make run-gdb
@@ -17,6 +18,7 @@ make gdb-kernel
 
 - `make verify-image`: validates the floppy image layout, BPB, patched kernel sector count, and expected files inside the FAT volume.
 - `make phase0-check`: clean rebuild plus serial smoke test.
+- `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
 - `make run-no-reboot`: keeps QEMU from rebooting on panic/triple-fault style failures so the last serial output stays visible.
 - `make run-trace`: writes a QEMU trace to `build/qemu-trace.log` for low-level fault analysis.
 - `make run-gdb`: starts QEMU paused with a GDB stub on `localhost:1234`.
@@ -33,7 +35,15 @@ make gdb-kernel
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled`
+- `SCHED100`
+- `SCHED110`
+- `SCHED120`
+- `SCHED190`
+- `SCHED900`
 - `[sched] phase5 context-switch self-test OK`
+- `BOOT100`
+- `BOOT110`
+- `BOOT190`
 - `MiniDOS Shell Ready.`
 - `[INFO][kernel] Entering main loop`
 
@@ -55,6 +65,10 @@ Check:
 - patched `kernel_sectors` still matches the built kernel
 - if the kernel crossed `64 KiB`, stage2 now advances the `ES` window while loading sectors
 - serial output reaches the PM checkpoints
+- `BOOT100` appears before disk/drive probing
+- `BOOT110` appears only if the runtime logo files were loaded successfully
+- before `BOOT110`, the graphics placeholder is now a black screen with a blinking cursor
+- `BOOT190` appears after the 5-second logo window counted from `BOOT110` and immediately before the shell takes over the screen
 
 ### Paging or exception failure
 
@@ -71,6 +85,22 @@ Check:
 - `build/qemu-trace.log`
 - whether the fault happens before or after `paging self-test OK`
 
+### Scheduler or stack-guard failure
+
+Run:
+
+```sh
+make test-phase5
+make run-no-reboot
+```
+
+Check:
+
+- `SCHED100`, `SCHED110`, and `SCHED120` appear in order
+- `SCHED190` appears in the positive path before `Entering main loop`
+- `SCHED900` appears in the negative path before `[paging] #PF detected`
+- `CR2` matches the scheduler stack arena (`0x0060xxxx`) when the guard page trips
+
 ### Shell is up but commands fail
 
 Run:
@@ -78,6 +108,7 @@ Run:
 ```sh
 make phase0-check
 python3 tests/test_serial.py "ver" "drives" "dir"
+python3 tests/test_serial.py "ps" "top 200 1"
 ```
 
 Check:
@@ -86,6 +117,9 @@ Check:
 - `Command:` serial markers
 - current drive enumeration
 - FAT init logs
+- `ps: scheduler runtime snapshot` appears before the task list
+- `sample 1/1 interval=200ms` appears before the sampled CPU lines
+- `mem is scheduler kernel-stack reserve only; userland RSS is not available yet` remains true until ring3 and per-process address spaces exist
 
 ### Keyboard IRQ regressions
 
@@ -102,6 +136,7 @@ make test-keyboard
 ```
 
 That suite now covers keyboard-only entry into the shell plus keyboard exit paths for `DOSSHELL` and `EDIT`.
+The normal boot now lands directly in the shell. The harness still tolerates a future boot-launched `WIN95UI` by dismissing it with `ESC` before continuing.
 It waits for `APPIN001` before sending keys into GUI apps and for `APPRET001` before asserting that the shell resumed, so app-input races are easier to localize from serial logs.
 
 ### Mouse / GUI IRQ12 regressions
@@ -118,7 +153,7 @@ Check:
 - `APPIN001` after `WIN95UI` starts
 - `APPRET001` after the click closes `WIN95UI` or after `q` / `ESC` return from the other apps
 - `[mouse] first packet received` after QMP moves the pointer
-- no `[win95ui]` serial debug lines while the demo runs
+- no `[win95ui]` serial debug lines while the GUI runs
 - shell accepts `ver` after the test clicks `Cancel`
 - `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app
 
@@ -146,6 +181,7 @@ Check:
 break kernel_main
 break paging_init
 break interrupts_init
+break scheduler_runtime_init
 break scheduler_phase5_self_test
 ```
 

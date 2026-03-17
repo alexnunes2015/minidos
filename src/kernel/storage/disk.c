@@ -1,4 +1,5 @@
 #include "disk.h"
+#include "boot_splash.h"
 // ATA PIO ports
 #define ATA_PRIMARY_IO      0x1F0
 #define ATA_PRIMARY_CTRL    0x3F6
@@ -32,6 +33,7 @@
 #define BOOT_DRIVE_HEADS_ADDR    0x0508
 #define BOOT_GEOMETRY_VALID_FLAG 0x02
 #define BIOS_SECTOR_SIZE         512
+#define ATA_WAIT_SPLASH_POLL_MASK 0x0FFFu
 
 static inline void outb(unsigned short port, unsigned char val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -102,6 +104,7 @@ typedef struct {
 } boot_media_t;
 
 static boot_media_t boot_media;
+static unsigned char ata_presence_mask;
 
 static int ata_decode_physical_target(unsigned char ata_id, ata_target_t* target) {
     if (!target || ata_id > 3) {
@@ -114,16 +117,33 @@ static int ata_decode_physical_target(unsigned char ata_id, ata_target_t* target
     return 0;
 }
 
-static int ata_decode_target(unsigned char disk_id, ata_target_t* target) {
-    unsigned char ata_id = disk_id;
+static int ata_disk_id_to_physical(unsigned char disk_id, unsigned char* ata_id) {
+    unsigned char physical_id = disk_id;
+
+    if (!ata_id) {
+        return -1;
+    }
 
     if (boot_media.is_floppy) {
         if (disk_id == 0) {
             return -1;
         }
-        ata_id = (unsigned char)(disk_id - 1);
+        physical_id = (unsigned char)(disk_id - 1);
     }
 
+    if (physical_id > 3) {
+        return -1;
+    }
+
+    *ata_id = physical_id;
+    return 0;
+}
+
+static int ata_decode_target(unsigned char disk_id, ata_target_t* target) {
+    unsigned char ata_id;
+    if (ata_disk_id_to_physical(disk_id, &ata_id) != 0) {
+        return -1;
+    }
     return ata_decode_physical_target(ata_id, target);
 }
 
@@ -131,9 +151,16 @@ static int ata_has_error(const ata_target_t* target) {
     return (inb(target->io_base + ATA_STATUS) & ATA_SR_ERR) != 0;
 }
 
+static void ata_wait_pump(unsigned int timeout) {
+    if ((timeout & ATA_WAIT_SPLASH_POLL_MASK) == 0) {
+        boot_splash_pump();
+    }
+}
+
 static int ata_wait_bsy(const ata_target_t* target) {
     unsigned int timeout = 1000000;
     while ((inb(target->io_base + ATA_STATUS) & ATA_SR_BSY) && timeout > 0) {
+        ata_wait_pump(timeout);
         timeout--;
     }
     return timeout > 0 ? 0 : -1;
@@ -142,6 +169,7 @@ static int ata_wait_bsy(const ata_target_t* target) {
 static int ata_wait_drdy(const ata_target_t* target) {
     unsigned int timeout = 1000000;
     while (!(inb(target->io_base + ATA_STATUS) & ATA_SR_DRDY) && timeout > 0) {
+        ata_wait_pump(timeout);
         timeout--;
     }
     return timeout > 0 ? 0 : -1;
@@ -157,9 +185,28 @@ static int ata_wait_drq(const ata_target_t* target) {
         if (!(status & ATA_SR_BSY) && (status & ATA_SR_DRQ)) {
             return 0;
         }
+        ata_wait_pump(timeout);
         timeout--;
     }
     return -1;
+}
+
+static int ata_probe_physical_target(unsigned char ata_id) {
+    ata_target_t target;
+    unsigned char status;
+
+    if (ata_decode_physical_target(ata_id, &target) != 0) {
+        return 0;
+    }
+
+    outb(target.io_base + ATA_DRIVE, (unsigned char)(0xE0 | target.drive_sel));
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+
+    status = inb(target.io_base + ATA_STATUS);
+    return status != 0x00 && status != 0xFF;
 }
 
 static void ata_soft_reset(const ata_target_t* target) {
@@ -321,8 +368,6 @@ static int disk_write_lba_internal(const ata_target_t* target, unsigned int lba,
 }
 
 void disk_init() {
-    ata_target_t primary_master;
-    ata_target_t secondary_master;
     unsigned char boot_flags;
 
     boot_media.drive_number = read_phys_u8(BOOT_DRIVE_NUMBER_ADDR);
@@ -332,15 +377,7 @@ void disk_init() {
     boot_media.is_floppy = boot_media.drive_number < 0x80;
     boot_flags = read_phys_u8(BOOT_DRIVE_FLAGS_ADDR);
     boot_media.geometry_valid = (boot_flags & BOOT_GEOMETRY_VALID_FLAG) != 0;
-
-    if (ata_decode_physical_target(0, &primary_master) == 0) {
-        outb(primary_master.io_base + ATA_DRIVE, 0xE0);
-        io_wait();
-    }
-    if (ata_decode_physical_target(2, &secondary_master) == 0) {
-        outb(secondary_master.io_base + ATA_DRIVE, 0xE0);
-        io_wait();
-    }
+    ata_presence_mask = 0;
 
     if (boot_media.is_floppy) {
         unsigned char boot_sector[BIOS_SECTOR_SIZE];
@@ -364,6 +401,12 @@ void disk_init() {
             boot_media.total_sectors = total16 != 0 ? total16 : total32;
         }
     }
+
+    for (unsigned char ata_id = 0; ata_id < 4; ata_id++) {
+        if (ata_probe_physical_target(ata_id)) {
+            ata_presence_mask |= (unsigned char)(1u << ata_id);
+        }
+    }
 }
 
 int disk_boot_media_is_floppy(void) {
@@ -374,11 +417,26 @@ unsigned int disk_boot_media_total_sectors(void) {
     return boot_media.total_sectors;
 }
 
+int disk_is_present(unsigned char disk_id) {
+    unsigned char ata_id;
+
+    if (boot_media.is_floppy && disk_id == 0) {
+        return 1;
+    }
+    if (ata_disk_id_to_physical(disk_id, &ata_id) != 0) {
+        return 0;
+    }
+    return (ata_presence_mask & (unsigned char)(1u << ata_id)) != 0;
+}
+
 int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
     ata_target_t target;
 
     if (boot_media.is_floppy && disk_id == 0) {
         return boot_floppy_rw_sector(lba, buffer, 0);
+    }
+    if (!disk_is_present(disk_id)) {
+        return -1;
     }
     if (ata_decode_target(disk_id, &target) != 0) {
         return -1;
@@ -397,6 +455,9 @@ int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned c
 
     if (boot_media.is_floppy && disk_id == 0) {
         return boot_floppy_rw_sector(lba, buffer, 1);
+    }
+    if (!disk_is_present(disk_id)) {
+        return -1;
     }
     if (ata_decode_target(disk_id, &target) != 0) {
         return -1;

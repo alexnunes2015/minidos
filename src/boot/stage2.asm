@@ -419,8 +419,8 @@ dap:
     dd 0x00000000           ; LBA high
 
 msg_start: db '[Stage2] Started', 0x0D, 0x0A, 0
-msg_before_logo: db '[Stage2] Displaying boot logo...', 0x0D, 0x0A, 0
-msg_after_logo: db '[Stage2] Logo displayed', 0x0D, 0x0A, 0
+msg_before_logo: db '[Stage2] Preparing video mode...', 0x0D, 0x0A, 0
+msg_after_logo: db '[Stage2] Video mode ready', 0x0D, 0x0A, 0
 msg_loading_kernel: db '[Stage2] Loading kernel...', 0x0D, 0x0A, 0
 msg_loaded: db '[Stage2] Kernel loaded', 0x0D, 0x0A, 0
 msg_pm: db '[Stage2] Entering PM...', 0x0D, 0x0A, 0

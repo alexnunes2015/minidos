@@ -6,6 +6,7 @@ import time
 
 from qemu_harness import (
     build_floppy_qemu_cmd,
+    dismiss_default_gui,
     read_until,
     resolve_disk_path,
     send_line,
@@ -90,7 +91,7 @@ def main():
             "MiniDOS v0.1 Kernel Started",
         ]
         ready_deadline = time.time() + args.ready_timeout
-        _, matched = wait_for_shell_ready(
+        ready_log, matched = wait_for_shell_ready(
             proc,
             args.ready_timeout,
             echo=not args.quiet,
@@ -98,7 +99,7 @@ def main():
         )
         if not matched:
             # Fallback: if kernel messages never show, try after PM.
-            _, matched = read_until(
+            ready_log, matched = read_until(
                 proc,
                 [pm_marker],
                 args.ready_timeout,
@@ -110,7 +111,7 @@ def main():
             time.sleep(args.post_pm_delay)
         elif matched != "Entering main loop":
             remaining = max(0.1, ready_deadline - time.time())
-            _, matched = read_until(
+            extra_log, matched = read_until(
                 proc,
                 ["Entering main loop"],
                 remaining,
@@ -122,6 +123,14 @@ def main():
                     file=sys.stderr,
                 )
                 return 1
+            ready_log += extra_log
+
+        dismiss_default_gui(
+            proc,
+            ready_log,
+            args.cmd_timeout,
+            echo=not args.quiet,
+        )
 
         expected_map = {
             "help": ["Available commands:"],
@@ -129,6 +138,8 @@ def main():
             "drives": ["Command: drives", "Available drives:"],
             "dir": ["Directory of "],
             "mem": ["System Memory:"],
+            "ps": ["STATE", "shell", "idle"],
+            "top 200 1": ["STATE", "shell", "idle"],
             "a:": ["Switched to drive"],
             "A:": ["Switched to drive"],
             "c:": ["Switched to drive"],

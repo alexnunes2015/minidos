@@ -37,6 +37,7 @@ Examples:
 
 ```bash
 ./external_apps/add_app.sh external_apps/templates/hello.c
+./external_apps/add_app.sh external_apps/templates/stress.c STRESS
 ./external_apps/add_app.sh /tmp/my_app.c TESTAPP
 ```
 
@@ -59,6 +60,11 @@ or (equivalent):
 ```text
 run hello
 ```
+
+The repository also includes `external_apps/templates/stress.c`, a shell-launched
+stress app that churns repeated directory scans, ELF reads, graphics presents,
+and return-to-shell flow while emitting stable serial markers (`STRS100`,
+`STRS110`, `STRS190`, `STRS900`) for regression scripts.
 
 ## Manual flow (reference)
 

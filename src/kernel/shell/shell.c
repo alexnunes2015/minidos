@@ -25,6 +25,10 @@ static void shell_out_both(const char* s) {
     log_serial_raw(s);
 }
 
+static void shell_out_serial_only(const char* s) {
+    log_serial_raw(s);
+}
+
 static void shell_out_both_char(char c) {
     char s[2];
     s[0] = c;
@@ -167,6 +171,18 @@ static void str_copy_upper(const char* src, char* dst, int dst_size) {
     dst[i] = '\0';
 }
 
+static void str_copy_raw(const char* src, char* dst, int dst_size) {
+    int i = 0;
+    if (dst_size <= 0) {
+        return;
+    }
+    while (src[i] && i < dst_size - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
 static void str_to_lower(char* s) {
     for (int i = 0; s[i]; i++) {
         if (s[i] >= 'A' && s[i] <= 'Z') {
@@ -266,6 +282,11 @@ static void shell_build_app_host(shell_app_host_t* host) {
     host->path_push = path_push;
 }
 
+static void shell_build_boot_app_host(shell_app_host_t* host) {
+    shell_build_app_host(host);
+    host->out_both = shell_out_serial_only;
+}
+
 static void shell_build_builtin_host(shell_builtin_host_t* host) {
     host->out_screen = shell_out_screen;
     host->out_both = shell_out_both;
@@ -323,6 +344,40 @@ void shell_prompt() {
     print_string(":");
     print_string(current_path);
     print_char('>');
+}
+
+int shell_run_app_from_drive_root(const char* app_name, int drive_letter) {
+    shell_app_host_t host;
+    unsigned int saved_dir_cluster = current_dir_cluster;
+    char saved_path[sizeof(current_path)];
+    int saved_drive = drive_get_current();
+    int launched;
+
+    if (!app_name || app_name[0] == '\0') {
+        return 0;
+    }
+    if (!drive_get_info(drive_letter)) {
+        return 0;
+    }
+
+    str_copy_raw(current_path, saved_path, (int)sizeof(saved_path));
+
+    drive_set_current(drive_letter);
+    fat16_set_drive(drive_letter);
+    current_dir_cluster = 0;
+    path_reset(current_path);
+    fat16_initialized = 0;
+
+    shell_build_boot_app_host(&host);
+    launched = shell_apps_try_execute_elf(&host, app_name, "");
+
+    drive_set_current(saved_drive);
+    fat16_set_drive(saved_drive);
+    current_dir_cluster = saved_dir_cluster;
+    str_copy_raw(saved_path, current_path, (int)sizeof(current_path));
+    fat16_initialized = 0;
+
+    return launched;
 }
 
 void shell_execute(char* cmd) {

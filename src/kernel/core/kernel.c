@@ -1,3 +1,4 @@
+#include "boot_splash.h"
 #include "video.h"
 #include "keyboard.h"
 #include "shell/shell.h"
@@ -12,14 +13,13 @@
 
 // Memory size from BIOS (in KB)
 unsigned int g_memory_kb = 0;
-static const unsigned int BOOT_LOGO_MS = 5000;
-static const unsigned int BOOT_SPLASH_MS = 1200;
-static const unsigned int BOOT_PROGRESS_STEP_MS = 50;
 
 #define STOP_MEMORY_INVALID "STOP 0x00000001"
 #define STOP_PAGING_INIT    "STOP 0x00000002"
 #define STOP_DISK_READ      "STOP 0x00000003"
 #define STOP_DRIVE_DETECT   "STOP 0x00000004"
+#define STOP_SCHED_INIT     "STOP 0x00000006"
+#define STOP_SCHED_SELFTEST "STOP 0x00000007"
 #define AUTO_SCRIPT_NAME    "AUTOEXEC.AUT"
 #define AUTO_SCRIPT_MAX     2048
 #define AUTO_LINE_MAX       64
@@ -48,26 +48,6 @@ static inline unsigned short read_phys_u16(unsigned int addr) {
     unsigned short val;
     __asm__ volatile ("movw (%1), %0" : "=r"(val) : "r"(addr) : "memory");
     return val;
-}
-
-static void wait_boot_logo() {
-    const unsigned int step_ms = 50;
-    unsigned int elapsed = 0;
-    unsigned int frame = 0;
-
-    video_draw_boot_gradient(0);
-    while (elapsed < BOOT_LOGO_MS) {
-        unsigned int next = elapsed + step_ms;
-        if (next > BOOT_LOGO_MS) {
-            next = BOOT_LOGO_MS;
-        }
-
-        timer_sleep_ms(next - elapsed);
-        elapsed = next;
-
-        frame++;
-        video_draw_boot_gradient(frame * 6);
-    }
 }
 
 static void bsod_wait_key_then_reboot() {
@@ -109,30 +89,6 @@ static void boot_panic_bsod(const char* stop_code, const char* detail) {
     log_serial_raw("\n");
     video_show_bsod(stop_code, detail);
     bsod_wait_key_then_reboot();
-}
-
-// Display a simple boot splash before entering the shell
-static void show_boot_logo() {
-    if (video_is_graphics()) {
-        static unsigned char logo_pixels[320 * 200];
-        static unsigned char logo_palette[256 * 3];
-
-        fat16_set_drive(drive_get_current());
-        if (fat16_init()) {
-            int logo_bytes = fat16_read_file("BOOTLOGO.DAT", logo_pixels, sizeof(logo_pixels));
-            int pal_bytes = fat16_read_file("BOOTLOGO.PAL", logo_palette, sizeof(logo_palette));
-
-            if (logo_bytes == (int)sizeof(logo_pixels) && pal_bytes == (int)sizeof(logo_palette)) {
-                cls();
-                video_draw_indexed_image_centered(logo_pixels, 320, 200, logo_palette);
-                wait_boot_logo();
-                cls();
-                return;
-            }
-        }
-    }
-
-    cls();
 }
 
 static int is_space(char c) {
@@ -327,13 +283,18 @@ void kernel_main() {
         boot_panic_bsod(STOP_PAGING_INIT, "FAILED TO INITIALIZE PAGING.");
     }
     interrupts_init();
+    if (scheduler_runtime_init() != 0) {
+        boot_panic_bsod(STOP_SCHED_INIT, "FAILED TO INITIALIZE SCHEDULER RUNTIME.");
+    }
 
     if (scheduler_phase5_self_test() != 0) {
-        boot_panic_bsod("STOP 0x00000006", "PHASE5 CONTEXT SWITCH SELF-TEST FAILED.");
+        boot_panic_bsod(STOP_SCHED_SELFTEST, "PHASE5 RUNTIME SELF-TEST FAILED.");
     }
     scheduler_enable_preemption(5);
     
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
+    boot_splash_begin();
+    boot_splash_pump();
 
     log_write(LOG_LEVEL_INFO, "kernel", "Initializing disk driver...\n", LOG_DEST_SERIAL);
     disk_init();
@@ -344,18 +305,25 @@ void kernel_main() {
         }
     }
     log_write(LOG_LEVEL_INFO, "kernel", "Disk driver initialized\n", LOG_DEST_SERIAL);
+    boot_splash_pump();
+
+    drive_init_boot_media();
+    boot_splash_try_load_logo();
+    boot_splash_pump();
     
     log_write(LOG_LEVEL_INFO, "kernel", "Detecting drives and partitions...\n", LOG_DEST_SERIAL);
-    drive_init();
+    drive_probe_additional();
+    boot_splash_try_load_logo();
+    boot_splash_pump();
     if (drive_get_count() <= 0) {
         boot_panic_bsod(STOP_DRIVE_DETECT, "NO VALID DRIVE DETECTED.");
     }
     log_write(LOG_LEVEL_INFO, "kernel", "Drive detection complete\n", LOG_DEST_SERIAL);
-
-    show_boot_logo();
     
     log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
+    boot_splash_finish();
     shell_init();
+    scheduler_set_current_name("shell");
     run_auto_script();
     
     /* Flush any keys pressed during boot before entering the shell */

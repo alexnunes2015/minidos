@@ -34,6 +34,8 @@ typedef struct {
 
 // Initialize drive system and detect all drives
 void drive_init();
+void drive_init_boot_media();
+void drive_probe_additional();
 
 // Get drive info for a drive letter (0=A:, 1=B:, etc)
 DriveInfo* drive_get_info(int drive_letter);

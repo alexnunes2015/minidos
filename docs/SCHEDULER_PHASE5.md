@@ -1,26 +1,32 @@
-# Fase 5 - Preparacao para Multitarefa
+# Fase 5 - Runtime de Scheduler
 
 ## Objetivo
-Estabelecer a base tecnica para um scheduler simples e habilitar o caminho inicial de preempcao via timer.
+Sair do prototipo de troca de contexto por `ret` e estabelecer um runtime de kernel threads que use o caminho real de interrupcao, com stacks protegidas por guard page.
 
 ## Entregas desta fase
 - Estrutura de processo (`process_t`) com PID, estado e contexto minimo (`esp` salvo).
-- Prototipo de troca de contexto em modo kernel (`sched_context_switch`) com pilha por tarefa.
-- Self-test de troca de contexto no boot (`scheduler_phase5_self_test`) alternando entre duas tarefas.
-- Preparacao de timer para round-robin: configuracao do PIT e coleta de ticks em IRQ0.
-- Quantum de preempcao ligado ao retorno de interrupcao: IRQ0 pode requisitar troca de contexto retornando novo `ESP` para o stub comum.
-- Registro de processos de runtime fora do self-test (`scheduler_start_runtime_demo`), com duas tarefas kernel no round-robin.
+- Bootstrap do scheduler com thread de arranque (`kernel`) + `idle`.
+- Kernel threads preparadas como frames completos de retorno de IRQ, em vez de stacks artificiais dependentes de `ret`.
+- Yield voluntario via software interrupt (`int 0x81`) reutilizando o mesmo dispatcher de interrupcoes.
+- Sleep/bloqueio por ticks com wakeup em IRQ0.
+- Guard page nao mapeada por stack de kernel gerida pelo scheduler, na arena `0x00600000`.
+- Self-test de runtime no boot (`scheduler_phase5_self_test`) com round-robin real entre duas tarefas.
+- Teste negativo opcional (`SCHED_TEST_GUARD`) que toca a guard page e valida o `#PF`.
 
-## Escopo do prototipo validado
-- Troca de contexto cooperativa validada no self-test.
-- Caminho de preempcao por quantum habilitado no IRQ0 com fallback seguro quando nao ha outro processo pronto.
-- Validacao por log serial:
+## Marcadores seriais
+- `SCHED100` - runtime do scheduler inicializado.
+- `SCHED110` - guard pages das stacks de kernel armadas.
+- `SCHED120` - self-test da fase iniciado.
+- `SCHED190` - self-test positivo concluido.
+- `SCHED900` - page fault em guard page de stack identificado.
+
+Os logs humanos continuam presentes:
 - `[sched] phase5 context-switch self-test start`
 - `[sched] task A step` / `[sched] task B step`
 - `[sched] phase5 context-switch self-test OK`
 - `[sched] preemption enabled`
-- `[sched] runtime demo tasks registered`
 
 ## Proximos passos
-- Evoluir ABI de syscalls para transicao user/kernel com isolamento de memoria.
-- Generalizar API de criacao de processo para uso por userland ELF (alem das tarefas de demo em ring0).
+- Mover apps ELF para processos do scheduler em vez de executa-las dentro da thread bootstrap do kernel.
+- Introduzir ring3, pilha de user, permissao `U/S` em paging e uma transicao syscall/user->kernel real.
+- Decidir como migrar o shell/bootstrap para uma stack tambem protegida por guard page.

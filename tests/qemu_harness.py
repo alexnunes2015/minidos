@@ -97,6 +97,56 @@ def wait_for_shell_ready(proc, timeout_s, *, echo=True, extra_markers=None):
     return read_until(proc, markers, timeout_s, echo=echo, max_buf=60000)
 
 
+def dismiss_default_gui(proc, initial_log, timeout_s, *, echo=True):
+    log = initial_log or ""
+    saw_gui_boot = any(marker in log for marker in ["GUI100", "GUI110", "Executing WIN95UI.ELF..."])
+
+    if "APPIN001" not in log:
+        deadline = time.time() + (timeout_s if saw_gui_boot else min(timeout_s, 1.0))
+
+        while time.time() < deadline:
+            remaining = max(0.1, deadline - time.time())
+            extra, matched = read_until(
+                proc,
+                ["APPIN001", "GUI100", "GUI110", "GUI120", "GUI190", "Executing WIN95UI.ELF..."],
+                remaining,
+                echo=echo,
+            )
+            log += extra
+
+            if matched == "APPIN001":
+                break
+            if matched in {"GUI100", "GUI110", "Executing WIN95UI.ELF..."}:
+                if not saw_gui_boot:
+                    deadline = time.time() + timeout_s
+                saw_gui_boot = True
+                continue
+            if matched in {"GUI120", "GUI190"}:
+                return log, 0
+            if not matched:
+                if saw_gui_boot:
+                    raise RuntimeError("timeout waiting for default GUI input readiness")
+                return log, 0
+
+        if "APPIN001" not in log:
+            if saw_gui_boot:
+                raise RuntimeError("default GUI booted but never became ready for input")
+            return log, 0
+
+    if proc.stdin is None:
+        raise RuntimeError("QEMU process has no stdin pipe")
+
+    proc.stdin.write(b"\x1b")
+    proc.stdin.flush()
+
+    extra, matched = read_until(proc, ["APPRET001"], max(5.0, timeout_s), echo=echo)
+    log += extra
+    if not matched:
+        raise RuntimeError("timeout waiting for default GUI to return")
+
+    return log, 1
+
+
 def send_line(proc, line):
     if proc.stdin is None:
         raise RuntimeError("QEMU process has no stdin pipe")

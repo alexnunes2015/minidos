@@ -61,6 +61,10 @@ static inline unsigned int read_cr2(void) {
     return value;
 }
 
+static inline void invlpg_addr(unsigned int addr) {
+    __asm__ volatile ("invlpg (%0)" : : "r"(addr) : "memory");
+}
+
 static inline unsigned int read_phys_u32(unsigned int addr) {
     unsigned int value;
     __asm__ volatile ("movl (%1), %0" : "=r"(value) : "r"(addr) : "memory");
@@ -166,12 +170,22 @@ static void bsod_wait_key_then_reboot(void) {
 
 __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, unsigned int eip) {
     unsigned int cr2 = read_cr2();
+    int guard_pid = -1;
+    const char* guard_name = 0;
 
     if (page_fault_in_progress) {
         log_serial_raw("[paging] nested #PF halt\n");
         panic_halt();
     }
     page_fault_in_progress = 1;
+
+    if (scheduler_describe_guard_fault(cr2, &guard_pid, &guard_name)) {
+        log_serial_raw("SCHED900 guard-page pid=");
+        serial_print_hex((unsigned int)guard_pid);
+        log_serial_raw(" name=");
+        log_serial_raw(guard_name ? guard_name : "unknown");
+        log_serial_raw("\n");
+    }
 
     log_serial_raw("[paging] #PF detected\n");
     log_serial_raw("[paging] CR2=");
@@ -253,6 +267,10 @@ __attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* fram
         irq_frame_t* next_frame = scheduler_on_timer_tick(frame);
         pic_send_eoi(0);
         return next_frame;
+    }
+
+    if (frame->vector == 129) {
+        return scheduler_on_yield(frame);
     }
 
     if (frame->vector >= 32 && frame->vector <= 47) {
@@ -350,6 +368,7 @@ ISR_NOERR_STUB(irq12, 44)
 ISR_NOERR_STUB(irq13, 45)
 ISR_NOERR_STUB(irq14, 46)
 ISR_NOERR_STUB(irq15, 47)
+ISR_NOERR_STUB(isr129, 129)
 
 static void paging_setup_structures(void) {
     unsigned int fb_addr;
@@ -476,6 +495,7 @@ static void paging_setup_idt(void) {
     idt_set_gate(45, (unsigned int)irq13, 0x08, 0x8E);
     idt_set_gate(46, (unsigned int)irq14, 0x08, 0x8E);
     idt_set_gate(47, (unsigned int)irq15, 0x08, 0x8E);
+    idt_set_gate(129, (unsigned int)isr129, 0x08, 0x8E);
 
     idtp.limit = (unsigned short)(sizeof(idt) - 1);
     idtp.base = (unsigned int)&idt;
@@ -529,6 +549,42 @@ int paging_init(void) {
 #endif
 
     return 0;
+}
+
+static unsigned int* paging_lookup_pte(unsigned int addr) {
+    unsigned int pd_index = addr >> 22;
+    unsigned int pt_index = (addr >> 12) & 0x3FFU;
+    unsigned int entry = page_directory[pd_index];
+    unsigned int* page_table;
+
+    if ((entry & PAGE_PRESENT) == 0) {
+        return 0;
+    }
+
+    page_table = (unsigned int*)(entry & ~0xFFFU);
+    return &page_table[pt_index];
+}
+
+int paging_page_present(unsigned int addr) {
+    unsigned int* pte = paging_lookup_pte(addr);
+
+    if (!pte) {
+        return 0;
+    }
+
+    return (*pte & PAGE_PRESENT) != 0;
+}
+
+int paging_unmap_page(unsigned int addr) {
+    unsigned int* pte = paging_lookup_pte(addr);
+
+    if (!pte) {
+        return 0;
+    }
+
+    *pte = 0;
+    invlpg_addr(addr);
+    return 1;
 }
 
 void interrupts_init(void) {

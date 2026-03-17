@@ -47,7 +47,7 @@ QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 full-test
 
 all: minidos.img
 
@@ -167,6 +167,7 @@ full-test:
 	$(MAKE) test-serial
 	$(MAKE) test-keyboard-soft
 	$(MAKE) test-paging
+	$(MAKE) test-phase5
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 
@@ -177,6 +178,7 @@ ci:
 	$(MAKE) test-serial
 	$(MAKE) test-keyboard-soft
 	$(MAKE) test-paging
+	$(MAKE) test-phase5
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 
@@ -198,4 +200,14 @@ test-paging:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+test-phase5:
+	$(MAKE) clean
+	$(MAKE) all
+	python3 tests/test_phase5.py
+	$(MAKE) clean
+	$(MAKE) EXTRA_CFLAGS=-DSCHED_TEST_GUARD all
+	python3 tests/test_phase5.py --expect-guard
+	$(MAKE) clean
+	$(MAKE) all
+
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

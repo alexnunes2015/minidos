@@ -47,9 +47,12 @@ def main():
             "paging self-test OK",
             "Entering main loop",
         ]
+        log, matched = read_until(proc, [required[-1]], args.timeout)
+        if not matched:
+            print(f"\nERROR: marker not found: {required[-1]}", file=sys.stderr)
+            return 1
         for marker in required:
-            _, matched = read_until(proc, [marker], args.timeout)
-            if not matched:
+            if marker not in log:
                 print(f"\nERROR: marker not found: {marker}", file=sys.stderr)
                 return 1
         return 0

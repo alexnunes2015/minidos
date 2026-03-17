@@ -1,4 +1,5 @@
 #include "drive.h"
+#include "boot_splash.h"
 #include "disk.h"
 #include "video.h"
 #include "serial.h"
@@ -6,6 +7,12 @@
 static DriveInfo drives[MAX_DRIVES];
 static int current_drive = 0;  // A:
 static unsigned char mbr_buffer[SECTOR_SIZE];
+
+static void drive_boot_print(const char* str) {
+    if (!boot_splash_is_active()) {
+        print_string(str);
+    }
+}
 
 static unsigned short read_le16(const unsigned char* ptr) {
     return (unsigned short)(ptr[0] | (ptr[1] << 8));
@@ -42,6 +49,37 @@ static void print_num(unsigned int num) {
     }
     while (i > 0) {
         print_char(buf[--i]);
+    }
+}
+
+static void drive_boot_print_num(unsigned int num) {
+    if (!boot_splash_is_active()) {
+        print_num(num);
+    }
+}
+
+static void drive_reset_slots(void) {
+    for (int i = 0; i < MAX_DRIVES; i++) {
+        drives[i].valid = 0;
+    }
+    current_drive = 0;
+}
+
+static int drive_next_letter_index(void) {
+    int next_letter = 0;
+    while (next_letter < MAX_DRIVES && drives[next_letter].valid) {
+        next_letter++;
+    }
+    return next_letter;
+}
+
+static void drive_select_first_valid(void) {
+    current_drive = 0;
+    for (int i = 0; i < MAX_DRIVES; i++) {
+        if (drives[i].valid) {
+            current_drive = i;
+            return;
+        }
     }
 }
 
@@ -176,38 +214,49 @@ static int detect_disk_partitions(unsigned char disk_id, int* next_letter) {
 }
 
 void drive_init() {
-    // Clear all drive slots
-    for (int i = 0; i < MAX_DRIVES; i++) {
-        drives[i].valid = 0;
-    }
-    
+    drive_init_boot_media();
+    drive_probe_additional();
+}
+
+void drive_init_boot_media() {
     int next_letter = 0;
-    
-    print_string("Detecting drives...\n");
-    
+
+    drive_reset_slots();
+
     if (disk_boot_media_is_floppy()) {
         if (detect_whole_disk_volume(0, &next_letter)) {
-            print_string("  Boot floppy: whole-disk volume\n");
+            drive_boot_print("  Boot floppy: whole-disk volume\n");
         }
     }
+    drive_select_first_valid();
+}
+
+void drive_probe_additional() {
+    int next_letter = drive_next_letter_index();
+
+    drive_boot_print("Detecting drives...\n");
 
     // Try to detect up to 4 ATA disks (primary master/slave, secondary master/slave).
     for (unsigned char disk = disk_boot_media_is_floppy() ? 1 : 0; disk < 4; disk++) {
+        if (!disk_is_present(disk)) {
+            continue;
+        }
+
         int found = detect_disk_partitions(disk, &next_letter);
         if (found > 0) {
-            print_string("  Disk ");
-            print_num(disk);
-            print_string(": ");
-            print_num(found);
-            print_string(" partition(s)\n");
+            drive_boot_print("  Disk ");
+            drive_boot_print_num(disk);
+            drive_boot_print(": ");
+            drive_boot_print_num(found);
+            drive_boot_print(" partition(s)\n");
         }
     }
     
     if (next_letter == 0) {
         if (disk_boot_media_is_floppy() && detect_whole_disk_volume(0, &next_letter)) {
-            print_string("  Boot floppy fallback mounted as A:\n");
+            drive_boot_print("  Boot floppy fallback mounted as A:\n");
         } else {
-            print_string("  No partitions found - creating test drive A:\n");
+            drive_boot_print("  No partitions found - creating test drive A:\n");
             drives[0].valid = 1;
             drives[0].disk_id = 0;
             drives[0].partition_num = -1;
@@ -217,19 +266,12 @@ void drive_init() {
             next_letter = 1;
         }
     }
-    
-    // Set current drive to first valid drive (default A:)
-    current_drive = 0;
-    for (int i = 0; i < MAX_DRIVES; i++) {
-        if (drives[i].valid) {
-            current_drive = i;
-            break;
-        }
-    }
 
-    print_string("Total drives: ");
-    print_num(next_letter);
-    print_string("\n\n");
+    drive_select_first_valid();
+
+    drive_boot_print("Total drives: ");
+    drive_boot_print_num((unsigned int)next_letter);
+    drive_boot_print("\n\n");
 }
 
 DriveInfo* drive_get_info(int drive_letter) {

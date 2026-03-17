@@ -8,6 +8,8 @@ const char* process_state_name(process_state_t state) {
             return "ready";
         case PROCESS_RUNNING:
             return "running";
+        case PROCESS_BLOCKED:
+            return "blocked";
         case PROCESS_TERMINATED:
             return "terminated";
         default:

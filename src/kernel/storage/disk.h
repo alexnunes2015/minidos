@@ -10,6 +10,9 @@ int disk_boot_media_is_floppy(void);
 // Total sectors reported by the boot media BPB (0 when unknown).
 unsigned int disk_boot_media_total_sectors(void);
 
+// Return non-zero when the selected runtime disk is present.
+int disk_is_present(unsigned char disk_id);
+
 // Read a sector from LBA (primary master disk)
 int disk_read_lba(unsigned int lba, unsigned char* buffer);
 
