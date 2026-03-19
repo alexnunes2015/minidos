@@ -11,7 +11,7 @@ nop
 bdb_oem:                    db 'MSWIN4.1'           ; 8 bytes
 bdb_bytes_per_sector:       dw 512
 bdb_sectors_per_cluster:    db 1
-bdb_reserved_sectors:       dw 160
+bdb_reserved_sectors:       dw 192
 bdb_fat_count:              db 2
 bdb_dir_entries_count:      dw 224
 bdb_total_sectors:          dw 2880                 ; 2880 * 512 = 1.44MB

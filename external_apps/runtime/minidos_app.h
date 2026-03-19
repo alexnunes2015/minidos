@@ -34,6 +34,9 @@ enum {
     MINIDOS_SYSCALL_WAIT_EVENT = 26,
     MINIDOS_SYSCALL_GFX_PRESENT = 27,
     MINIDOS_SYSCALL_GET_TIME = 28,
+    MINIDOS_SYSCALL_THREAD_SPAWN = 29,
+    MINIDOS_SYSCALL_THREAD_YIELD = 30,
+    MINIDOS_SYSCALL_THREAD_SELF = 31,
 };
 
 enum {
@@ -79,6 +82,14 @@ typedef struct {
     unsigned char minutes;
     unsigned char seconds;
 } app_time_t;
+
+typedef void (*app_thread_entry_t)(const minidos_app_api_t* api, void* arg);
+
+typedef struct {
+    const char* name;
+    app_thread_entry_t entry;
+    void* arg;
+} app_thread_create_t;
 
 static inline int app_syscall(const minidos_app_api_t* api, unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
     if (api && api->syscall) {
@@ -162,6 +173,18 @@ static inline int app_wait_event_timeout(const minidos_app_api_t* api, unsigned 
 
 static inline int app_get_time(const minidos_app_api_t* api, app_time_t* out) {
     return app_syscall(api, MINIDOS_SYSCALL_GET_TIME, (unsigned int)out, 0, 0);
+}
+
+static inline int app_thread_create(const minidos_app_api_t* api, const app_thread_create_t* spec) {
+    return app_syscall(api, MINIDOS_SYSCALL_THREAD_SPAWN, (unsigned int)spec, 0, 0);
+}
+
+static inline void app_thread_yield(const minidos_app_api_t* api) {
+    (void)app_syscall(api, MINIDOS_SYSCALL_THREAD_YIELD, 0, 0, 0);
+}
+
+static inline int app_thread_self(const minidos_app_api_t* api) {
+    return app_syscall(api, MINIDOS_SYSCALL_THREAD_SELF, 0, 0, 0);
 }
 
 static inline int app_chdir(const minidos_app_api_t* api, const char* dir_name) {

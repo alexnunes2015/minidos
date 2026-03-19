@@ -431,12 +431,12 @@ msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
 
 vesa_mode_selected: dw 0
 vesa_modes:
-    dw 0x112                ; 640x480
-    dw 0x111                ; 640x480
-    dw 0x115                ; 800x600 fallback
-    dw 0x114                ; 800x600 fallback
-    dw 0x118                ; 1024x768 fallback
-    dw 0x117                ; 1024x768 fallback
+    dw 0x111                ; 640x480x16
+    dw 0x112                ; 640x480x24
+    dw 0x114                ; 800x600x16 fallback
+    dw 0x115                ; 800x600x24 fallback
+    dw 0x117                ; 1024x768x16 fallback
+    dw 0x118                ; 1024x768x24 fallback
     dw 0xFFFF
 
 times 2048-($-$$) db 0      ; Pad to 2048 bytes

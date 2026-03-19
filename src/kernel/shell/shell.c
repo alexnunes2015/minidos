@@ -266,6 +266,34 @@ static int has_wildcards(const char* s) {
     return 0;
 }
 
+static int parse_uint_arg(const char* args, unsigned int* out) {
+    unsigned int value = 0;
+    int i = 0;
+    int digits = 0;
+
+    if (!args || !out) {
+        return 0;
+    }
+
+    while (args[i] == ' ' || args[i] == '\t') {
+        i++;
+    }
+    while (args[i] >= '0' && args[i] <= '9') {
+        value = (value * 10U) + (unsigned int)(args[i] - '0');
+        i++;
+        digits++;
+    }
+    while (args[i] == ' ' || args[i] == '\t') {
+        i++;
+    }
+    if (digits == 0 || args[i] != '\0') {
+        return 0;
+    }
+
+    *out = value;
+    return 1;
+}
+
 static void shell_build_app_host(shell_app_host_t* host) {
     host->current_dir_cluster = &current_dir_cluster;
     host->current_path = current_path;
@@ -344,6 +372,7 @@ void shell_prompt() {
     print_string(":");
     print_string(current_path);
     print_char('>');
+    video_cursor_reset_blink();
 }
 
 int shell_run_app_from_drive_root(const char* app_name, int drive_letter) {
@@ -434,6 +463,42 @@ void shell_execute(char* cmd) {
         if (!shell_apps_try_execute_elf(&host, app_name, "")) {
             shell_out_both("ELF app not found or failed to load\n");
         }
+    } else if (mystrcmp(command, "runbg") == 0) {
+        char app_name[64];
+        shell_app_host_t host;
+        int pid = -1;
+        char pid_str[16];
+        int pid_len;
+
+        if (!parse_single_arg(args, app_name, sizeof(app_name))) {
+            shell_out_both("Usage: runbg <app>\n");
+            return;
+        }
+        str_to_upper(app_name);
+        shell_build_app_host(&host);
+        if (!shell_apps_run_background(&host, app_name, &pid)) {
+            shell_out_both("Unable to start background ELF task\n");
+            return;
+        }
+        shell_out_both("Started background app ");
+        shell_out_both(app_name);
+        shell_out_both(" pid=");
+        pid_len = uint_to_dec((unsigned int)pid, pid_str);
+        pid_str[pid_len] = '\0';
+        shell_out_both(pid_str);
+        shell_out_both("\n");
+    } else if (mystrcmp(command, "kill") == 0) {
+        unsigned int pid = 0;
+
+        if (!parse_uint_arg(args, &pid)) {
+            shell_out_both("Usage: kill <pid>\n");
+            return;
+        }
+        if (!shell_apps_stop_background((int)pid)) {
+            shell_out_both("Unable to stop background app group\n");
+            return;
+        }
+        shell_out_both("Background app group stopped\n");
     } else if (cmd[0] != '\0') {
         shell_app_host_t host;
         shell_build_app_host(&host);

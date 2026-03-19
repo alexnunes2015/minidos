@@ -29,7 +29,7 @@ Current goals:
 - mouse snapshots and waitable input events for GUI apps
 - RTC time reads for UI elements such as taskbar clocks
 - predictable dirty-rect invalidation for software-cursor apps
-- real backbuffered presentation for GUI frames
+- explicit frame presentation for GUI apps
 - zero dynamic allocation
 - no dependency on libc
 
@@ -256,11 +256,11 @@ This layer is meant to be the bridge between the current framebuffer primitives 
 If the project evolves toward a real desktop shell, keep the next steps in this order:
 
 1. richer UI event queue (avoid collapsing fast click sequences into a single snapshot)
-2. richer present/dirty-rect batching on top of the current backbuffer
+2. richer present/dirty-rect batching on top of the reserved backbuffer window
 3. control tree/layout
 4. menu bars, list views, and text editing widgets
 5. optional declarative styling format
 
 Do not introduce CSS semantics before the widget tree and event model exist.
 
-The current `win95ui` demo now renders into the kernel backbuffer and only presents once per frame, so hover redraws no longer expose partially drawn window state on the frontbuffer.
+The current `win95ui` demo still batches its drawing and calls `present` once per frame. The kernel presents those completed frames from the software backbuffer through the C copy path, while the older ASM fast-present path stays disabled under the preemptive scheduler.

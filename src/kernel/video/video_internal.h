@@ -28,6 +28,7 @@ typedef unsigned int u32;
 #define FONT_H 8
 #define MAX_TEXT_COLS 256
 #define MAX_TEXT_ROWS 160
+#define VIDEO_TEXT_BUFFER_BASE ((char (*)[MAX_TEXT_COLS])0x00380000u)
 #define VIDEO_BACKBUFFER_MAX_WIDTH 1024
 #define VIDEO_BACKBUFFER_MAX_HEIGHT 768
 #define VIDEO_BACKBUFFER_BYTES_PER_PIXEL 4
@@ -71,7 +72,7 @@ extern int text_rows;
 extern int text_origin_x;
 extern int text_origin_y;
 
-extern char text_buffer[MAX_TEXT_ROWS][MAX_TEXT_COLS];
+extern char (*const text_buffer)[MAX_TEXT_COLS];
 
 extern u8* video_backbuffer_fill_base;
 extern int video_backbuffer_fill_pitch;
@@ -99,6 +100,16 @@ static inline unsigned char inb(unsigned short port) {
     return val;
 }
 
+static inline int video_fb_bytes_per_pixel(void) {
+    if (fb_bpp <= 16) {
+        return 2;
+    }
+    if (fb_bpp <= 24) {
+        return 3;
+    }
+    return 4;
+}
+
 void init_video_once(void);
 
 void video_clear_dirty(void);
@@ -107,6 +118,7 @@ int __attribute__((noinline, regparm(0))) video_backbuffer_rect_fits(int x, int 
 void video_note_dirty(int x, int y, int w, int h);
 
 void write_frontbuffer_pixel(volatile u8* dst, u32 rgb);
+void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb);
 void fill_rect_rgb(int x, int y, int w, int h, u32 rgb);
 void draw_pixel(int x, int y, u32 rgb);
 void clear_graphics(u32 rgb);

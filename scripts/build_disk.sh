@@ -5,13 +5,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISK_IMG="$ROOT_DIR/minidos.img"
 DISK_KB=1440
 DISK_SECTORS=2880
-RESERVED_SECTORS=160
+RESERVED_SECTORS=192
 KERNEL_LOAD_SECTOR=5
 APP_SPECS=$(cat <<'EOF'
 GUESS100|GAMES|external_apps/templates/guess100.c
 DOSSHELL||external_apps/templates/dosshell.c
 EDIT||external_apps/templates/edit.c
 WIN95UI||external_apps/templates/win95_demo.c
+PTCPU|PTEST|external_apps/templates/ptcpu.c
+PTWAIT|PTEST|external_apps/templates/ptwait.c
+PTIO|PTEST|external_apps/templates/ptio.c
+PTGFX|PTEST|external_apps/templates/ptgfx.c
+PTTHRD|PTEST|external_apps/templates/ptthrd.c
 EOF
 )
 
@@ -112,6 +117,33 @@ copy_boot_logo_tree() {
     fi
 }
 
+write_ptest_readme_tree() {
+    local target_root="$1"
+    local ptest_dir="$target_root/PTEST"
+
+    mkdir -p "$ptest_dir"
+    cat > "$ptest_dir/README.TXT" <<'EOF'
+MiniDOS PTEST pack
+
+PTCPU  - busy CPU loop for a few scheduler ticks
+PTWAIT - blocking wait/event timeout loop
+PTIO   - directory + file create/read/rename/delete churn
+PTGFX  - simple graphics/present animation
+PTTHRD - app main plus child worker thread in the same ELF group
+
+Usage:
+  cd ptest
+  elfls
+  runbg ptcpu
+  runbg ptthrd
+  top 200 1
+
+Note:
+  background ELFs now show as scheduler tasks; PTTHRD should
+  show both the main task and a child worker with the same EXE.
+EOF
+}
+
 copy_payload_tree() {
     local target_root="$1"
     local app_name
@@ -130,6 +162,7 @@ copy_payload_tree() {
         cp "$(app_elf_path "$app_name")" "$dest_dir/$app_name.ELF"
     done <<< "$APP_SPECS"
 
+    write_ptest_readme_tree "$target_root"
     copy_boot_logo_tree "$target_root"
 }
 
@@ -247,6 +280,27 @@ copy_with_mtools() {
             return 1
         fi
     done <<< "$APP_SPECS"
+
+    if ! cat <<'EOF' | mcopy -o -i "$DISK_IMG" - "::/PTEST/README.TXT"; then
+MiniDOS PTEST pack
+
+PTCPU  - busy CPU loop for a few scheduler ticks
+PTWAIT - blocking wait/event timeout loop
+PTIO   - directory + file create/read/rename/delete churn
+PTGFX  - simple graphics/present animation
+
+Usage:
+  cd ptest
+  elfls
+  ptcpu
+
+Note:
+  top still attributes ELF runtime to the shell thread until
+  ELF apps run as real scheduler processes.
+EOF
+        echo "ERROR: failed to write PTEST/README.TXT via mtools" >&2
+        return 1
+    fi
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
         if ! mcopy -o -i "$DISK_IMG" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT; then

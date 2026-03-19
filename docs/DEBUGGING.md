@@ -64,6 +64,7 @@ Check:
 - stage2 still fits in the fixed sector budget
 - patched `kernel_sectors` still matches the built kernel
 - if the kernel crossed `64 KiB`, stage2 now advances the `ES` window while loading sectors
+- if you see a tiny colored streak or random pixels near the top of the shell, inspect `nm -n build/kernel.elf | tail` and confirm `__bss_end < 0x000A0000`; the graphics text grid now lives in a scratch window at `0x00380000` specifically to keep runtime globals out of the VGA aperture
 - serial output reaches the PM checkpoints
 - `BOOT100` appears before disk/drive probing
 - `BOOT110` appears only if the runtime logo files were loaded successfully
@@ -115,11 +116,26 @@ Check:
 
 - `Entering main loop` appears before the harness starts injecting serial commands
 - `Command:` serial markers
+- shell prompt shows a blinking block cursor in graphics mode; if it stays missing, check PIT ticks and the video cursor helpers
 - current drive enumeration
 - FAT init logs
-- `ps: scheduler runtime snapshot` appears before the task list
-- `sample 1/1 interval=200ms` appears before the sampled CPU lines
-- `mem is scheduler kernel-stack reserve only; userland RSS is not available yet` remains true until ring3 and per-process address spaces exist
+- `ps` and `top` print a plain task table with `PID`, `NAME`, `STATE`, `MEM`, `CPU`, and `EXE`
+- `MEM` is still scheduler kernel-stack reserve only; userland RSS is not available yet
+
+### Background ELF multitask regressions
+
+Run:
+
+```sh
+make test-multitask
+```
+
+Check:
+
+- `runbg ptcpu`, `runbg ptwait`, and `runbg ptthrd` each print `Started background app ... pid=...`
+- `APPTH100` appears when `PTTHRD` spawns its child worker
+- `top 200 1` shows the app leaders plus the `worker` child thread with the correct `EXE`
+- `kill <pid>` prints `Background app group stopped` and removes the leader plus its children from the next `top`
 
 ### Keyboard IRQ regressions
 

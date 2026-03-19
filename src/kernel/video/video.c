@@ -2,6 +2,48 @@
 #include "logger.h"
 #include "serial.h"
 
+#define VIDEO_BOOT_STATE_MAGIC 0x56494430u
+
+typedef struct {
+    u32 magic;
+    u32 fb_addr;
+    int fb_width;
+    int fb_height;
+    int fb_pitch;
+    int fb_bpp;
+    int fb_bytes_per_pixel;
+    int text_cols;
+    int text_rows;
+    int text_origin_x;
+    int text_origin_y;
+    u8 red_size;
+    u8 red_pos;
+    u8 green_size;
+    u8 green_pos;
+    u8 blue_size;
+    u8 blue_pos;
+} video_boot_state_t;
+
+static video_boot_state_t g_video_boot_state = {
+    VIDEO_BOOT_STATE_MAGIC,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    TEXT_SCREEN_WIDTH,
+    TEXT_SCREEN_HEIGHT,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+};
+
 int cursor_x = 0;
 int cursor_y = 0;
 
@@ -36,8 +78,6 @@ int text_rows = TEXT_SCREEN_HEIGHT;
 int text_origin_x = 0;
 int text_origin_y = 0;
 
-char text_buffer[MAX_TEXT_ROWS][MAX_TEXT_COLS];
-
 u8* video_backbuffer_fill_base = 0;
 int video_backbuffer_fill_pitch = 0;
 int video_backbuffer_fill_h = 0;
@@ -50,6 +90,14 @@ int video_backbuffer_present_src_pitch = 0;
 int video_backbuffer_present_dst_pitch = 0;
 int video_backbuffer_present_w = 0;
 int video_backbuffer_present_h = 0;
+
+/*
+ * Keep the text cell backing store out of the flat kernel image.
+ * The kernel now outgrows the 0xA0000 VGA aperture if this 40 KiB buffer
+ * lives in .bss, which leaks runtime globals directly into the legacy
+ * banked framebuffer window and shows up as colored artifacts on screen.
+ */
+char (*const text_buffer)[MAX_TEXT_COLS] = VIDEO_TEXT_BUFFER_BASE;
 
 static inline u8 mem8(u32 addr) {
     u8 val;
@@ -67,6 +115,81 @@ static inline u32 mem32(u32 addr) {
     u32 val;
     __asm__ volatile ("movl (%1), %0" : "=r"(val) : "r"(addr) : "memory");
     return val;
+}
+
+static inline u32 read_eflags(void) {
+    u32 flags;
+    __asm__ volatile ("pushf\npop %0" : "=r"(flags));
+    return flags;
+}
+
+static inline void restore_interrupts(u32 flags) {
+    if ((flags & 0x00000200U) != 0U) {
+        __asm__ volatile ("sti");
+    }
+}
+
+static int video_boot_state_valid(void) {
+    return g_video_boot_state.magic == VIDEO_BOOT_STATE_MAGIC
+        && g_video_boot_state.fb_addr != 0
+        && g_video_boot_state.fb_width > 0
+        && g_video_boot_state.fb_height > 0
+        && g_video_boot_state.fb_pitch > 0
+        && g_video_boot_state.fb_bpp >= 15;
+}
+
+static void video_restore_boot_state(void) {
+    graphics_mode = 1;
+    fb = (volatile u8*)(u32)g_video_boot_state.fb_addr;
+    fb_width = g_video_boot_state.fb_width;
+    fb_height = g_video_boot_state.fb_height;
+    fb_pitch = g_video_boot_state.fb_pitch;
+    fb_bpp = g_video_boot_state.fb_bpp;
+    fb_bytes_per_pixel = g_video_boot_state.fb_bytes_per_pixel;
+    text_cols = g_video_boot_state.text_cols;
+    text_rows = g_video_boot_state.text_rows;
+    text_origin_x = g_video_boot_state.text_origin_x;
+    text_origin_y = g_video_boot_state.text_origin_y;
+    red_size = g_video_boot_state.red_size;
+    red_pos = g_video_boot_state.red_pos;
+    green_size = g_video_boot_state.green_size;
+    green_pos = g_video_boot_state.green_pos;
+    blue_size = g_video_boot_state.blue_size;
+    blue_pos = g_video_boot_state.blue_pos;
+    backbuffer_ready = 0;
+    backbuffer_pitch = 0;
+    if (fb_width <= VIDEO_BACKBUFFER_MAX_WIDTH
+        && fb_height <= VIDEO_BACKBUFFER_MAX_HEIGHT) {
+        unsigned int required_pitch = (unsigned int)fb_width * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
+        unsigned int required_bytes = required_pitch * (unsigned int)fb_height;
+
+        if (required_pitch > 0 && required_bytes <= VIDEO_BACKBUFFER_MAX_BYTES) {
+            backbuffer_ready = 1;
+            backbuffer_pitch = (int)required_pitch;
+        }
+    }
+    fast_present_mode = 0;
+    video_ready = 1;
+}
+
+static void video_save_boot_state(void) {
+    g_video_boot_state.magic = VIDEO_BOOT_STATE_MAGIC;
+    g_video_boot_state.fb_addr = (u32)fb;
+    g_video_boot_state.fb_width = fb_width;
+    g_video_boot_state.fb_height = fb_height;
+    g_video_boot_state.fb_pitch = fb_pitch;
+    g_video_boot_state.fb_bpp = fb_bpp;
+    g_video_boot_state.fb_bytes_per_pixel = fb_bytes_per_pixel;
+    g_video_boot_state.text_cols = text_cols;
+    g_video_boot_state.text_rows = text_rows;
+    g_video_boot_state.text_origin_x = text_origin_x;
+    g_video_boot_state.text_origin_y = text_origin_y;
+    g_video_boot_state.red_size = red_size;
+    g_video_boot_state.red_pos = red_pos;
+    g_video_boot_state.green_size = green_size;
+    g_video_boot_state.green_pos = green_pos;
+    g_video_boot_state.blue_size = blue_size;
+    g_video_boot_state.blue_pos = blue_pos;
 }
 
 static int min_int(int a, int b) {
@@ -189,7 +312,21 @@ void video_note_dirty(int x, int y, int w, int h) {
 }
 
 void init_video_once(void) {
+    u32 flags = read_eflags();
+
+    if (video_ready || (graphics_mode && fb != 0 && fb_width > 0 && fb_height > 0 && fb_pitch > 0 && fb_bpp >= 15)) {
+        video_ready = 1;
+        fb_bytes_per_pixel = (fb_bpp <= 16) ? 2 : ((fb_bpp <= 24) ? 3 : 4);
+        return;
+    }
+    if (video_boot_state_valid()) {
+        video_restore_boot_state();
+        return;
+    }
+
+    __asm__ volatile ("cli");
     if (video_ready) {
+        restore_interrupts(flags);
         return;
     }
 
@@ -236,6 +373,8 @@ void init_video_once(void) {
             text_origin_x = 0;
             text_origin_y = 0;
 
+            backbuffer_ready = 0;
+            backbuffer_pitch = 0;
             if (fb_width <= VIDEO_BACKBUFFER_MAX_WIDTH
                 && fb_height <= VIDEO_BACKBUFFER_MAX_HEIGHT) {
                 unsigned int required_pitch = (unsigned int)fb_width * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
@@ -246,17 +385,8 @@ void init_video_once(void) {
                     backbuffer_pitch = (int)required_pitch;
                 }
             }
-
-            if (backbuffer_ready
-                && red_size == 8 && red_pos == 16
-                && green_size == 8 && green_pos == 8
-                && blue_size == 8 && blue_pos == 0) {
-                if (fb_bytes_per_pixel == 4) {
-                    fast_present_mode = 32;
-                } else if (fb_bytes_per_pixel == 3) {
-                    fast_present_mode = 24;
-                }
-            }
+            fast_present_mode = 0;
+            video_save_boot_state();
 
             log_serial_raw("[video] init fb=");
             serial_print_hex((u32)fb);
@@ -292,6 +422,8 @@ void init_video_once(void) {
         video_note_dirty(0, 0, fb_width, fb_height);
         video_present_pending();
     }
+
+    restore_interrupts(flags);
 }
 
 int video_is_graphics(void) {
@@ -321,9 +453,26 @@ void video_clear_color(unsigned int rgb) {
         cls();
         return;
     }
-    clear_graphics(rgb);
-    video_note_dirty(0, 0, fb_width, fb_height);
-    video_maybe_present_pending();
+    if (backbuffer_ready) {
+        /*
+         * When a backbuffer is present, avoid touching the front buffer during
+         * clears. Writing the front buffer immediately makes every frame start
+         * with a visible flash (the screen briefly shows only the clear color)
+         * before the rest of the UI is redrawn and presented. Keeping the
+         * clear on the backbuffer and marking it dirty lets the caller control
+         * exactly when the new frame becomes visible via video_present_pending.
+         */
+        clear_graphics(rgb);
+        video_note_dirty(0, 0, fb_width, fb_height);
+        video_maybe_present_pending();
+    } else {
+        /* Fallback for text mode or no backbuffer: update the front buffer
+         * directly to keep the display in sync.
+         */
+        clear_graphics(rgb);
+        fill_frontbuffer_rect_rgb(0, 0, fb_width, fb_height, rgb);
+        video_clear_dirty();
+    }
 }
 
 void video_fill_rect(int x, int y, int w, int h, unsigned int rgb) {

@@ -95,6 +95,14 @@ static int is_space(char c) {
     return c == ' ' || c == '\t';
 }
 
+static int is_command_char(char c) {
+    if (c == '\r' || c == '\n' || c == '\b' || c == '\t') {
+        return 1;
+    }
+
+    return c >= 32 && c <= 126;
+}
+
 static char to_upper_char(char c) {
     if (c >= 'a' && c <= 'z') {
         return (char)(c - ('a' - 'A'));
@@ -126,9 +134,34 @@ static command_input_t read_command_line(char* buffer, int max_len) {
     while (i < max_len - 1) {
         char c = 0;
 
+        if (source != CMD_INPUT_SERIAL && keyboard_try_get_char(&c)) {
+            source = CMD_INPUT_KEYBOARD;
+            if (c == '\n') {
+                print_char('\n');
+                video_cursor_reset_blink();
+                break;
+            }
+            if (c == '\b') {
+                if (i > 0) {
+                    i--;
+                    print_char('\b');
+                    video_cursor_reset_blink();
+                }
+                continue;
+            }
+
+            buffer[i++] = c;
+            print_char(c);
+            video_cursor_reset_blink();
+            continue;
+        }
+
         if (source != CMD_INPUT_KEYBOARD && serial_received()) {
             c = serial_getchar();
-            if (source == CMD_INPUT_NONE && c == '\0') {
+            if (source == CMD_INPUT_NONE && !is_command_char(c)) {
+                continue;
+            }
+            if (!is_command_char(c)) {
                 continue;
             }
 
@@ -136,31 +169,20 @@ static command_input_t read_command_line(char* buffer, int max_len) {
             if (c == '\r' || c == '\n') {
                 break;
             }
+            if (c == '\b') {
+                if (i > 0) {
+                    i--;
+                    serial_putchar('\b');
+                }
+                continue;
+            }
 
             buffer[i++] = c;
             serial_putchar(c);
             continue;
         }
 
-        if (source != CMD_INPUT_SERIAL && keyboard_try_get_char(&c)) {
-            source = CMD_INPUT_KEYBOARD;
-            if (c == '\n') {
-                print_char('\n');
-                break;
-            }
-            if (c == '\b') {
-                if (i > 0) {
-                    i--;
-                    print_char('\b');
-                }
-                continue;
-            }
-
-            buffer[i++] = c;
-            print_char(c);
-            continue;
-        }
-
+        video_cursor_blink_step();
         timer_wait_for_interrupt();
     }
 
@@ -233,39 +255,87 @@ static void run_auto_script() {
     }
 }
 
+static void kernel_runtime_thread(void* arg) {
+    (void)arg;
+
+    if (scheduler_phase5_self_test() != 0) {
+        boot_panic_bsod(STOP_SCHED_SELFTEST, "PHASE5 RUNTIME SELF-TEST FAILED.");
+    }
+    scheduler_disable_preemption();
+
+    log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
+    boot_splash_finish();
+    shell_init();
+    scheduler_set_current_name("shell");
+    run_auto_script();
+
+    keyboard_flush();
+    scheduler_enable_preemption(5);
+    log_write(LOG_LEVEL_INFO, "kernel", "Entering main loop\n", LOG_DEST_SERIAL);
+    while (1) {
+        char command[64];
+        command_input_t input;
+
+        shell_prompt();
+        input = read_command_line(command, 64);
+
+        if (input == CMD_INPUT_SERIAL) {
+            log_write(LOG_LEVEL_DEBUG, "input", "reading command from serial\n", LOG_DEST_SERIAL);
+            log_serial_raw("\n");
+        } else {
+            log_write(LOG_LEVEL_DEBUG, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
+        }
+
+        if (input == CMD_INPUT_SERIAL) {
+            log_serial_raw("Command: ");
+            log_serial_raw(command);
+            log_serial_raw("\n");
+        } else if (SHELL_COMMAND_TRACE) {
+            log_write(LOG_LEVEL_DEBUG, "shell", "Command: ", LOG_DEST_SERIAL);
+            log_serial_raw(command);
+            log_serial_raw("\n");
+        }
+
+        shell_execute(command);
+    }
+}
+
 void kernel_main() {
+    unsigned int base_mem;
+    unsigned int ext_mem;
+    char mem_str[16];
+    unsigned int mem;
+    int idx = 0;
+
     // Initialize serial for debugging FIRST
     serial_init();
     log_init();
     log_serial_raw("\n\n=== MiniDOS Kernel Starting ===\n");
-    
+
     // Read memory size from BIOS data (stored by bootloader)
-    unsigned int base_mem = read_phys_u16(0x500); // Base memory (up to 640KB)
-    unsigned int ext_mem = read_phys_u16(0x502);  // Extended memory (above 1MB)
-    
+    base_mem = read_phys_u16(0x500); // Base memory (up to 640KB)
+    ext_mem = read_phys_u16(0x502);  // Extended memory (above 1MB)
+
     // Total memory = base + extended (extended is above 1MB, so add 1024KB)
     if (ext_mem > 0) {
         g_memory_kb = 1024 + ext_mem;  // Extended memory starts at 1MB
     } else {
         g_memory_kb = base_mem;         // Only base memory available
     }
-    
-    // Print memory size via serial
+
     log_serial_raw("System Memory: ");
-    char mem_str[16];
-    unsigned int mem = g_memory_kb;
-    int idx = 0;
+    mem = g_memory_kb;
     if (mem == 0) {
         mem_str[idx++] = '0';
     } else {
-        int temp = mem;
+        int temp = (int)mem;
         int digits = 0;
         while (temp > 0) {
             temp /= 10;
             digits++;
         }
         idx = digits;
-        temp = mem;
+        temp = (int)mem;
         while (temp > 0) {
             mem_str[--digits] = '0' + (temp % 10);
             temp /= 10;
@@ -282,16 +352,7 @@ void kernel_main() {
     if (paging_init() != 0) {
         boot_panic_bsod(STOP_PAGING_INIT, "FAILED TO INITIALIZE PAGING.");
     }
-    interrupts_init();
-    if (scheduler_runtime_init() != 0) {
-        boot_panic_bsod(STOP_SCHED_INIT, "FAILED TO INITIALIZE SCHEDULER RUNTIME.");
-    }
 
-    if (scheduler_phase5_self_test() != 0) {
-        boot_panic_bsod(STOP_SCHED_SELFTEST, "PHASE5 RUNTIME SELF-TEST FAILED.");
-    }
-    scheduler_enable_preemption(5);
-    
     log_write(LOG_LEVEL_INFO, "kernel", "MiniDOS v0.1 Kernel Started\n", LOG_DEST_SERIAL);
     boot_splash_begin();
     boot_splash_pump();
@@ -310,7 +371,7 @@ void kernel_main() {
     drive_init_boot_media();
     boot_splash_try_load_logo();
     boot_splash_pump();
-    
+
     log_write(LOG_LEVEL_INFO, "kernel", "Detecting drives and partitions...\n", LOG_DEST_SERIAL);
     drive_probe_additional();
     boot_splash_try_load_logo();
@@ -319,38 +380,11 @@ void kernel_main() {
         boot_panic_bsod(STOP_DRIVE_DETECT, "NO VALID DRIVE DETECTED.");
     }
     log_write(LOG_LEVEL_INFO, "kernel", "Drive detection complete\n", LOG_DEST_SERIAL);
-    
-    log_write(LOG_LEVEL_INFO, "kernel", "Starting shell...\n", LOG_DEST_SERIAL);
-    boot_splash_finish();
-    shell_init();
-    scheduler_set_current_name("shell");
-    run_auto_script();
-    
-    /* Flush any keys pressed during boot before entering the shell */
-    keyboard_flush();
-    log_write(LOG_LEVEL_INFO, "kernel", "Entering main loop\n", LOG_DEST_SERIAL);
-    while(1) {
-        shell_prompt();
-        char command[64];
-        command_input_t input = read_command_line(command, 64);
 
-        if (input == CMD_INPUT_SERIAL) {
-            log_write(LOG_LEVEL_DEBUG, "input", "reading command from serial\n", LOG_DEST_SERIAL);
-            log_serial_raw("\n");
-        } else {
-            log_write(LOG_LEVEL_DEBUG, "input", "reading command from keyboard\n", LOG_DEST_SERIAL);
-        }
-        
-        if (input == CMD_INPUT_SERIAL) {
-            log_serial_raw("Command: ");
-            log_serial_raw(command);
-            log_serial_raw("\n");
-        } else if (SHELL_COMMAND_TRACE) {
-            log_write(LOG_LEVEL_DEBUG, "shell", "Command: ", LOG_DEST_SERIAL);
-            log_serial_raw(command);
-            log_serial_raw("\n");
-        }
-        
-        shell_execute(command);
+    interrupts_init();
+    if (scheduler_runtime_init() != 0) {
+        boot_panic_bsod(STOP_SCHED_INIT, "FAILED TO INITIALIZE SCHEDULER RUNTIME.");
     }
+
+    kernel_runtime_thread(0);
 }

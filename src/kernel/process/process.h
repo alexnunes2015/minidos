@@ -17,6 +17,7 @@ typedef struct {
     unsigned int* user_stack_base;
     unsigned int* user_stack_top;
     unsigned int* guard_page_base;
+    unsigned int* page_directory;
 } process_context_t;
 
 typedef struct {
@@ -29,6 +30,8 @@ typedef struct {
     unsigned int wake_tick;
     unsigned int runtime_ticks;
     unsigned int switch_count;
+    void (*thread_entry)(void* arg);
+    void* thread_arg;
 } process_t;
 
 const char* process_state_name(process_state_t state);

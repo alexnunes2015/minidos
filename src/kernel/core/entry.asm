@@ -9,7 +9,7 @@
 %define PM16_DATA_SEL       0x20
 %define REALMODE_CODE_SEG   0x1000
 %define REALMODE_STACK_TOP  0x6000
-%define KERNEL_STACK_TOP    0x90000
+%define KERNEL_STACK_TOP    0x00180000
 %define CR0_PE              0x00000001
 %define CR0_PG              0x80000000
 
@@ -35,14 +35,20 @@ _start:
     mov gs, ax
     mov ss, ax
 
-    ; Ensure we have a valid stack
-    ; Keep the early kernel stack in low memory; the graphics backbuffer lives
-    ; in a dedicated scratch region above the kernel image.
+    ; Keep the early kernel stack above the kernel .bss and below the app load
+    ; window so the bootstrap path does not trample runtime globals.
     mov esp, KERNEL_STACK_TOP
     mov ebp, esp
     
     ; Clear direction flag
     cld
+
+    ; Snapshot the BIOS IVT while it is still valid so real-mode BIOS calls can
+    ; restore it later even if low memory gets clobbered during kernel init.
+    xor esi, esi
+    mov edi, biosdisk_ivt_backup
+    mov ecx, 256
+    rep movsd
 
     ; The flat kernel binary omits .bss, so zero it explicitly.
     xor eax, eax
@@ -55,7 +61,7 @@ _start:
     mov ecx, edx
     and ecx, 3
     rep stosb
-    
+
     ; Call the C kernel main function
     call kernel_main
     
@@ -138,7 +144,19 @@ biosdisk_real_mode_entry:
     mov ds, ax
     lidt [biosdisk_realmode_idtr - _start]
 
+    xor ax, ax
+    mov es, ax
+    xor di, di
+    mov si, biosdisk_ivt_backup - _start
+    mov cx, 512
+    rep movsw
+
     call biosdisk_pic_to_bios
+
+    mov al, 'A'
+    call biosdisk_serial_putc
+    mov al, 'B'
+    call biosdisk_serial_putc
 
     mov bx, [biosdisk_buffer_offset - _start]
     mov ax, [biosdisk_buffer_segment - _start]
@@ -154,16 +172,15 @@ biosdisk_real_mode_entry:
     shl al, 6
     or cl, al
 
-    mov ah, 0x00
-    sti
-    int 0x13
-    cli
-
+    mov al, 'C'
+    call biosdisk_serial_putc
     mov al, 1
     mov ah, [biosdisk_rw_command - _start]
     sti
     int 0x13
     cli
+    mov al, 'D'
+    call biosdisk_serial_putc
 
     mov ax, REALMODE_CODE_SEG
     mov ds, ax
@@ -176,6 +193,11 @@ biosdisk_real_mode_entry:
 
 .io_done:
     call biosdisk_pic_to_kernel
+
+    mov al, 'E'
+    call biosdisk_serial_putc
+    mov al, 'F'
+    call biosdisk_serial_putc
 
     cli
     lgdt [thunk_gdt_desc - _start]
@@ -233,6 +255,25 @@ biosdisk_pic_to_kernel:
     out 0xA1, al
     ret
 
+biosdisk_serial_putc:
+    push bx
+    push dx
+    mov bl, al
+    mov dx, 0x3FD
+
+.wait:
+    in al, dx
+    test al, 0x20
+    jz .wait
+
+    mov dx, 0x3F8
+    mov al, bl
+    out dx, al
+
+    pop dx
+    pop bx
+    ret
+
 [BITS 32]
 biosdisk_pm32_no_paging:
     mov ax, PM_DATA_SEL
@@ -278,6 +319,10 @@ biosdisk_pm32_paged:
 align 512
 biosdisk_transfer_buffer:
     times 512 db 0
+
+align 16
+biosdisk_ivt_backup:
+    times 1024 db 0
 
 align 4
 biosdisk_saved_esp:        dd 0

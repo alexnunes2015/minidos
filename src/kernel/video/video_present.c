@@ -15,6 +15,7 @@ static void video_wait_vretrace(void) {
 }
 
 static void video_copy_rect_to_front(int x, int y, int w, int h) {
+    int fb_bytes = video_fb_bytes_per_pixel();
     int x0;
     int y0;
     int x1;
@@ -62,7 +63,7 @@ static void video_copy_rect_to_front(int x, int y, int w, int h) {
             + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL);
         video_backbuffer_present_dst = (u8*)fb
             + (y * fb_pitch)
-            + (x * fb_bytes_per_pixel);
+            + (x * fb_bytes);
         video_backbuffer_present_src_pitch = backbuffer_pitch;
         video_backbuffer_present_dst_pitch = fb_pitch;
         video_backbuffer_present_w = w;
@@ -76,13 +77,13 @@ static void video_copy_rect_to_front(int x, int y, int w, int h) {
     }
 
     for (py = 0; py < h; py++) {
-        volatile u8* dst = fb + ((y + py) * fb_pitch) + (x * fb_bytes_per_pixel);
+        volatile u8* dst = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
         const u32* src = (const u32*)(const void*)(video_backbuffer + ((y + py) * backbuffer_pitch)
             + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
         int px;
 
         for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel(dst + (px * fb_bytes_per_pixel), src[px]);
+            write_frontbuffer_pixel(dst + (px * fb_bytes), src[px]);
         }
     }
 }

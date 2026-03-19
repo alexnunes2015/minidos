@@ -4,6 +4,7 @@ Permite enviar comandos automaticamente para o shell do MiniDOS e testar suas fu
 
 Os testes Python partilham o mesmo contrato de arranque e I/O através de `tests/qemu_harness.py`. Isso evita drift entre scripts e torna o comportamento mais previsível para agentes.
 O boot normal entra diretamente na shell. Os harnesses ainda toleram uma GUI inicial se esse fluxo voltar a ser ativado, para evitar sleeps frágeis nos testes.
+O `Makefile` agora gera dependências de headers (`.d`), por isso um `make` normal recompila automaticamente os objetos afetados quando a ABI interna do kernel muda.
 
 ## Scripts Disponíveis
 
@@ -180,6 +181,26 @@ make test-phase5
 ```
 
 ### 10. `make verify-image` - Verificação estrutural da imagem
+### 10. `tests/test_multitask_elf.py` - Regressão de multitasking ELF
+Valida o runtime de ELFs em background com threads-filho e kill por grupo:
+- arranca a shell e entra em `A:\PTEST`;
+- lança `PTCPU`, `PTWAIT` e `PTTHRD` com `runbg`;
+- espera o child thread da `PTTHRD` (`worker`) aparecer com `APPTH100`;
+- confirma no `top` os PIDs, nomes e `EXE` dos leaders e do child thread;
+- valida `kill <pid>` sobre a `PTTHRD` e confirma que líder + child desaparecem juntos;
+- mata os restantes jobs e confirma que o shell ainda aceita `ver`.
+
+**Uso:**
+```bash
+python3 tests/test_multitask_elf.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-multitask
+```
+
+### 11. `make verify-image` - Verificação estrutural da imagem
 Valida a imagem `minidos.img` fora do runtime:
 - tamanho da floppy (`1.44MB`);
 - BPB FAT12;

@@ -1,4 +1,108 @@
 #include "video_internal.h"
+#include "timer.h"
+
+#define GRAPHICS_CURSOR_BLINK_MS 500
+
+static int graphics_cursor_enabled = 0;
+static int graphics_cursor_drawn = 0;
+static int graphics_cursor_x = 0;
+static int graphics_cursor_y = 0;
+static unsigned int graphics_cursor_last_tick = 0;
+
+static unsigned int graphics_cursor_period_ticks(void) {
+    unsigned int ticks = timer_ms_to_ticks_ceil(GRAPHICS_CURSOR_BLINK_MS);
+    return ticks == 0 ? 1u : ticks;
+}
+
+static void graphics_cursor_hide(int present_now) {
+    if (!graphics_cursor_drawn) {
+        return;
+    }
+    if (graphics_cursor_x >= 0 && graphics_cursor_x < text_cols
+        && graphics_cursor_y >= 0 && graphics_cursor_y < text_rows) {
+        render_cell(graphics_cursor_x, graphics_cursor_y, text_buffer[graphics_cursor_y][graphics_cursor_x]);
+        video_note_cell(graphics_cursor_x, graphics_cursor_y);
+        if (present_now) {
+            video_maybe_present_pending();
+        }
+    }
+
+    graphics_cursor_drawn = 0;
+}
+
+static void graphics_cursor_show(int present_now) {
+    int x0;
+    int y0;
+
+    if (!graphics_mode) {
+        return;
+    }
+    if (cursor_x < 0 || cursor_y < 0 || cursor_x >= text_cols || cursor_y >= text_rows) {
+        graphics_cursor_hide(present_now);
+        return;
+    }
+    if (graphics_cursor_drawn && graphics_cursor_x == cursor_x && graphics_cursor_y == cursor_y) {
+        return;
+    }
+
+    graphics_cursor_hide(present_now);
+
+    x0 = text_origin_x + cursor_x * FONT_W;
+    y0 = text_origin_y + cursor_y * FONT_H + (FONT_H - 2);
+    fill_rect_rgb(x0, y0, FONT_W, 2, COLOR_FG);
+    video_note_dirty(x0, y0, FONT_W, 2);
+    if (present_now) {
+        video_maybe_present_pending();
+    }
+
+    graphics_cursor_drawn = 1;
+    graphics_cursor_x = cursor_x;
+    graphics_cursor_y = cursor_y;
+}
+
+void video_cursor_reset_blink(void) {
+    init_video_once();
+
+    if (!graphics_mode) {
+        update_cursor();
+        return;
+    }
+
+    graphics_cursor_enabled = timer_is_ready();
+    if (graphics_cursor_enabled) {
+        graphics_cursor_last_tick = timer_get_ticks();
+    }
+
+    graphics_cursor_show(1);
+}
+
+void video_cursor_blink_step(void) {
+    unsigned int period;
+    unsigned int now;
+
+    init_video_once();
+    if (!graphics_mode || !graphics_cursor_enabled) {
+        return;
+    }
+    if (!timer_is_ready()) {
+        return;
+    }
+
+    period = graphics_cursor_period_ticks();
+    if (period == 0) {
+        return;
+    }
+
+    now = timer_get_ticks();
+    if ((unsigned int)(now - graphics_cursor_last_tick) >= period) {
+        graphics_cursor_last_tick = now;
+        if (graphics_cursor_drawn) {
+            graphics_cursor_hide(1);
+        } else {
+            graphics_cursor_show(1);
+        }
+    }
+}
 
 void update_cursor(void) {
     init_video_once();
@@ -25,8 +129,8 @@ void cls(void) {
 
     if (graphics_mode) {
         clear_graphics(COLOR_BG);
-        video_note_dirty(0, 0, fb_width, fb_height);
-        video_maybe_present_pending();
+        fill_frontbuffer_rect_rgb(0, 0, fb_width, fb_height, COLOR_BG);
+        video_clear_dirty();
     } else {
         volatile u8* video = TEXT_VIDEO_MEMORY;
         for (int i = 0; i < TEXT_SCREEN_WIDTH * TEXT_SCREEN_HEIGHT * 2; i += 2) {
@@ -91,6 +195,13 @@ void print_char(char c) {
                 video_note_cell(cursor_x, cursor_y);
             }
         } else {
+            if (cursor_x >= text_cols) {
+                cursor_x = 0;
+                cursor_y++;
+            }
+            if (cursor_y >= text_rows) {
+                scroll_graphics();
+            }
             if (c < 32 || c > 126) {
                 c = '?';
             }

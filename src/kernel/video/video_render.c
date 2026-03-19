@@ -17,14 +17,15 @@ static u32 pack_rgb(u8 r, u8 g, u8 b) {
 }
 
 void write_frontbuffer_pixel(volatile u8* dst, u32 rgb) {
+    int fb_bytes = video_fb_bytes_per_pixel();
     u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
 
-    if (fb_bytes_per_pixel == 4) {
+    if (fb_bytes == 4) {
         *(volatile u32*)dst = packed;
         return;
     }
 
-    if (fb_bytes_per_pixel == 3) {
+    if (fb_bytes == 3) {
         dst[0] = (u8)(packed & 0xFFu);
         dst[1] = (u8)((packed >> 8) & 0xFFu);
         dst[2] = (u8)((packed >> 16) & 0xFFu);
@@ -32,6 +33,56 @@ void write_frontbuffer_pixel(volatile u8* dst, u32 rgb) {
     }
 
     *(volatile u16*)dst = (u16)packed;
+}
+
+void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb) {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int py;
+    int fb_bytes;
+
+    if (!graphics_mode || w <= 0 || h <= 0) {
+        return;
+    }
+
+    x0 = x;
+    y0 = y;
+    x1 = x + w;
+    y1 = y + h;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > fb_width) {
+        x1 = fb_width;
+    }
+    if (y1 > fb_height) {
+        y1 = fb_height;
+    }
+
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    x = x0;
+    y = y0;
+    w = x1 - x0;
+    h = y1 - y0;
+    fb_bytes = video_fb_bytes_per_pixel();
+
+    for (py = 0; py < h; py++) {
+        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
+        int px;
+
+        for (px = 0; px < w; px++) {
+            write_frontbuffer_pixel(row + (px * fb_bytes), rgb);
+        }
+    }
 }
 
 void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
@@ -87,11 +138,12 @@ void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
     }
 
     for (py = 0; py < h; py++) {
-        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes_per_pixel);
+        int fb_bytes = video_fb_bytes_per_pixel();
+        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
         int px;
 
         for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel(row + (px * fb_bytes_per_pixel), rgb);
+            write_frontbuffer_pixel(row + (px * fb_bytes), rgb);
         }
     }
 }
@@ -112,7 +164,7 @@ void draw_pixel(int x, int y, u32 rgb) {
         }
     }
 
-    write_frontbuffer_pixel(fb + (y * fb_pitch) + (x * fb_bytes_per_pixel), rgb);
+    write_frontbuffer_pixel(fb + (y * fb_pitch) + (x * video_fb_bytes_per_pixel()), rgb);
 }
 
 void clear_graphics(u32 rgb) {

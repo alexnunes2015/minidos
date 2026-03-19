@@ -9,8 +9,10 @@
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
-#define LOWMEM_PAGE_TABLE_COUNT 2
-#define PAGING_TEST_FAULT_ADDR 0x00900000
+#define PAGE_PWT     0x008
+#define PAGE_PCD     0x010
+#define LOWMEM_PAGE_TABLE_COUNT 3
+#define PAGING_TEST_FAULT_ADDR 0x00C00000
 #define BOOT_VIDEO_FLAG_ADDR 0x0510
 #define BOOT_VIDEO_HEIGHT_ADDR 0x0514
 #define BOOT_VIDEO_PITCH_ADDR 0x0516
@@ -429,9 +431,9 @@ static void paging_setup_structures(void) {
 
             region_base = pd_index << 22;
             for (int i = 0; i < 1024; i++) {
-                fb_page_tables[table][i] = (region_base + (i * 0x1000)) | PAGE_PRESENT | PAGE_RW;
+                fb_page_tables[table][i] = (region_base + (i * 0x1000)) | PAGE_PRESENT | PAGE_RW | PAGE_PWT | PAGE_PCD;
             }
-            page_directory[pd_index] = ((unsigned int)fb_page_tables[table]) | PAGE_PRESENT | PAGE_RW;
+            page_directory[pd_index] = ((unsigned int)fb_page_tables[table]) | PAGE_PRESENT | PAGE_RW | PAGE_PWT | PAGE_PCD;
             table++;
         }
     }
@@ -584,6 +586,38 @@ int paging_unmap_page(unsigned int addr) {
 
     *pte = 0;
     invlpg_addr(addr);
+    return 1;
+}
+
+unsigned int* paging_get_kernel_directory(void) {
+    return page_directory;
+}
+
+void paging_activate_directory(unsigned int* pd) {
+    if (!pd) {
+        pd = page_directory;
+    }
+    load_page_directory(pd);
+}
+
+int paging_build_app_directory(unsigned int* out_pd, unsigned int* out_lowmem_pt0, unsigned int app_phys_base, unsigned int app_bytes) {
+    unsigned int first_index = 0x200000U >> 12;
+    unsigned int page_count = (app_bytes + 0xFFFU) >> 12;
+
+    if (!out_pd || !out_lowmem_pt0 || page_count == 0 || page_count > 256U) {
+        return 0;
+    }
+
+    for (int i = 0; i < 1024; i++) {
+        out_pd[i] = page_directory[i];
+        out_lowmem_pt0[i] = lowmem_page_tables[0][i];
+    }
+
+    for (unsigned int i = 0; i < page_count; i++) {
+        out_lowmem_pt0[first_index + i] = (app_phys_base + (i * 0x1000U)) | PAGE_PRESENT | PAGE_RW;
+    }
+
+    out_pd[0] = ((unsigned int)out_lowmem_pt0) | PAGE_PRESENT | PAGE_RW;
     return 1;
 }
 

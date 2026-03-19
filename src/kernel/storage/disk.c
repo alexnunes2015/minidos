@@ -1,5 +1,6 @@
 #include "disk.h"
 #include "boot_splash.h"
+#include "logger.h"
 // ATA PIO ports
 #define ATA_PRIMARY_IO      0x1F0
 #define ATA_PRIMARY_CTRL    0x3F6
@@ -264,17 +265,22 @@ static int boot_floppy_rw_sector(unsigned int lba, unsigned char* buffer, int wr
     }
 
     if (write) {
+        log_serial_raw("DISK111 floppy-write-start\n");
         for (int i = 0; i < BIOS_SECTOR_SIZE; i++) {
             biosdisk_transfer_buffer[i] = buffer[i];
         }
         rc = biosdisk_boot_write_sector(boot_media.drive_number, cylinder, head, sector);
+        log_serial_raw(rc == 0 ? "DISK112 floppy-write-ok\n" : "DISK113 floppy-write-fail\n");
         return rc == 0 ? 0 : -1;
     }
 
+    log_serial_raw("DISK101 floppy-read-start\n");
     rc = biosdisk_boot_read_sector(boot_media.drive_number, cylinder, head, sector);
     if (rc != 0) {
+        log_serial_raw("DISK102 floppy-read-fail\n");
         return -1;
     }
+    log_serial_raw("DISK103 floppy-read-ok\n");
     for (int i = 0; i < BIOS_SECTOR_SIZE; i++) {
         buffer[i] = biosdisk_transfer_buffer[i];
     }
@@ -370,6 +376,7 @@ static int disk_write_lba_internal(const ata_target_t* target, unsigned int lba,
 void disk_init() {
     unsigned char boot_flags;
 
+    log_serial_raw("DISK100 disk-init-start\n");
     boot_media.drive_number = read_phys_u8(BOOT_DRIVE_NUMBER_ADDR);
     boot_media.sectors_per_track = read_phys_u16(BOOT_DRIVE_SPT_ADDR);
     boot_media.heads = read_phys_u16(BOOT_DRIVE_HEADS_ADDR);
@@ -389,6 +396,7 @@ void disk_init() {
         }
 
         if (boot_floppy_rw_sector(0, boot_sector, 0) == 0) {
+            log_serial_raw("DISK120 floppy-boot-sector-ready\n");
             unsigned int total16 = read_le16(boot_sector + 19);
             unsigned int total32 = read_le32(boot_sector + 32);
 
@@ -403,10 +411,12 @@ void disk_init() {
     }
 
     for (unsigned char ata_id = 0; ata_id < 4; ata_id++) {
+        log_serial_raw("DISK130 ata-probe\n");
         if (ata_probe_physical_target(ata_id)) {
             ata_presence_mask |= (unsigned char)(1u << ata_id);
         }
     }
+    log_serial_raw("DISK190 disk-init-ok\n");
 }
 
 int disk_boot_media_is_floppy(void) {

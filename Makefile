@@ -22,7 +22,7 @@ BUILD_DIR = build
 BOOTLOGO_DIR = assets/bootlogo
 CURSOR_ASSETS_DIR = assets/cursor
 KERNEL_INCLUDE_DIRS := $(shell find $(KERNEL_DIR) -type d | sort)
-CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib $(addprefix -I,$(KERNEL_INCLUDE_DIRS))
+CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -MMD -MP $(addprefix -I,$(KERNEL_INCLUDE_DIRS))
 CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
 LDFLAGS = -m elf_i386 -T $(KERNEL_CORE_DIR)/kernel.ld
 
@@ -39,6 +39,7 @@ KERNEL_SOURCE_DIRS = \
 KERNEL_SOURCES_ALL := $(shell find $(KERNEL_SOURCE_DIRS) -name '*.c' | sort)
 KERNEL_SOURCES = $(filter-out $(KERNEL_STORAGE_DIR)/fat12.c, $(KERNEL_SOURCES_ALL))
 KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCES))
+KERNEL_DEPS = $(KERNEL_OBJECTS:.o=.d)
 KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BUILD_DIR)/video/backbuffer_present.o
 APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
 APP_TEMPLATE_SOURCES := $(shell find external_apps/templates -type f | sort)
@@ -47,7 +48,9 @@ QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-multitask full-test
+
+-include $(KERNEL_DEPS)
 
 all: minidos.img
 
@@ -159,6 +162,9 @@ test-phase3: minidos.img
 test-phase4: minidos.img
 	python3 tests/test_phase4.py
 
+test-multitask: minidos.img
+	python3 tests/test_multitask_elf.py
+
 full-test:
 	$(MAKE) clean
 	$(MAKE) all
@@ -170,6 +176,7 @@ full-test:
 	$(MAKE) test-phase5
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
+	$(MAKE) test-multitask
 
 ci:
 	$(MAKE) clean
@@ -181,6 +188,7 @@ ci:
 	$(MAKE) test-phase5
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
+	$(MAKE) test-multitask
 
 test: test-help test-ver test-drives
 
@@ -210,4 +218,4 @@ test-phase5:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 test-multitask full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

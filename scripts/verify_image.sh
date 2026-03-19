@@ -6,7 +6,7 @@ IMG_PATH="${1:-$ROOT_DIR/minidos.img}"
 BUILD_DIR="$ROOT_DIR/build"
 
 EXPECTED_IMG_SIZE=1474560
-EXPECTED_RESERVED_SECTORS=160
+EXPECTED_RESERVED_SECTORS=192
 EXPECTED_STAGE2_SECTORS=4
 KERNEL_LOAD_SECTOR=5
 
@@ -102,6 +102,11 @@ require_entry "::/DOSSHELL.ELF"
 require_entry "::/EDIT.ELF"
 require_entry "::/GAMES"
 require_entry "::/GAMES/GUESS100.ELF"
+require_entry "::/PTEST"
+require_entry "::/PTEST/PTCPU.ELF"
+require_entry "::/PTEST/PTWAIT.ELF"
+require_entry "::/PTEST/PTIO.ELF"
+require_entry "::/PTEST/PTTHRD.ELF"
 
 if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
     require_entry "::/BOOTLOGO.DAT"

@@ -3,6 +3,8 @@
 
 #include "process.h"
 
+#define SCHEDULER_MAX_PROCESSES 8
+
 typedef struct {
     unsigned int gs;
     unsigned int fs;
@@ -41,6 +43,7 @@ typedef struct {
 void scheduler_init_timer(unsigned int hz);
 int scheduler_runtime_init(void);
 void scheduler_enable_preemption(unsigned int quantum_ticks);
+void scheduler_disable_preemption(void);
 irq_frame_t* scheduler_on_timer_tick(irq_frame_t* frame);
 irq_frame_t* scheduler_on_yield(irq_frame_t* frame);
 void scheduler_yield(void);
@@ -54,5 +57,17 @@ int scheduler_snapshot_processes(scheduler_process_snapshot_t* out, int max_out,
 int scheduler_describe_guard_fault(unsigned int fault_addr, int* pid_out, const char** name_out);
 void scheduler_set_current_name(const char* name);
 void scheduler_set_current_origin(const char* origin_name, int is_executable);
+int scheduler_get_current_pid(void);
+process_state_t scheduler_get_process_state(int pid);
+int scheduler_spawn_kernel_task(
+    const char* name,
+    const char* origin_name,
+    int origin_is_executable,
+    void (*entry)(void* arg),
+    void* arg,
+    unsigned int* page_directory
+);
+int scheduler_terminate_process(int pid);
+void scheduler_exit_current_task(void) __attribute__((noreturn));
 
 #endif
