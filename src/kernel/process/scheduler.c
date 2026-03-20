@@ -20,6 +20,9 @@
 #define EFLAGS_IF 0x00000200U
 #define KERNEL_CODE_SELECTOR 0x08U
 #define KERNEL_DATA_SELECTOR 0x10U
+#define USER_CODE_SELECTOR   0x2BU
+#define USER_DATA_SELECTOR   0x33U
+#define SCHED_EXTERNAL_PID_MIN 3
 
 typedef struct {
     process_t pcb;
@@ -98,6 +101,19 @@ static void sched_log_marker(const char* marker, const char* detail) {
         log_serial_raw(detail);
     }
     log_serial_raw("\n");
+}
+
+static void sched_mark_terminated(process_t* pcb) {
+    if (!pcb) {
+        return;
+    }
+
+    pcb->state = PROCESS_TERMINATED;
+    pcb->wake_tick = 0;
+    pcb->thread_entry = 0;
+    pcb->thread_arg = 0;
+    pcb->context.user_esp = 0;
+    pcb->context.page_directory = paging_get_kernel_directory();
 }
 
 static void sched_reset_slot(int idx, const char* name, process_state_t state) {
@@ -214,8 +230,12 @@ static void sched_prepare_kernel_thread(sched_proc_slot_t* slot, void (*entry)(v
     slot->pcb.context.irq_frame = frame;
 }
 
-static int sched_find_free_slot(void) {
-    for (int idx = SCHED_IDLE_PID + 1; idx < SCHEDULER_MAX_PROCESSES; idx++) {
+static int sched_find_free_slot_from(int first_pid) {
+    if (first_pid < (SCHED_IDLE_PID + 1)) {
+        first_pid = SCHED_IDLE_PID + 1;
+    }
+
+    for (int idx = first_pid; idx < SCHEDULER_MAX_PROCESSES; idx++) {
         process_state_t state = g_slots[idx].pcb.state;
         if (state == PROCESS_UNUSED || state == PROCESS_TERMINATED) {
             return idx;
@@ -262,10 +282,21 @@ static int sched_pick_next(void) {
     return -1;
 }
 
+static irq_frame_t* sched_activate_slot(int next) {
+    process_t* nxt = &g_slots[next].pcb;
+
+    nxt->state = PROCESS_RUNNING;
+    nxt->switch_count++;
+    g_current = next;
+    g_slice_ticks_left = g_quantum_ticks;
+    paging_activate_directory(nxt->context.page_directory);
+    paging_set_kernel_stack_top((unsigned int)nxt->context.kernel_stack_top);
+    return (irq_frame_t*)nxt->context.irq_frame;
+}
+
 static irq_frame_t* sched_switch_from_frame(irq_frame_t* frame) {
     int next;
     process_t* cur;
-    process_t* nxt;
 
     if (g_current < 0 || g_current >= SCHEDULER_MAX_PROCESSES) {
         return 0;
@@ -286,13 +317,7 @@ static irq_frame_t* sched_switch_from_frame(irq_frame_t* frame) {
         cur->state = PROCESS_READY;
     }
 
-    nxt = &g_slots[next].pcb;
-    nxt->state = PROCESS_RUNNING;
-    nxt->switch_count++;
-    g_current = next;
-    g_slice_ticks_left = g_quantum_ticks;
-    paging_activate_directory(nxt->context.page_directory);
-    return (irq_frame_t*)nxt->context.irq_frame;
+    return sched_activate_slot(next);
 }
 
 static void sched_wake_sleepers(unsigned int now) {
@@ -324,9 +349,10 @@ static int sched_spawn_kernel_thread_internal(
     int origin_is_executable,
     void (*entry)(void* arg),
     void* arg,
-    unsigned int* page_directory
+    unsigned int* page_directory,
+    int first_pid
 ) {
-    int idx = sched_find_free_slot();
+    int idx = sched_find_free_slot_from(first_pid);
 
     if (idx < 0 || !name || !entry) {
         return -1;
@@ -401,6 +427,7 @@ int scheduler_runtime_init(void) {
     g_quantum_ticks = SCHED_DEFAULT_QUANTUM;
     g_slice_ticks_left = SCHED_DEFAULT_QUANTUM;
     paging_activate_directory(g_slots[g_current].pcb.context.page_directory);
+    paging_set_kernel_stack_top((unsigned int)g_slots[g_current].pcb.context.kernel_stack_top);
 
     sched_log_marker("SCHED100", " runtime-init");
     sched_log_marker("SCHED110", " guarded-kstacks-armed");
@@ -494,10 +521,7 @@ void scheduler_sleep_ticks(unsigned int ticks) {
 
 static __attribute__((noreturn)) void sched_exit_current(void) {
     if (g_current >= 0 && g_current < SCHEDULER_MAX_PROCESSES) {
-        g_slots[g_current].pcb.state = PROCESS_TERMINATED;
-        g_slots[g_current].pcb.thread_entry = 0;
-        g_slots[g_current].pcb.thread_arg = 0;
-        g_slots[g_current].pcb.context.page_directory = paging_get_kernel_directory();
+        sched_mark_terminated(&g_slots[g_current].pcb);
     }
 
     scheduler_yield();
@@ -506,6 +530,69 @@ static __attribute__((noreturn)) void sched_exit_current(void) {
     while (1) {
         __asm__ volatile ("cli\nhlt");
     }
+}
+
+void scheduler_enter_current_user_mode(unsigned int entry_virtual, unsigned int user_esp) {
+    unsigned int eflags;
+    process_t* pcb;
+
+    if (!g_runtime_ready
+        || g_current < 0
+        || g_current >= SCHEDULER_MAX_PROCESSES
+        || entry_virtual == 0
+        || user_esp == 0) {
+        log_serial_raw("[sched] invalid user-mode handoff\n");
+        while (1) {
+            __asm__ volatile ("cli\nhlt");
+        }
+    }
+
+    pcb = &g_slots[g_current].pcb;
+    pcb->context.user_esp = (unsigned int*)user_esp;
+    eflags = sched_read_eflags() | EFLAGS_IF | 0x2U;
+    __asm__ volatile ("cli");
+    paging_set_kernel_stack_top((unsigned int)pcb->context.kernel_stack_top);
+    __asm__ volatile (
+        "mov %w0, %%ax\n"
+        "mov %%ax, %%ds\n"
+        "mov %%ax, %%es\n"
+        "mov %%ax, %%fs\n"
+        "mov %%ax, %%gs\n"
+        "pushl %0\n"
+        "pushl %1\n"
+        "pushl %2\n"
+        "pushl %3\n"
+        "pushl %4\n"
+        "iret\n"
+        :
+        : "r"((unsigned int)USER_DATA_SELECTOR),
+          "r"(user_esp),
+          "r"(eflags),
+          "r"((unsigned int)USER_CODE_SELECTOR),
+          "r"(entry_virtual)
+        : "memory", "eax");
+
+    __builtin_unreachable();
+}
+
+irq_frame_t* scheduler_exit_current_from_interrupt(irq_frame_t* frame) {
+    int next;
+    process_t* cur;
+
+    if (!frame || !g_runtime_ready || g_current < 0 || g_current >= SCHEDULER_MAX_PROCESSES) {
+        return 0;
+    }
+
+    cur = &g_slots[g_current].pcb;
+    cur->context.irq_frame = frame;
+    sched_mark_terminated(cur);
+
+    next = sched_pick_next();
+    if (next < 0) {
+        return 0;
+    }
+
+    return sched_activate_slot(next);
 }
 
 int scheduler_phase5_self_test(void) {
@@ -522,7 +609,7 @@ int scheduler_phase5_self_test(void) {
     scheduler_enable_preemption(SCHED_SELF_TEST_QUANTUM);
 
 #ifdef SCHED_TEST_GUARD
-    if (sched_spawn_kernel_thread_internal("guard_trip", "guard_trip", 0, sched_self_test_guard_task, 0, 0) < 0) {
+    if (sched_spawn_kernel_thread_internal("guard_trip", "guard_trip", 0, sched_self_test_guard_task, 0, 0, SCHED_IDLE_PID + 1) < 0) {
         return -1;
     }
 
@@ -534,8 +621,8 @@ int scheduler_phase5_self_test(void) {
     }
     return -1;
 #else
-    int task_a_pid = sched_spawn_kernel_thread_internal("task_a", "task_a", 0, sched_self_test_task_a, 0, 0);
-    int task_b_pid = sched_spawn_kernel_thread_internal("task_b", "task_b", 0, sched_self_test_task_b, 0, 0);
+    int task_a_pid = sched_spawn_kernel_thread_internal("task_a", "task_a", 0, sched_self_test_task_a, 0, 0, SCHED_IDLE_PID + 1);
+    int task_b_pid = sched_spawn_kernel_thread_internal("task_b", "task_b", 0, sched_self_test_task_b, 0, 0, SCHED_IDLE_PID + 1);
 
     if (task_a_pid < 0 || task_b_pid < 0) {
         return -1;
@@ -678,7 +765,15 @@ int scheduler_spawn_kernel_task(
         return -1;
     }
 
-    return sched_spawn_kernel_thread_internal(name, origin_name, origin_is_executable, entry, arg, page_directory);
+    return sched_spawn_kernel_thread_internal(
+        name,
+        origin_name,
+        origin_is_executable,
+        entry,
+        arg,
+        page_directory,
+        SCHED_EXTERNAL_PID_MIN
+    );
 }
 
 int scheduler_terminate_process(int pid) {
@@ -689,10 +784,7 @@ int scheduler_terminate_process(int pid) {
         return 0;
     }
 
-    g_slots[pid].pcb.state = PROCESS_TERMINATED;
-    g_slots[pid].pcb.thread_entry = 0;
-    g_slots[pid].pcb.thread_arg = 0;
-    g_slots[pid].pcb.context.page_directory = paging_get_kernel_directory();
+    sched_mark_terminated(&g_slots[pid].pcb);
     return 1;
 }
 

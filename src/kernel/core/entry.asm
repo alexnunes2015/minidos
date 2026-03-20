@@ -20,6 +20,7 @@
 [GLOBAL biosdisk_boot_read_sector]
 [GLOBAL biosdisk_boot_write_sector]
 [GLOBAL biosdisk_transfer_buffer]
+[GLOBAL thunk_gdt_tss]
 
 section .text.boot
 _start:
@@ -367,6 +368,14 @@ thunk_gdt_code16:
 thunk_gdt_data16:
     dw 0xFFFF, 0x0000
     db 0x01, 0x92, 0x00, 0x00
+thunk_gdt_code_user32:
+    dw 0xFFFF, 0x0000
+    db 0x00, 0xFA, 0xCF, 0x00
+thunk_gdt_data_user32:
+    dw 0xFFFF, 0x0000
+    db 0x00, 0xF2, 0xCF, 0x00
+thunk_gdt_tss:
+    dq 0x0000000000000000
 thunk_gdt_end:
 
 thunk_gdt_desc:

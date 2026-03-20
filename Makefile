@@ -48,7 +48,7 @@ QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-multitask full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test
 
 -include $(KERNEL_DEPS)
 
@@ -165,6 +165,12 @@ test-phase4: minidos.img
 test-multitask: minidos.img
 	python3 tests/test_multitask_elf.py
 
+test-multitask-com: minidos.img
+	python3 tests/test_multitask_com.py
+
+test-user-isolation: minidos.img
+	python3 tests/test_user_isolation.py
+
 full-test:
 	$(MAKE) clean
 	$(MAKE) all
@@ -177,6 +183,8 @@ full-test:
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
+	$(MAKE) test-multitask-com
+	$(MAKE) test-user-isolation
 
 ci:
 	$(MAKE) clean
@@ -189,6 +197,8 @@ ci:
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
+	$(MAKE) test-multitask-com
+	$(MAKE) test-user-isolation
 
 test: test-help test-ver test-drives
 
@@ -218,4 +228,4 @@ test-phase5:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 test-multitask full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

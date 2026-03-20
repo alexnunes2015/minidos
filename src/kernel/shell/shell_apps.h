@@ -18,8 +18,12 @@ typedef struct {
 } shell_app_host_t;
 
 int shell_apps_try_execute(const shell_app_host_t* host, const char* command, const char* args);
+int shell_apps_try_execute_program(const shell_app_host_t* host, const char* command, const char* args);
 int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command, const char* args);
 int shell_apps_run_background(const shell_app_host_t* host, const char* command, int* pid_out);
 int shell_apps_stop_background(int pid);
+int shell_apps_handle_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2);
+void shell_apps_on_current_task_exit(void);
+void shell_apps_on_current_task_fault(unsigned int vector, unsigned int error_code, unsigned int eip);
 
 #endif

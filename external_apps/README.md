@@ -1,11 +1,12 @@
 # MiniDOS External Apps
 
 This folder documents how to build external programs for MiniDOS and place
-them in drive `A:` as `.ELF` files.
+them in drive `A:` as `.ELF` or `.COM` files.
 
 Important:
 - These `.ELF` files are 32-bit executables loaded by the MiniDOS ELF loader.
-- They are executed by the MiniDOS kernel in protected mode.
+- Legacy `.COM` files are flat 32-bit binaries loaded at the same user-mode base address.
+- Both formats are executed by the MiniDOS kernel in protected mode on the same ring3 runtime.
 
 ## Requirements
 
@@ -30,7 +31,7 @@ Important:
 Use:
 
 ```bash
-./external_apps/add_app.sh <path/to/app.c> [APPNAME]
+./external_apps/add_app.sh [--format elf|com] <path/to/app.c> [APPNAME]
 ```
 
 Examples:
@@ -38,12 +39,13 @@ Examples:
 ```bash
 ./external_apps/add_app.sh external_apps/templates/hello.c
 ./external_apps/add_app.sh external_apps/templates/stress.c STRESS
+./external_apps/add_app.sh --format com external_apps/templates/hello.c HELLOCOM
 ./external_apps/add_app.sh /tmp/my_app.c TESTAPP
 ```
 
 The utility will:
-1. Build a 32-bit ELF app.
-2. Copy it to `A:` inside `minidos.img` as `.ELF`.
+1. Build a 32-bit app in the selected format (`.ELF` by default, `.COM` with `--format com`).
+2. Copy it to `A:` inside `minidos.img` with the matching extension.
 
 If `assets/cursor/cursor.png` exists, the app build also regenerates
 `external_apps/runtime/minidos_cursor_bitmap.h` automatically before compilation.
@@ -79,3 +81,6 @@ ld -m elf_i386 -T external_apps/runtime/app.ld -o build/external_apps/app.elf \
     build/external_apps/entry.o build/external_apps/app.o
 mcopy -o -i minidos.img build/external_apps/app.elf ::/MYAPP.ELF
 ```
+
+For a flat `.COM` binary instead, link with `external_apps/runtime/app_com.ld` and
+convert the intermediate ELF with `objcopy -O binary`.

@@ -180,7 +180,6 @@ python3 tests/test_phase5.py --expect-guard
 make test-phase5
 ```
 
-### 10. `make verify-image` - Verificação estrutural da imagem
 ### 10. `tests/test_multitask_elf.py` - Regressão de multitasking ELF
 Valida o runtime de ELFs em background com threads-filho e kill por grupo:
 - arranca a shell e entra em `A:\PTEST`;
@@ -200,7 +199,44 @@ python3 tests/test_multitask_elf.py
 make test-multitask
 ```
 
-### 11. `make verify-image` - Verificação estrutural da imagem
+### 11. `tests/test_multitask_com.py` - Regressão de multitasking COM
+Valida o runtime de `.COM` em background com threads-filho e kill por grupo:
+- instala `CMCPU.COM`, `CMWAIT.COM` e `CMTHRD.COM` na imagem de teste;
+- lança as três apps com `runbg` a partir da raiz de `A:`;
+- espera o child thread da `CMTHRD` (`worker`) aparecer com `APPTH100`;
+- confirma no `top` os PIDs, nomes e `EXE` com origem `.COM`;
+- valida `kill <pid>` sobre a `CMTHRD` e confirma que líder + child desaparecem juntos;
+- mata os restantes jobs e confirma que o shell ainda aceita `ver`.
+
+**Uso:**
+```bash
+python3 tests/test_multitask_com.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-multitask-com
+```
+
+### 12. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
+Valida o contrato mínimo de isolamento para apps ELF e `.COM` em ring3:
+- instala `BADPTR.ELF`, `USRFAULT.ELF`, `BADCOM.COM` e `USRFCOM.COM` na imagem;
+- força `A:` e confirma listagem via `elfls`;
+- executa `BADPTR` e `run BADCOM`, exigindo `BADP190`, para provar que um ponteiro de kernel foi rejeitado no `int 0x80` nos dois formatos;
+- executa `USRFAULT` e `USRFCOM`, exigindo `[paging] #PF detected`, `CR2=0x00010000`, `mode=user` e `APPFLT900`;
+- confirma `APPRET001` e que o shell ainda aceita `ver` depois dos quatro cenários negativos.
+
+**Uso:**
+```bash
+python3 tests/test_user_isolation.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-user-isolation
+```
+
+### 13. `make verify-image` - Verificação estrutural da imagem
 Valida a imagem `minidos.img` fora do runtime:
 - tamanho da floppy (`1.44MB`);
 - BPB FAT12;
@@ -222,6 +258,8 @@ make verify-image
 ✅ **Mouse IRQ12** - Cobertura QMP para movimento/clique na demo gráfica
 ✅ **Phase 3 Stress** - Cobertura de multi-disco/multi-volume com validações negativas
 ✅ **Phase 5 Guard Pages** - Cobertura positiva e negativa do runtime de scheduler com `#PF` controlado na guard page
+✅ **User Isolation** - Cobertura de ring3 para ponteiros inválidos em syscall e faults de user mode com retorno ao shell
+✅ **Legacy COM Runtime** - Cobertura de `.COM` no mesmo runtime preemptivo de foreground/background usado por ELFs
 ✅ **Shared Harness** - Arranque/QEMU/timeouts centralizados em `tests/qemu_harness.py`
 
 ## Exemplo de Teste Completo
@@ -280,6 +318,7 @@ Todos os testes mostram a saída serial que inclui:
 - `[mouse] PS/2 mouse enabled on IRQ12` - Porta auxiliar PS/2 ativa e reporting ligado
 - `[mouse] first packet received` - Primeiro pacote de rato observado em runtime
 - `APPIN001` / `APPRET001` - Contrato serial de entrada e retorno de apps interativas
+- `APPFLT900` - Fault de userland contido à app/grupo atual
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled` - Caminho de interrupções ativo
 - `SCHED100` / `SCHED110` / `SCHED120` / `SCHED190` - Bootstrap e self-test positivo do scheduler/runtime
 - `SCHED150` / `SCHED900` - Armamento do teste negativo e fault de guard page identificado
@@ -292,7 +331,7 @@ Todos os testes mostram a saída serial que inclui:
 
 **Nota:** Entre `BOOT100` e `BOOT110`, o placeholder visual é um ecrã preto com cursor a piscar. Depois de `BOOT110`, o logo passa a ocupar o ecrã e o shell só toma controlo após 5 segundos dessa janela visual. Compare `BOOT100`, `BOOT110`, `Initializing disk driver...`, `Detecting drives and partitions...` e `BOOT190` para separar tempo real de I/O da espera visual final.
 
-**Nota:** `ps` e `top` reportam tarefas visíveis ao scheduler. O campo `mem` ainda significa apenas reserva de stack do kernel mais guard page; não é RSS real por processo, porque o MiniDOS ainda não tem ring3 nem address spaces isolados por processo.
+**Nota:** `ps` e `top` reportam tarefas visíveis ao scheduler. O campo `mem` ainda significa apenas reserva de stack do kernel mais guard page; não é RSS real e também não inclui o slot user de 1 MiB mapeado para apps em ring3.
 
 **Nota:** O kernel está executando após a transição para Protected Mode nos testes seriais atuais. Se houver regressão, use os checkpoints PM no serial (`CLI`, `LGDT`, `CR0.PE`, `Before far jump`) para localizar onde o boot para.
 

@@ -638,8 +638,8 @@ static int shell_builtin_cmd_help(const shell_builtin_host_t* host) {
     host->out_screen("  copy <a> <b>  - Copy file\n");
     host->out_screen("  move <a> <b>  - Rename file\n");
     host->out_screen("  elfls         - List ELF apps in current dir\n");
-    host->out_screen("  run <app>     - Execute ELF app\n");
-    host->out_screen("  runbg <app>   - Start ELF app as background process\n");
+    host->out_screen("  run <app>     - Execute ELF or COM app\n");
+    host->out_screen("  runbg <app>   - Start ELF or COM app in background\n");
     host->out_screen("  kill <pid>    - Stop background app group (main + threads)\n");
     host->out_screen("  dmesg         - Show debug ring buffer\n");
     host->out_screen("  boot          - Show boot screen\n");

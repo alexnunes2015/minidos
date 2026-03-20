@@ -5,10 +5,13 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "scheduler.h"
+#include "shell_apps.h"
 #include "timer.h"
+#include "../../../external_apps/runtime/minidos_app.h"
 
 #define PAGE_PRESENT 0x001
 #define PAGE_RW      0x002
+#define PAGE_USER    0x004
 #define PAGE_PWT     0x008
 #define PAGE_PCD     0x010
 #define LOWMEM_PAGE_TABLE_COUNT 3
@@ -25,6 +28,9 @@
 #define PIC2_COMMAND 0xA0
 #define PIC2_DATA    0xA1
 #define PIC_EOI      0x20
+#define KERNEL_DATA_SELECTOR 0x10
+#define TSS_SELECTOR         0x38
+#define APP_SLOT_BYTES       0x00100000U
 
 struct idt_entry {
     unsigned short offset_low;
@@ -39,13 +45,46 @@ struct idt_ptr {
     unsigned int base;
 } __attribute__((packed));
 
+typedef struct {
+    unsigned int prev_tss;
+    unsigned int esp0;
+    unsigned int ss0;
+    unsigned int esp1;
+    unsigned int ss1;
+    unsigned int esp2;
+    unsigned int ss2;
+    unsigned int cr3;
+    unsigned int eip;
+    unsigned int eflags;
+    unsigned int eax;
+    unsigned int ecx;
+    unsigned int edx;
+    unsigned int ebx;
+    unsigned int esp;
+    unsigned int ebp;
+    unsigned int esi;
+    unsigned int edi;
+    unsigned int es;
+    unsigned int cs;
+    unsigned int ss;
+    unsigned int ds;
+    unsigned int fs;
+    unsigned int gs;
+    unsigned int ldt_selector;
+    unsigned short trap;
+    unsigned short iomap_base;
+} __attribute__((packed)) tss_entry_t;
+
 static unsigned int page_directory[1024] __attribute__((aligned(4096)));
 static unsigned int lowmem_page_tables[LOWMEM_PAGE_TABLE_COUNT][1024] __attribute__((aligned(4096)));
 static unsigned int fb_page_tables[FB_PAGE_TABLE_COUNT][1024] __attribute__((aligned(4096)));
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
+static tss_entry_t g_tss __attribute__((aligned(16)));
 static int interrupt_handlers_ready = 0;
 static int page_fault_in_progress = 0;
+
+extern unsigned char thunk_gdt_tss[];
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char value;
@@ -91,6 +130,10 @@ static inline void load_idt(struct idt_ptr* ptr) {
 
 static inline void load_page_directory(unsigned int* pd) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pd) : "memory");
+}
+
+static inline void load_task_register(unsigned short selector) {
+    __asm__ volatile ("ltr %0" : : "r"(selector));
 }
 
 static inline void enable_paging(void) {
@@ -170,10 +213,16 @@ static void bsod_wait_key_then_reboot(void) {
     panic_halt();
 }
 
-__attribute__((used)) static void page_fault_handler_c(unsigned int error_code, unsigned int eip) {
+static int interrupt_frame_is_user(const irq_frame_t* frame) {
+    return frame && ((frame->cs & 0x3U) == 0x3U);
+}
+
+__attribute__((used)) static irq_frame_t* page_fault_handler_c(irq_frame_t* frame) {
     unsigned int cr2 = read_cr2();
     int guard_pid = -1;
     const char* guard_name = 0;
+    const char* detail = "KERNEL PAGE FAULT.";
+    int user_mode = interrupt_frame_is_user(frame);
 
     if (page_fault_in_progress) {
         log_serial_raw("[paging] nested #PF halt\n");
@@ -193,16 +242,28 @@ __attribute__((used)) static void page_fault_handler_c(unsigned int error_code, 
     log_serial_raw("[paging] CR2=");
     serial_print_hex(cr2);
     log_serial_raw(" error=");
-    serial_print_hex(error_code);
+    serial_print_hex(frame ? frame->error_code : 0U);
     log_serial_raw(" eip=");
-    serial_print_hex(eip);
+    serial_print_hex(frame ? frame->eip : 0U);
+    if (user_mode) {
+        log_serial_raw(" mode=user");
+        detail = "USER MODE PAGE FAULT.";
+    }
     log_serial_raw("\n");
-    video_show_bsod(STOP_PAGE_FAULT, "A PAGE FAULT OCCURRED DURING BOOT.");
+
+    if (user_mode && frame) {
+        page_fault_in_progress = 0;
+        shell_apps_on_current_task_fault(frame->vector, frame->error_code, frame->eip);
+        return scheduler_exit_current_from_interrupt(frame);
+    }
+
+    video_show_bsod(STOP_PAGE_FAULT, detail);
     log_serial_raw("[paging] waiting key for reboot\n");
     bsod_wait_key_then_reboot();
+    return 0;
 }
 
-static void exception_panic(const irq_frame_t* frame) {
+static irq_frame_t* exception_panic(irq_frame_t* frame) {
     static const char* exception_names[32] = {
         "Divide Error", "Debug", "NMI", "Breakpoint",
         "Overflow", "BOUND Range", "Invalid Opcode", "Device Not Available",
@@ -235,8 +296,83 @@ static void exception_panic(const irq_frame_t* frame) {
     serial_print_hex(frame->eflags);
     log_serial_raw("\n");
 
+    if (interrupt_frame_is_user(frame)) {
+        shell_apps_on_current_task_fault(frame->vector, frame->error_code, frame->eip);
+        return scheduler_exit_current_from_interrupt(frame);
+    }
+
     video_show_bsod(STOP_KERNEL_EXCEPTION, "CPU EXCEPTION IN KERNEL MODE.");
     bsod_wait_key_then_reboot();
+    return 0;
+}
+
+static void paging_install_tss(void) {
+    unsigned int base = (unsigned int)&g_tss;
+    unsigned int limit = (unsigned int)sizeof(g_tss) - 1U;
+
+    g_tss.prev_tss = 0;
+    g_tss.esp0 = 0;
+    g_tss.ss0 = KERNEL_DATA_SELECTOR;
+    g_tss.esp1 = 0;
+    g_tss.ss1 = 0;
+    g_tss.esp2 = 0;
+    g_tss.ss2 = 0;
+    g_tss.cr3 = 0;
+    g_tss.eip = 0;
+    g_tss.eflags = 0;
+    g_tss.eax = 0;
+    g_tss.ecx = 0;
+    g_tss.edx = 0;
+    g_tss.ebx = 0;
+    g_tss.esp = 0;
+    g_tss.ebp = 0;
+    g_tss.esi = 0;
+    g_tss.edi = 0;
+    g_tss.es = 0;
+    g_tss.cs = 0;
+    g_tss.ss = 0;
+    g_tss.ds = 0;
+    g_tss.fs = 0;
+    g_tss.gs = 0;
+    g_tss.ldt_selector = 0;
+    g_tss.trap = 0;
+    g_tss.iomap_base = (unsigned short)sizeof(g_tss);
+
+    thunk_gdt_tss[0] = (unsigned char)(limit & 0xFFU);
+    thunk_gdt_tss[1] = (unsigned char)((limit >> 8) & 0xFFU);
+    thunk_gdt_tss[2] = (unsigned char)(base & 0xFFU);
+    thunk_gdt_tss[3] = (unsigned char)((base >> 8) & 0xFFU);
+    thunk_gdt_tss[4] = (unsigned char)((base >> 16) & 0xFFU);
+    thunk_gdt_tss[5] = 0x89U;
+    thunk_gdt_tss[6] = (unsigned char)((limit >> 16) & 0x0FU);
+    thunk_gdt_tss[7] = (unsigned char)((base >> 24) & 0xFFU);
+    load_task_register(TSS_SELECTOR);
+}
+
+void paging_set_kernel_stack_top(unsigned int stack_top) {
+    g_tss.esp0 = stack_top;
+}
+
+static irq_frame_t* syscall_dispatch_c(irq_frame_t* frame) {
+    int result;
+
+    if (!frame) {
+        return 0;
+    }
+
+    if (frame->eax == MINIDOS_SYSCALL_THREAD_YIELD) {
+        frame->eax = 0;
+        return scheduler_on_yield(frame);
+    }
+
+    if (frame->eax == MINIDOS_SYSCALL_EXIT) {
+        shell_apps_on_current_task_exit();
+        return scheduler_exit_current_from_interrupt(frame);
+    }
+
+    result = shell_apps_handle_syscall(frame->eax, frame->ebx, frame->ecx, frame->edx);
+    frame->eax = (unsigned int)result;
+    return 0;
 }
 
 __attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* frame) {
@@ -246,11 +382,9 @@ __attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* fram
 
     if (frame->vector < 32) {
         if (frame->vector == 14) {
-            page_fault_handler_c(frame->error_code, frame->eip);
-            return 0;
+            return page_fault_handler_c(frame);
         }
-        exception_panic(frame);
-        return 0;
+        return exception_panic(frame);
     }
 
     if (frame->vector == 33) {
@@ -269,6 +403,10 @@ __attribute__((used)) static irq_frame_t* interrupt_dispatch_c(irq_frame_t* fram
         irq_frame_t* next_frame = scheduler_on_timer_tick(frame);
         pic_send_eoi(0);
         return next_frame;
+    }
+
+    if (frame->vector == 128) {
+        return syscall_dispatch_c(frame);
     }
 
     if (frame->vector == 129) {
@@ -370,6 +508,7 @@ ISR_NOERR_STUB(irq12, 44)
 ISR_NOERR_STUB(irq13, 45)
 ISR_NOERR_STUB(irq14, 46)
 ISR_NOERR_STUB(irq15, 47)
+ISR_NOERR_STUB(isr128, 128)
 ISR_NOERR_STUB(isr129, 129)
 
 static void paging_setup_structures(void) {
@@ -497,6 +636,7 @@ static void paging_setup_idt(void) {
     idt_set_gate(45, (unsigned int)irq13, 0x08, 0x8E);
     idt_set_gate(46, (unsigned int)irq14, 0x08, 0x8E);
     idt_set_gate(47, (unsigned int)irq15, 0x08, 0x8E);
+    idt_set_gate(128, (unsigned int)isr128, 0x08, 0xEE);
     idt_set_gate(129, (unsigned int)isr129, 0x08, 0x8E);
 
     idtp.limit = (unsigned short)(sizeof(idt) - 1);
@@ -538,6 +678,7 @@ int paging_init(void) {
     log_serial_raw("[paging] enabling CR0.PG\n");
     enable_paging();
     log_serial_raw("[paging] enabled\n");
+    paging_install_tss();
 
     paging_self_test();
 
@@ -602,9 +743,9 @@ void paging_activate_directory(unsigned int* pd) {
 
 int paging_build_app_directory(unsigned int* out_pd, unsigned int* out_lowmem_pt0, unsigned int app_phys_base, unsigned int app_bytes) {
     unsigned int first_index = 0x200000U >> 12;
-    unsigned int page_count = (app_bytes + 0xFFFU) >> 12;
+    unsigned int page_count = APP_SLOT_BYTES >> 12;
 
-    if (!out_pd || !out_lowmem_pt0 || page_count == 0 || page_count > 256U) {
+    if (!out_pd || !out_lowmem_pt0 || app_bytes == 0 || app_bytes > APP_SLOT_BYTES || page_count > 256U) {
         return 0;
     }
 
@@ -614,10 +755,10 @@ int paging_build_app_directory(unsigned int* out_pd, unsigned int* out_lowmem_pt
     }
 
     for (unsigned int i = 0; i < page_count; i++) {
-        out_lowmem_pt0[first_index + i] = (app_phys_base + (i * 0x1000U)) | PAGE_PRESENT | PAGE_RW;
+        out_lowmem_pt0[first_index + i] = (app_phys_base + (i * 0x1000U)) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
     }
 
-    out_pd[0] = ((unsigned int)out_lowmem_pt0) | PAGE_PRESENT | PAGE_RW;
+    out_pd[0] = ((unsigned int)out_lowmem_pt0) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
     return 1;
 }
 

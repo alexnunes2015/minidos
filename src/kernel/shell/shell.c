@@ -460,8 +460,8 @@ void shell_execute(char* cmd) {
         }
         str_to_upper(app_name);
         shell_build_app_host(&host);
-        if (!shell_apps_try_execute_elf(&host, app_name, "")) {
-            shell_out_both("ELF app not found or failed to load\n");
+        if (!shell_apps_try_execute_program(&host, app_name, "")) {
+            shell_out_both("App not found or failed to load\n");
         }
     } else if (mystrcmp(command, "runbg") == 0) {
         char app_name[64];
@@ -477,7 +477,7 @@ void shell_execute(char* cmd) {
         str_to_upper(app_name);
         shell_build_app_host(&host);
         if (!shell_apps_run_background(&host, app_name, &pid)) {
-            shell_out_both("Unable to start background ELF task\n");
+            shell_out_both("Unable to start background app task\n");
             return;
         }
         shell_out_both("Started background app ");

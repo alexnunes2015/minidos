@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from qemu_harness import (
     build_floppy_qemu_cmd,
     dismiss_default_gui,
     read_until,
+    resolve_disk_path,
     repo_root,
     send_line,
     spawn_qemu,
@@ -16,11 +18,10 @@ from qemu_harness import (
 )
 
 ROOT = repo_root()
-IMG = os.path.join(ROOT, "minidos.img")
 
 
-def run_host(cmd):
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+def run_host(cmd, *, env=None):
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         raise RuntimeError(
             f"Command failed: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -60,15 +61,22 @@ def wait_for_marker(proc, marker, timeout_s):
 
 
 def main():
-    if not os.path.exists(IMG):
+    parser = argparse.ArgumentParser(description="Validate foreground ELF execution path")
+    parser.add_argument("--disk", default="minidos.img")
+    args = parser.parse_args()
+
+    img = resolve_disk_path(args.disk)
+    if not os.path.exists(img):
         print("ERROR: minidos.img not found. Run make first.", file=sys.stderr)
         return 2
 
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/hello_elf.c", "HELLOELF"])
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/stat_elf.c", "STATELF"])
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/stress.c", "STRESS"])
+    tool_env = dict(os.environ)
+    tool_env["IMG_PATH"] = img
+    run_host(["./external_apps/add_app.sh", "external_apps/templates/hello_elf.c", "HELLOELF"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/templates/stat_elf.c", "STATELF"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/templates/stress.c", "STRESS"], env=tool_env)
 
-    qemu_cmd = build_floppy_qemu_cmd(IMG)
+    qemu_cmd = build_floppy_qemu_cmd(img)
     proc = spawn_qemu(qemu_cmd)
 
     try:

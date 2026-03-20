@@ -8,6 +8,8 @@ This guide is for fast diagnosis in an AI-agent-first workflow. Use the shortest
 make verify-image
 make phase0-check
 make test-phase5
+make test-multitask-com
+make test-user-isolation
 make run-no-reboot
 make run-trace
 make run-gdb
@@ -19,6 +21,8 @@ make gdb-kernel
 - `make verify-image`: validates the floppy image layout, BPB, patched kernel sector count, and expected files inside the FAT volume.
 - `make phase0-check`: clean rebuild plus serial smoke test.
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
+- `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
+- `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers and direct user-mode page faults.
 - `make run-no-reboot`: keeps QEMU from rebooting on panic/triple-fault style failures so the last serial output stays visible.
 - `make run-trace`: writes a QEMU trace to `build/qemu-trace.log` for low-level fault analysis.
 - `make run-gdb`: starts QEMU paused with a GDB stub on `localhost:1234`.
@@ -35,6 +39,7 @@ make gdb-kernel
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled`
+- `APPFLT900`
 - `SCHED100`
 - `SCHED110`
 - `SCHED120`
@@ -120,7 +125,7 @@ Check:
 - current drive enumeration
 - FAT init logs
 - `ps` and `top` print a plain task table with `PID`, `NAME`, `STATE`, `MEM`, `CPU`, and `EXE`
-- `MEM` is still scheduler kernel-stack reserve only; userland RSS is not available yet
+- `MEM` is still scheduler kernel-stack reserve only; it does not include the user slot mapped for ring3 apps
 
 ### Background ELF multitask regressions
 
@@ -136,6 +141,36 @@ Check:
 - `APPTH100` appears when `PTTHRD` spawns its child worker
 - `top 200 1` shows the app leaders plus the `worker` child thread with the correct `EXE`
 - `kill <pid>` prints `Background app group stopped` and removes the leader plus its children from the next `top`
+
+### Background COM multitask regressions
+
+Run:
+
+```sh
+make test-multitask-com
+```
+
+Check:
+
+- `runbg cmcpu`, `runbg cmwait`, and `runbg cmthrd` each print `Started background app ... pid=...`
+- `APPTH100` appears when `CMTHRD` spawns its child worker
+- `top 200 1` shows the app leaders plus the `worker` child thread with `CM*.COM` in `EXE`
+- `kill <pid>` prints `Background app group stopped` and removes the leader plus its children from the next `top`
+
+### User isolation regressions
+
+Run:
+
+```sh
+make test-user-isolation
+```
+
+Check:
+
+- `BADP190` appears after both `BADPTR` and `BADCOM` try to pass a kernel pointer through `int 0x80`
+- `USRFAULT` and `USRFCOM` emit `[paging] #PF detected`, `CR2=0x00010000`, `mode=user`, and `APPFLT900`
+- `APPRET001` appears after each user fault, proving the shell regained control without a reboot
+- `ver` still works after all negative cases
 
 ### Keyboard IRQ regressions
 

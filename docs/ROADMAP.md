@@ -132,17 +132,22 @@ Entregas concluídas:
 Critério de pronto:
 - `hello_elf` e `stat_elf` executam pelo shell com retorno controlado ao kernel.
 
-## Fase 5 - Preparação para Multitarefa (em progresso)
+## Fase 5 - Preparação para Multitarefa (concluida)
 
-Objetivo: preparar base técnica para scheduler simples.
+Objetivo: fechar a transição de um baseline de kernel threads para um runtime com multitarefa preemptiva, ring3 e isolamento básico kernel/user.
 
-Status: baseline entregue em 28/02/2026; fase ainda aberta.
+Status: concluida em 19/03/2026.
 
-- Isolar melhor contexto kernel/user.
-- Definir estrutura de processo (PID, estado, stack user/kernel).
-- Planejar round-robin inicial com timer.
+Entregas finais:
+- Estrutura de processo (`process_t`) com PID, estado, contexto salvo, stacks de kernel dedicadas e stack de user por app.
+- Runtime do scheduler com bootstrap + `idle`, round-robin real por IRQ0, `sleep` por ticks e `yield` por software interrupt.
+- Guard page não mapeada por stack de kernel, mais regressão negativa (`SCHED_TEST_GUARD`).
+- Entrada real em ring3 para apps ELF e `.COM`, com TSS `esp0`, descritores user na GDT, `int 0x80` para syscalls e page directories por app.
+- Foreground e background de apps ELF/COM unificados no scheduler, inclusive child threads de userland.
+- Falhas de user mode agora terminam apenas a app/grupo ofensora, com retorno controlado ao shell.
+- Regressão automatizada adicional de isolamento (`tests/test_user_isolation.py` / `make test-user-isolation`) cobrindo ponteiros inválidos em syscall e `#PF` de user mode em ambos os formatos.
 
-Baseline entregue:
+Baseline anterior entregue:
 - Estrutura de processo adicionada (`process_t`) com PID, estado e contexto mínimo salvo (`ESP`).
 - Runtime inicial do scheduler agora inclui thread de bootstrap + idle thread e criação de kernel threads sobre frames reais de retorno de IRQ.
 - Timer PIT configurado e IRQ0 habilitado para base de round-robin (coleta de ticks em `scheduler_on_timer_tick`).
@@ -158,15 +163,21 @@ Checklist crítico de validação (Fase 5):
 - [x] IRQ0 habilitada com PIT configurado sem regressão de boot/shell.
 - [x] Quantum de preempção conectado ao caminho de retorno de interrupção.
 - [x] Stacks de kernel por thread com guard page e teste negativo de fault.
+- [x] Apps ELF e `.COM` entram em ring3 com pilhas user/kernel distintas e syscall gate real.
+- [x] Foreground/background de apps usam o scheduler como ciclo de vida comum.
+- [x] Falhas de user mode e ponteiros inválidos em syscall ficam contidos ao processo/grupo.
+- [x] Documentação e suites automatizadas refletem o estado final da fase.
 
-Critério para encerrar a fase:
-- População de processos em runtime não pode depender só de tarefas de demonstração e self-tests.
-- Cobertura automatizada precisa validar round-robin real e regressões de preempção fora do caminho de boot.
-- A separação kernel/user precisa ser descrita e exercitada com ring3, syscalls e memória com permissões distintas.
-- Documento de design técnico e testes têm de refletir o estado final, não apenas a base inicial.
-
-Validação atual da baseline:
-- Build com kernel threads reais sobre frames de IRQ fabricados, stacks guardadas por páginas não mapeadas e suíte `make test-phase5` cobrindo caminho positivo e fault controlado.
+Validação final:
+- `make verify-image`
+- `python3 tests/test_serial.py --disk build/minidos-serial.img "ver" "drives"`
+- `python3 tests/test_paging.py --disk build/minidos-paging.img`
+- `python3 tests/test_phase5.py --disk build/minidos-phase5.img`
+- `python3 tests/test_phase4.py --disk build/minidos-phase4.img`
+- `python3 tests/test_multitask_elf.py --disk build/minidos-multitask.img`
+- `python3 tests/test_multitask_com.py --disk build/minidos-multitask-com.img`
+- `python3 tests/test_user_isolation.py --disk build/minidos-useriso.img`
+- builds negativos com `-DSCHED_TEST_GUARD` e `-DPAGING_TEST_PF` a passar
 
 ## Ordem Recomendada de Execução
 

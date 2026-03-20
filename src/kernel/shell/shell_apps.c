@@ -46,10 +46,26 @@ typedef struct {
 #define APP_SLOT_FIRST_PID 3
 #define APP_SLOT_SIZE 0x00100000U
 #define APP_BACKGROUND_SLOT_COUNT 4
+#define APP_THREAD_SLOT_COUNT (SCHEDULER_MAX_PROCESSES - APP_SLOT_FIRST_PID)
+#define APP_THREAD_STACK_BYTES 0x00004000U
+#define APP_RUNTIME_BLOCK_VIRT (APP_LOAD_VIRT_LIMIT - 0x00001000U)
+#define APP_USER_IMAGE_LIMIT (APP_RUNTIME_BLOCK_VIRT - (APP_THREAD_STACK_BYTES * APP_THREAD_SLOT_COUNT))
+#define APP_SYSCALL_STUB_VIRT (APP_RUNTIME_BLOCK_VIRT + 0x00000020U)
+#define APP_EXIT_STUB_VIRT    (APP_RUNTIME_BLOCK_VIRT + 0x00000040U)
+#define APP_THREAD_STUB_VIRT  (APP_RUNTIME_BLOCK_VIRT + 0x00000060U)
 #define APP_MAX_ELF_SIZE 262144
 #define APP_MAX_COM_SIZE 65536
 #define APP_PATH_MAX 64
 #define APP_CLIP_NAME_MAX 64
+#define APP_USER_TEXT_MAX 256
+#define APP_ELF_BUFFER_PHYS 0x00300000U
+#define APP_TASK_TABLE_PHYS 0x00340000U
+
+typedef enum {
+    APP_FORMAT_NONE = 0,
+    APP_FORMAT_ELF = 1,
+    APP_FORMAT_COM = 2,
+} shell_app_format_t;
 
 typedef struct {
     int in_use;
@@ -60,6 +76,7 @@ typedef struct {
     int app_clip_mode;
     int background;
     int serial_only;
+    int join_on_exit;
     int input_ready_logged;
     unsigned int current_dir_cluster;
     unsigned int app_clip_src_cluster;
@@ -79,10 +96,8 @@ typedef struct {
     unsigned int lowmem_pt0[1024] __attribute__((aligned(4096)));
 } shell_app_task_t;
 
-static shell_app_task_t g_app_tasks[SCHEDULER_MAX_PROCESSES];
-static shell_app_task_t g_inline_task;
-static shell_app_task_t* g_inline_active = 0;
-static unsigned char g_elf_buffer[APP_MAX_ELF_SIZE];
+static shell_app_task_t* const g_app_tasks = (shell_app_task_t*)APP_TASK_TABLE_PHYS;
+static unsigned char* const g_elf_buffer = (unsigned char*)APP_ELF_BUFFER_PHYS;
 static const unsigned int g_app_phys_slots[APP_BACKGROUND_SLOT_COUNT] = {
     0x00700000U,
     0x00800000U,
@@ -91,6 +106,32 @@ static const unsigned int g_app_phys_slots[APP_BACKGROUND_SLOT_COUNT] = {
 };
 static const unsigned int EFLAGS_IF = 0x00000200U;
 static unsigned int app_rng_state = 0xA5F21C3Du;
+static const unsigned char g_app_syscall_stub[] = {
+    0x53,
+    0x8B, 0x44, 0x24, 0x08,
+    0x8B, 0x5C, 0x24, 0x0C,
+    0x8B, 0x4C, 0x24, 0x10,
+    0x8B, 0x54, 0x24, 0x14,
+    0xCD, 0x80,
+    0x5B,
+    0xC3
+};
+static const unsigned char g_app_exit_stub[] = {
+    0x89, 0xC3,
+    0xB8, MINIDOS_SYSCALL_EXIT, 0x00, 0x00, 0x00,
+    0xCD, 0x80,
+    0xEB, 0xFE
+};
+static const unsigned char g_app_thread_stub[] = {
+    0x8B, 0x44, 0x24, 0x04,
+    0x8B, 0x4C, 0x24, 0x08,
+    0x8B, 0x54, 0x24, 0x0C,
+    0x52,
+    0x51,
+    0xFF, 0xD0,
+    0x83, 0xC4, 0x08,
+    0xC3
+};
 
 static void shell_apps_background_thread(void* arg);
 static void shell_apps_mem_copy(unsigned char* dst, const unsigned char* src, unsigned int size);
@@ -116,6 +157,102 @@ static void shell_apps_log_task_marker(const char* marker, const shell_app_task_
     log_serial_raw(" base=");
     serial_print_hex(task->app_phys_base);
     log_serial_raw("\n");
+}
+
+static unsigned int shell_apps_user_stack_top_for_pid(int pid) {
+    unsigned int index;
+
+    if (pid < APP_SLOT_FIRST_PID || pid >= SCHEDULER_MAX_PROCESSES) {
+        return 0;
+    }
+
+    index = (unsigned int)(pid - APP_SLOT_FIRST_PID);
+    return APP_RUNTIME_BLOCK_VIRT - (index * APP_THREAD_STACK_BYTES);
+}
+
+static unsigned int shell_apps_phys_addr_for_virtual(const shell_app_task_t* task, unsigned int virt) {
+    if (!task || task->app_phys_base == 0U) {
+        return 0;
+    }
+    if (virt < APP_LOAD_VIRT_BASE || virt >= APP_LOAD_VIRT_LIMIT) {
+        return 0;
+    }
+
+    return task->app_phys_base + (virt - APP_LOAD_VIRT_BASE);
+}
+
+static int shell_apps_user_range_valid(const shell_app_task_t* task, unsigned int addr, unsigned int size) {
+    unsigned int end;
+
+    if (!task || !task->in_use) {
+        return 0;
+    }
+    if (size == 0U) {
+        return 1;
+    }
+    if (addr < APP_LOAD_VIRT_BASE || addr >= APP_LOAD_VIRT_LIMIT) {
+        return 0;
+    }
+
+    end = addr + size;
+    if (end < addr || end > APP_LOAD_VIRT_LIMIT) {
+        return 0;
+    }
+    return 1;
+}
+
+static int shell_apps_copy_user_bytes(const shell_app_task_t* task, const void* input, void* out, unsigned int size) {
+    if (!out) {
+        return 0;
+    }
+    if (size == 0U) {
+        return 1;
+    }
+    if (!shell_apps_user_range_valid(task, (unsigned int)input, size)) {
+        return 0;
+    }
+
+    shell_apps_mem_copy((unsigned char*)out, (const unsigned char*)input, size);
+    return 1;
+}
+
+static int shell_apps_copy_user_string(const shell_app_task_t* task, const char* input, char* out, int out_size) {
+    unsigned int addr;
+    int i = 0;
+
+    if (!task || !input || !out || out_size <= 0) {
+        return 0;
+    }
+
+    addr = (unsigned int)input;
+    if (addr < APP_LOAD_VIRT_BASE || addr >= APP_LOAD_VIRT_LIMIT) {
+        return 0;
+    }
+
+    while (i < out_size - 1 && addr < APP_LOAD_VIRT_LIMIT) {
+        char c = *(const char*)addr;
+
+        out[i++] = c;
+        addr++;
+        if (c == '\0') {
+            return 1;
+        }
+    }
+
+    out[i < out_size ? i : (out_size - 1)] = '\0';
+    return 0;
+}
+
+static int shell_apps_copy_user_upper(const shell_app_task_t* task, const char* input, char* out, int out_size) {
+    if (!shell_apps_copy_user_string(task, input, out, out_size)) {
+        return 0;
+    }
+    task->str_to_upper(out);
+    return 1;
+}
+
+static int shell_apps_user_exec_ptr_valid(unsigned int addr) {
+    return addr >= APP_LOAD_VIRT_BASE && addr < APP_USER_IMAGE_LIMIT;
 }
 
 static void shell_apps_mem_zero(unsigned char* dst, unsigned int size) {
@@ -178,6 +315,9 @@ static void shell_apps_reap_terminated_tasks(void) {
 
         state = scheduler_get_process_state(pid);
         if (state == PROCESS_UNUSED || state == PROCESS_TERMINATED) {
+            if (task->join_on_exit) {
+                continue;
+            }
             shell_apps_release_task(task);
         }
     }
@@ -185,12 +325,7 @@ static void shell_apps_reap_terminated_tasks(void) {
 
 static shell_app_task_t* shell_apps_active_task(void) {
     int pid = scheduler_get_current_pid();
-    shell_app_task_t* task = shell_apps_find_task(pid);
-
-    if (task) {
-        return task;
-    }
-    return g_inline_active;
+    return shell_apps_find_task(pid);
 }
 
 static int shell_apps_task_valid(const shell_app_task_t* task) {
@@ -231,14 +366,6 @@ static int shell_apps_copy_string(const char* input, char* out, int out_size) {
     }
     out[i] = '\0';
     return input[i] == '\0';
-}
-
-static int shell_apps_copy_upper(const shell_app_task_t* task, const char* input, char* out, int out_size) {
-    if (!shell_apps_copy_string(input, out, out_size)) {
-        return 0;
-    }
-    task->str_to_upper(out);
-    return 1;
 }
 
 static char shell_apps_ascii_tolower(char c) {
@@ -331,6 +458,72 @@ static void shell_apps_normalize_app_name(const char* input, char* out, int out_
     out[j] = '\0';
 }
 
+static int shell_apps_stage_elf_candidate(
+    const shell_app_host_t* host,
+    const char* command,
+    char* task_name_out,
+    int task_name_size,
+    char* filename_out,
+    int filename_size,
+    int* bytes_read_out
+) {
+    char normalized[64];
+
+    if (!shell_apps_host_valid(host) || !command || !filename_out || !bytes_read_out) {
+        return 0;
+    }
+
+    shell_apps_normalize_app_name(command, normalized, (int)sizeof(normalized));
+    if (normalized[0] == '\0') {
+        return 0;
+    }
+    if (!shell_apps_append_extension(normalized, ".elf", 0, filename_out, filename_size)) {
+        return 0;
+    }
+
+    host->str_to_upper(filename_out);
+    *bytes_read_out = fat16_read_file_from_dir(*host->current_dir_cluster, filename_out, g_elf_buffer, APP_MAX_ELF_SIZE);
+    if (*bytes_read_out <= 0) {
+        return 0;
+    }
+
+    if (task_name_out && task_name_size > 0) {
+        (void)shell_apps_copy_string(normalized, task_name_out, task_name_size);
+    }
+    return 1;
+}
+
+static int shell_apps_stage_com_candidate(
+    const shell_app_host_t* host,
+    const char* command,
+    char* task_name_out,
+    int task_name_size,
+    char* filename_out,
+    int filename_size,
+    int* bytes_read_out
+) {
+    char normalized[64];
+
+    if (!shell_apps_host_valid(host) || !command || !filename_out || !bytes_read_out) {
+        return 0;
+    }
+    if (!shell_apps_append_extension(command, ".com", 1, filename_out, filename_size)) {
+        return 0;
+    }
+
+    host->str_to_upper(filename_out);
+    *bytes_read_out = fat16_read_file_from_dir(*host->current_dir_cluster, filename_out, g_elf_buffer, APP_MAX_COM_SIZE);
+    if (*bytes_read_out <= 0) {
+        return 0;
+    }
+
+    if (task_name_out && task_name_size > 0) {
+        shell_apps_normalize_app_name(command, normalized, (int)sizeof(normalized));
+        (void)shell_apps_copy_string(normalized, task_name_out, task_name_size);
+    }
+    return 1;
+}
+
 static void shell_apps_begin_input_session(shell_app_task_t* task) {
     if (task) {
         task->input_ready_logged = 0;
@@ -353,10 +546,6 @@ static void shell_apps_note_session_return(shell_app_task_t* task) {
 
 static void shell_apps_begin_scheduler_origin(const char* origin_name) {
     scheduler_set_current_origin(origin_name, 1);
-}
-
-static void shell_apps_end_scheduler_origin(void) {
-    scheduler_set_current_origin(0, 0);
 }
 
 static void shell_apps_ensure_interrupts_enabled(void) {
@@ -588,17 +777,27 @@ static void shell_apps_release_task(shell_app_task_t* task) {
     shell_apps_mem_zero((unsigned char*)task, (unsigned int)sizeof(*task));
 }
 
-static int shell_apps_prepare_background_task(shell_app_task_t* task, const shell_app_host_t* host, int pid, unsigned int phys_base) {
+static int shell_apps_prepare_app_task(
+    shell_app_task_t* task,
+    const shell_app_host_t* host,
+    int pid,
+    unsigned int phys_base,
+    int background,
+    int serial_only,
+    int join_on_exit
+) {
     if (!task || !host || pid < APP_SLOT_FIRST_PID || pid >= SCHEDULER_MAX_PROCESSES || phys_base == 0U) {
         return 0;
     }
 
     log_serial_raw("APPBG051\n");
-    shell_apps_copy_host_state(task, host, 1, 1);
+    shell_apps_copy_host_state(task, host, background, serial_only);
     log_serial_raw("APPBG052\n");
     task->pid = pid;
     task->leader_pid = pid;
     task->app_phys_base = phys_base;
+    task->join_on_exit = join_on_exit ? 1 : 0;
+    shell_apps_mem_zero((unsigned char*)phys_base, APP_SLOT_SIZE);
     if (!paging_build_app_directory(task->page_directory, task->lowmem_pt0, task->app_phys_base, APP_SLOT_SIZE)) {
         return 0;
     }
@@ -624,11 +823,75 @@ static int shell_apps_clone_background_task(
     dst->leader_pid = shell_apps_group_leader_pid(src);
     dst->entry_virtual = entry_virtual;
     dst->thread_arg = thread_arg;
+    dst->join_on_exit = 0;
     dst->input_ready_logged = 0;
     shell_apps_set_task_label(dst->task_name, (int)sizeof(dst->task_name), task_name, "thread");
     if (!paging_build_app_directory(dst->page_directory, dst->lowmem_pt0, dst->app_phys_base, APP_SLOT_SIZE)) {
         return 0;
     }
+    return 1;
+}
+
+static int shell_apps_prepare_runtime_block(shell_app_task_t* task) {
+    unsigned int base_phys;
+    unsigned int* api_words;
+
+    if (!task) {
+        return 0;
+    }
+
+    base_phys = shell_apps_phys_addr_for_virtual(task, APP_RUNTIME_BLOCK_VIRT);
+    if (base_phys == 0U) {
+        return 0;
+    }
+
+    api_words = (unsigned int*)base_phys;
+    api_words[0] = APP_SYSCALL_STUB_VIRT;
+    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_SYSCALL_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+        g_app_syscall_stub, (unsigned int)sizeof(g_app_syscall_stub));
+    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_EXIT_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+        g_app_exit_stub, (unsigned int)sizeof(g_app_exit_stub));
+    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_THREAD_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+        g_app_thread_stub, (unsigned int)sizeof(g_app_thread_stub));
+    return 1;
+}
+
+static int shell_apps_prepare_user_launch(shell_app_task_t* task, unsigned int* entry_out, unsigned int* user_esp_out) {
+    unsigned int stack_top;
+    unsigned int stack_base_phys;
+    unsigned int* stack_words;
+
+    if (!task || !entry_out || !user_esp_out) {
+        return 0;
+    }
+    if (!shell_apps_prepare_runtime_block(task)) {
+        return 0;
+    }
+
+    stack_top = shell_apps_user_stack_top_for_pid(task->pid);
+    stack_base_phys = shell_apps_phys_addr_for_virtual(task, stack_top - APP_THREAD_STACK_BYTES);
+    if (stack_top == 0U || stack_base_phys == 0U) {
+        return 0;
+    }
+
+    shell_apps_mem_zero((unsigned char*)stack_base_phys, APP_THREAD_STACK_BYTES);
+
+    if (task->pid == shell_apps_group_leader_pid(task)) {
+        stack_words = (unsigned int*)(shell_apps_phys_addr_for_virtual(task, stack_top) - (2U * sizeof(unsigned int)));
+        stack_words[0] = APP_EXIT_STUB_VIRT;
+        stack_words[1] = APP_RUNTIME_BLOCK_VIRT;
+        *entry_out = task->entry_virtual;
+        *user_esp_out = stack_top - (2U * sizeof(unsigned int));
+    } else {
+        stack_words = (unsigned int*)(shell_apps_phys_addr_for_virtual(task, stack_top) - (4U * sizeof(unsigned int)));
+        stack_words[0] = APP_EXIT_STUB_VIRT;
+        stack_words[1] = task->entry_virtual;
+        stack_words[2] = APP_RUNTIME_BLOCK_VIRT;
+        stack_words[3] = task->thread_arg;
+        *entry_out = APP_THREAD_STUB_VIRT;
+        *user_esp_out = stack_top - (4U * sizeof(unsigned int));
+    }
+
     return 1;
 }
 
@@ -643,7 +906,9 @@ static void shell_apps_release_group_members(int leader_pid, int skip_pid, int t
         if (terminate_first) {
             (void)scheduler_terminate_process(task->pid);
         }
-        shell_apps_release_task(task);
+        if (!terminate_first) {
+            shell_apps_release_task(task);
+        }
     }
 }
 
@@ -679,12 +944,44 @@ static void shell_apps_leave_drive_context(int previous_drive) {
     fat16_set_drive(previous_drive);
 }
 
+static void shell_apps_wait_for_task_exit(int pid) {
+    while (pid >= APP_SLOT_FIRST_PID && pid < SCHEDULER_MAX_PROCESSES) {
+        process_state_t state = scheduler_get_process_state(pid);
+        if (state == PROCESS_TERMINATED || state == PROCESS_UNUSED) {
+            return;
+        }
+        timer_wait_for_interrupt();
+    }
+}
+
 static int shell_apps_spawn_app_thread(shell_app_task_t* parent, const app_thread_create_t* spec) {
+    app_thread_create_t spec_copy;
+    char child_name[24];
+    const char* task_name = 0;
     shell_app_task_t* child;
     int pid;
     int actual_pid;
 
-    if (!shell_apps_task_valid(parent) || !spec || !spec->entry || !parent->background) {
+    if (!shell_apps_task_valid(parent) || !spec || !parent->background) {
+        return -1;
+    }
+    if (!shell_apps_copy_user_bytes(parent, spec, &spec_copy, (unsigned int)sizeof(spec_copy))) {
+        return -1;
+    }
+    if (!spec_copy.entry || !shell_apps_user_exec_ptr_valid((unsigned int)spec_copy.entry)) {
+        return -1;
+    }
+    if (spec_copy.name) {
+        if (!shell_apps_copy_user_string(parent, spec_copy.name, child_name, (int)sizeof(child_name))) {
+            return -1;
+        }
+        task_name = child_name;
+    }
+    if (task_name && task_name[0] == '\0') {
+        task_name = 0;
+    }
+
+    if (!parent->background) {
         return -1;
     }
 
@@ -698,9 +995,9 @@ static int shell_apps_spawn_app_thread(shell_app_task_t* parent, const app_threa
         child,
         parent,
         pid,
-        (unsigned int)spec->entry,
-        (unsigned int)spec->arg,
-        spec->name
+        (unsigned int)spec_copy.entry,
+        (unsigned int)spec_copy.arg,
+        task_name
     )) {
         shell_apps_release_task(child);
         return -1;
@@ -738,7 +1035,12 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     }
 
     if (num == MINIDOS_SYSCALL_PUTS) {
-        shell_apps_task_out(task, (const char*)a0);
+        char text[APP_USER_TEXT_MAX];
+
+        if (!shell_apps_copy_user_string(task, (const char*)a0, text, (int)sizeof(text))) {
+            return -1;
+        }
+        shell_apps_task_out(task, text);
         return 0;
     }
 
@@ -755,6 +1057,9 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     }
 
     if (num == MINIDOS_SYSCALL_GET_MOUSE_STATE) {
+        if (!shell_apps_user_range_valid(task, a0, (unsigned int)sizeof(app_mouse_state_t))) {
+            return 0;
+        }
         return shell_apps_get_mouse_state((app_mouse_state_t*)a0);
     }
 
@@ -773,7 +1078,9 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         rtc_time_t time;
         app_time_t* out = (app_time_t*)a0;
 
-        if (!out || !rtc_read_time(&time)) {
+        if (!out
+            || !shell_apps_user_range_valid(task, a0, (unsigned int)sizeof(*out))
+            || !rtc_read_time(&time)) {
             return 0;
         }
 
@@ -811,7 +1118,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered
                 && fat16_find_entry(task->current_dir_cluster, name_a, &entry, 0, 0)
@@ -832,11 +1139,11 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags;
 
-        if (!a1 || (int)a2 <= 0) {
+        if (!a1 || (int)a2 <= 0 || !shell_apps_user_range_valid(task, a1, a2)) {
             return -1;
         }
         flags = shell_apps_enter_critical();
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
             && shell_apps_enter_drive_context(task, &previous_drive)) {
             result = fat16_read_file_from_dir(task->current_dir_cluster, name_a, (unsigned char*)a1, (int)a2);
             shell_apps_leave_drive_context(previous_drive);
@@ -850,11 +1157,13 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags;
 
-        if (((const unsigned char*)a1 == 0 && (int)a2 > 0) || (int)a2 < 0) {
+        if (((const unsigned char*)a1 == 0 && (int)a2 > 0)
+            || (int)a2 < 0
+            || ((int)a2 > 0 && !shell_apps_user_range_valid(task, a1, a2))) {
             return 0;
         }
         flags = shell_apps_enter_critical();
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
             && shell_apps_enter_drive_context(task, &previous_drive)) {
             result = fat16_write_file_from_dir(task->current_dir_cluster, name_a, (const unsigned char*)a1, (int)a2);
             shell_apps_leave_drive_context(previous_drive);
@@ -868,7 +1177,9 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags;
 
-        if (!(char*)a1) {
+        if (!(char*)a1
+            || !shell_apps_user_range_valid(task, a1, 13U)
+            || (a2 != 0U && !shell_apps_user_range_valid(task, a2, (unsigned int)sizeof(int)))) {
             return 0;
         }
         flags = shell_apps_enter_critical();
@@ -885,8 +1196,8 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
-            && shell_apps_copy_upper(task, (const char*)a1, name_b, sizeof(name_b))
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
+            && shell_apps_copy_user_upper(task, (const char*)a1, name_b, sizeof(name_b))
             && shell_apps_enter_drive_context(task, &previous_drive)) {
             result = fat16_copy_file(task->current_dir_cluster, name_a, name_b);
             shell_apps_leave_drive_context(previous_drive);
@@ -901,8 +1212,8 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
-            && shell_apps_copy_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
+            && shell_apps_copy_user_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered
                 && fat16_find_entry(task->current_dir_cluster, name_a, &entry, 0, 0)
@@ -926,27 +1237,37 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     }
 
     if (num == MINIDOS_SYSCALL_GFX_RECT) {
-        const app_gfx_rect_t* rect = (const app_gfx_rect_t*)a0;
-        if (!rect || task->background) {
+        app_gfx_rect_t rect;
+
+        if (task->background || !shell_apps_copy_user_bytes(task, (const void*)a0, &rect, (unsigned int)sizeof(rect))) {
             return 0;
         }
-        video_fill_rect(rect->x, rect->y, rect->w, rect->h, rect->color);
+        video_fill_rect(rect.x, rect.y, rect.w, rect.h, rect.color);
         return 1;
     }
 
     if (num == MINIDOS_SYSCALL_GFX_TEXT) {
-        const app_gfx_text_t* text = (const app_gfx_text_t*)a0;
-        if (!text || !text->text || task->background) {
+        app_gfx_text_t text;
+        char rendered[APP_USER_TEXT_MAX];
+
+        if (task->background || !shell_apps_copy_user_bytes(task, (const void*)a0, &text, (unsigned int)sizeof(text))) {
             return 0;
         }
-        video_draw_text_at(text->x, text->y, text->text, text->fg, text->bg);
+        if (!text.text || !shell_apps_copy_user_string(task, text.text, rendered, (int)sizeof(rendered))) {
+            return 0;
+        }
+        video_draw_text_at(text.x, text.y, rendered, text.fg, text.bg);
         return 1;
     }
 
     if (num == MINIDOS_SYSCALL_GFX_SIZE) {
         int* out_w = (int*)a0;
         int* out_h = (int*)a1;
-        if (!out_w || !out_h || task->background) {
+        if (!out_w
+            || !out_h
+            || task->background
+            || !shell_apps_user_range_valid(task, a0, (unsigned int)sizeof(*out_w))
+            || !shell_apps_user_range_valid(task, a1, (unsigned int)sizeof(*out_h))) {
             return 0;
         }
         *out_w = video_get_width();
@@ -967,7 +1288,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags;
 
-        if (!shell_apps_copy_string((const char*)a0, name_a, sizeof(name_a))) {
+        if (!shell_apps_copy_user_string(task, (const char*)a0, name_a, sizeof(name_a))) {
             return 0;
         }
 
@@ -1021,7 +1342,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
             && shell_apps_enter_drive_context(task, &previous_drive)) {
             result = fat16_mkdir(task->current_dir_cluster, name_a);
             shell_apps_leave_drive_context(previous_drive);
@@ -1035,7 +1356,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
             && shell_apps_enter_drive_context(task, &previous_drive)) {
             result = fat16_rmdir(task->current_dir_cluster, name_a);
             shell_apps_leave_drive_context(previous_drive);
@@ -1050,7 +1371,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered && fat16_find_entry(task->current_dir_cluster, name_a, &entry, 0, 0)) {
                 if (entry.attributes & FAT16_ATTR_DIRECTORY) {
@@ -1073,8 +1394,8 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
-            && shell_apps_copy_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
+            && shell_apps_copy_user_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered && fat16_find_entry(task->current_dir_cluster, name_a, &entry, 0, 0)) {
                 result = fat16_update_entry(task->current_dir_cluster, name_a, name_b, entry.cluster_low, entry.file_size, entry.attributes);
@@ -1094,8 +1415,8 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
-            && shell_apps_copy_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))
+            && shell_apps_copy_user_upper(task, (const char*)a1, name_b, sizeof(name_b))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered
                 && fat16_find_dir_cluster(task->current_dir_cluster, name_b, &dst_dir_cluster)
@@ -1119,7 +1440,7 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         int previous_drive = 0;
         unsigned int flags = shell_apps_enter_critical();
 
-        if (shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
+        if (shell_apps_copy_user_upper(task, (const char*)a0, name_a, sizeof(name_a))) {
             entered = shell_apps_enter_drive_context(task, &previous_drive);
             if (entered
                 && fat16_find_entry(task->current_dir_cluster, name_a, &entry, 0, 0)
@@ -1148,12 +1469,19 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
             return 0;
         }
         if (shell_apps_enter_drive_context(task, &previous_drive)) {
-            if ((const char*)a0 && ((const char*)a0)[0] != '\0') {
-                if (!shell_apps_copy_upper(task, (const char*)a0, name_a, sizeof(name_a))
-                    || !fat16_find_dir_cluster(task->current_dir_cluster, name_a, &dst_dir_cluster)) {
+            if (a0 != 0U) {
+                if (!shell_apps_copy_user_string(task, (const char*)a0, name_a, sizeof(name_a))) {
                     shell_apps_leave_drive_context(previous_drive);
                     shell_apps_leave_critical(flags);
                     return 0;
+                }
+                if (name_a[0] != '\0') {
+                    task->str_to_upper(name_a);
+                    if (!fat16_find_dir_cluster(task->current_dir_cluster, name_a, &dst_dir_cluster)) {
+                        shell_apps_leave_drive_context(previous_drive);
+                        shell_apps_leave_critical(flags);
+                        return 0;
+                    }
                 }
             }
             if (fat16_copy_file_between_dirs(task->app_clip_src_cluster, task->app_clip_name, dst_dir_cluster, task->app_clip_name)) {
@@ -1173,6 +1501,57 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     }
 
     return -1;
+}
+
+int shell_apps_handle_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
+    return shell_apps_syscall(num, a0, a1, a2);
+}
+
+void shell_apps_on_current_task_exit(void) {
+    shell_app_task_t* task = shell_apps_active_task();
+    int leader_pid;
+
+    if (!shell_apps_task_valid(task)) {
+        return;
+    }
+
+    leader_pid = shell_apps_group_leader_pid(task);
+    shell_apps_log_task_marker("APPBG190", task);
+    if (!task->background && task->pid == leader_pid) {
+        shell_apps_note_session_return(task);
+    }
+    if (task->pid == leader_pid) {
+        shell_apps_release_group_members(leader_pid, task->pid, 1);
+    }
+}
+
+void shell_apps_on_current_task_fault(unsigned int vector, unsigned int error_code, unsigned int eip) {
+    shell_app_task_t* task = shell_apps_active_task();
+    int leader_pid;
+
+    if (!shell_apps_task_valid(task)) {
+        return;
+    }
+
+    leader_pid = shell_apps_group_leader_pid(task);
+    log_serial_raw("APPFLT900 pid=");
+    serial_print_hex((unsigned int)task->pid);
+    log_serial_raw(" leader=");
+    serial_print_hex((unsigned int)leader_pid);
+    log_serial_raw(" vector=");
+    serial_print_hex(vector);
+    log_serial_raw(" error=");
+    serial_print_hex(error_code);
+    log_serial_raw(" eip=");
+    serial_print_hex(eip);
+    log_serial_raw("\n");
+
+    if (!task->background && task->pid == leader_pid) {
+        shell_apps_task_out(task, "App faulted and was terminated\n");
+        shell_apps_note_session_return(task);
+    }
+
+    shell_apps_release_group_members(leader_pid, task->pid, 1);
 }
 
 static void shell_apps_mem_copy(unsigned char* dst, const unsigned char* src, unsigned int size) {
@@ -1225,7 +1604,7 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
         if ((int)phdr->offset + (int)phdr->filesz > elf_size) {
             return -1;
         }
-        if (phdr->vaddr < APP_LOAD_VIRT_BASE || (phdr->vaddr + phdr->memsz) > APP_LOAD_VIRT_LIMIT) {
+        if (phdr->vaddr < APP_LOAD_VIRT_BASE || (phdr->vaddr + phdr->memsz) > APP_USER_IMAGE_LIMIT) {
             return -1;
         }
 
@@ -1237,7 +1616,7 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
         }
     }
 
-    if (ehdr->entry < APP_LOAD_VIRT_BASE || ehdr->entry >= APP_LOAD_VIRT_LIMIT) {
+    if (ehdr->entry < APP_LOAD_VIRT_BASE || ehdr->entry >= APP_USER_IMAGE_LIMIT) {
         return -1;
     }
 
@@ -1245,72 +1624,62 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
     return 0;
 }
 
-static int shell_apps_call_loaded_entry(unsigned int entry_virtual, const minidos_app_api_t* api) {
-    typedef int (*app_entry_t)(const minidos_app_api_t* api);
-    app_entry_t entry = (app_entry_t)entry_virtual;
+static int shell_apps_load_com_image(const unsigned char* com_data, int com_size, unsigned int load_phys_base, unsigned int* entry_virtual_out) {
+    if (!com_data || !entry_virtual_out || com_size <= 0 || com_size > APP_MAX_COM_SIZE) {
+        return -1;
+    }
+    if ((APP_LOAD_VIRT_BASE + (unsigned int)com_size) > APP_USER_IMAGE_LIMIT) {
+        return -1;
+    }
 
-    return entry(api);
-}
-
-static void shell_apps_call_thread_entry(unsigned int entry_virtual, const minidos_app_api_t* api, void* arg) {
-    typedef void (*app_thread_entry_fn)(const minidos_app_api_t* api, void* arg);
-    app_thread_entry_fn entry = (app_thread_entry_fn)entry_virtual;
-
-    entry(api, arg);
+    shell_apps_mem_copy((unsigned char*)load_phys_base, com_data, (unsigned int)com_size);
+    *entry_virtual_out = APP_LOAD_VIRT_BASE;
+    return 0;
 }
 
 static void shell_apps_background_thread(void* arg) {
     shell_app_task_t* task = (shell_app_task_t*)arg;
-    minidos_app_api_t api;
-    int leader_pid;
+    unsigned int entry_virtual = 0;
+    unsigned int user_esp = 0;
 
     if (!task || !task->in_use) {
         return;
     }
 
-    api.syscall = shell_apps_syscall;
-    leader_pid = shell_apps_group_leader_pid(task);
     shell_apps_begin_input_session(task);
     if (task->origin_name[0] != '\0') {
         shell_apps_begin_scheduler_origin(task->origin_name);
     }
     shell_apps_ensure_interrupts_enabled();
     shell_apps_log_task_marker("APPBG100", task);
-    if (task->pid == leader_pid) {
-        (void)shell_apps_call_loaded_entry(task->entry_virtual, &api);
-    } else {
-        shell_apps_call_thread_entry(task->entry_virtual, &api, (void*)task->thread_arg);
+    if (!shell_apps_prepare_user_launch(task, &entry_virtual, &user_esp)) {
+        shell_apps_task_out(task, "User runtime setup failed\n");
+        shell_apps_on_current_task_exit();
+        scheduler_exit_current_task();
     }
-    shell_apps_log_task_marker("APPBG190", task);
-    if (task->pid == leader_pid) {
-        shell_apps_release_group_members(leader_pid, task->pid, 1);
-    }
-    shell_apps_end_scheduler_origin();
+    scheduler_enter_current_user_mode(entry_virtual, user_esp);
 }
 
 static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* command, const char* args) {
+    char normalized[64];
     char filename[64];
-    static unsigned char* const load_addr = (unsigned char*)APP_LOAD_VIRT_BASE;
-    static const int max_com_size = APP_MAX_COM_SIZE;
-    minidos_app_api_t api;
+    shell_app_task_t* task;
+    int pid;
+    int actual_pid;
     int bytes_read;
-    int exit_code;
-    typedef int (*com_entry_t)(const minidos_app_api_t* api);
-    com_entry_t entry;
+    unsigned int entry_virtual = 0;
+    unsigned int phys_base = 0;
 
-    if (command[0] == '\0' || args[0] != '\0') {
+    if (!shell_apps_host_valid(host)) {
         return 0;
     }
-    if (!shell_apps_append_extension(command, ".com", 1, filename, sizeof(filename))) {
+    if (command[0] == '\0' || args[0] != '\0') {
         return 0;
     }
     if (!shell_apps_ensure_host_fat16_ready(host)) {
         return 0;
     }
-
-    host->str_to_upper(filename);
-    bytes_read = fat16_read_file_from_dir(*host->current_dir_cluster, filename, load_addr, max_com_size);
-    if (bytes_read <= 0) {
+    if (!shell_apps_stage_com_candidate(host, command, normalized, (int)sizeof(normalized), filename, (int)sizeof(filename), &bytes_read)) {
         return 0;
     }
 
@@ -1318,35 +1687,67 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
-    shell_apps_copy_host_state(&g_inline_task, host, 0, 0);
-    g_inline_active = &g_inline_task;
-    shell_apps_begin_scheduler_origin(filename);
-    shell_apps_begin_input_session(&g_inline_task);
-    shell_apps_ensure_interrupts_enabled();
-    video_set_deferred_present(1);
+    shell_apps_reap_terminated_tasks();
+    pid = shell_apps_find_free_pid();
+    if (pid < 0) {
+        shell_apps_out_both(host, "No scheduler slot available\n");
+        return 1;
+    }
 
-    api.syscall = shell_apps_syscall;
-    entry = (com_entry_t)load_addr;
-    exit_code = entry(&api);
+    phys_base = shell_apps_allocate_phys_base();
+    if (phys_base == 0U) {
+        shell_apps_out_both(host, "No app memory slot available\n");
+        return 1;
+    }
 
-    video_present_pending();
-    video_set_deferred_present(0);
-    shell_apps_note_session_return(&g_inline_task);
-    shell_apps_sync_host_state(&g_inline_task, host);
-    shell_apps_release_task(&g_inline_task);
-    g_inline_active = 0;
-    shell_apps_end_scheduler_origin();
-    (void)exit_code;
+    task = &g_app_tasks[pid];
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 0, 0, 1)) {
+        shell_apps_release_task(task);
+        shell_apps_out_both(host, "Unable to prepare app task\n");
+        return 1;
+    }
+
+    if (shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0) {
+        shell_apps_release_task(task);
+        shell_apps_out_both(host, "Invalid COM or load error\n");
+        return 1;
+    }
+
+    task->entry_virtual = entry_virtual;
+    shell_apps_set_task_label(task->task_name, (int)sizeof(task->task_name), normalized, "app");
+    shell_apps_set_task_label(task->origin_name, (int)sizeof(task->origin_name), filename, "APP.COM");
+    actual_pid = scheduler_spawn_kernel_task(
+        normalized[0] != '\0' ? normalized : "app",
+        filename,
+        1,
+        shell_apps_background_thread,
+        task,
+        task->page_directory
+    );
+    if (actual_pid < 0 || actual_pid != pid) {
+        shell_apps_release_task(task);
+        if (actual_pid >= 0 && actual_pid != pid) {
+            (void)scheduler_terminate_process(actual_pid);
+        }
+        shell_apps_out_both(host, "Unable to start app task\n");
+        return 1;
+    }
+
+    shell_apps_wait_for_task_exit(pid);
+    shell_apps_sync_host_state(task, host);
+    shell_apps_release_task(task);
     return 1;
 }
 
 int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command, const char* args) {
     char normalized[64];
     char filename[64];
-    minidos_app_api_t api;
+    shell_app_task_t* task;
+    int pid;
+    int actual_pid;
     int bytes_read;
-    int exit_code;
     unsigned int entry_virtual = 0;
+    unsigned int phys_base = 0;
 
     if (!shell_apps_host_valid(host)) {
         return 0;
@@ -1382,31 +1783,72 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
-    if (shell_apps_load_elf_image(g_elf_buffer, bytes_read, APP_LOAD_VIRT_BASE, &entry_virtual) != 0) {
+    shell_apps_reap_terminated_tasks();
+    pid = shell_apps_find_free_pid();
+    if (pid < 0) {
+        shell_apps_out_both(host, "No scheduler slot available\n");
+        return 1;
+    }
+
+    phys_base = shell_apps_allocate_phys_base();
+    if (phys_base == 0U) {
+        shell_apps_out_both(host, "No app memory slot available\n");
+        return 1;
+    }
+
+    task = &g_app_tasks[pid];
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 0, 0, 1)) {
+        shell_apps_release_task(task);
+        shell_apps_out_both(host, "Unable to prepare app task\n");
+        return 1;
+    }
+
+    if (shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0) {
+        shell_apps_release_task(task);
         shell_apps_out_both(host, "Invalid ELF or load error\n");
         return 1;
     }
 
-    shell_apps_copy_host_state(&g_inline_task, host, 0, 0);
-    g_inline_task.entry_virtual = entry_virtual;
-    g_inline_active = &g_inline_task;
-    shell_apps_begin_scheduler_origin(filename);
-    shell_apps_begin_input_session(&g_inline_task);
-    shell_apps_ensure_interrupts_enabled();
-    video_set_deferred_present(1);
+    task->entry_virtual = entry_virtual;
+    shell_apps_set_task_label(task->task_name, (int)sizeof(task->task_name), normalized, "app");
+    shell_apps_set_task_label(task->origin_name, (int)sizeof(task->origin_name), filename, "APP.ELF");
+    actual_pid = scheduler_spawn_kernel_task(
+        normalized[0] != '\0' ? normalized : "app",
+        filename,
+        1,
+        shell_apps_background_thread,
+        task,
+        task->page_directory
+    );
+    if (actual_pid < 0 || actual_pid != pid) {
+        shell_apps_release_task(task);
+        if (actual_pid >= 0 && actual_pid != pid) {
+            (void)scheduler_terminate_process(actual_pid);
+        }
+        shell_apps_out_both(host, "Unable to start app task\n");
+        return 1;
+    }
 
-    api.syscall = shell_apps_syscall;
-    exit_code = shell_apps_call_loaded_entry(entry_virtual, &api);
-
-    video_present_pending();
-    video_set_deferred_present(0);
-    shell_apps_note_session_return(&g_inline_task);
-    shell_apps_sync_host_state(&g_inline_task, host);
-    shell_apps_release_task(&g_inline_task);
-    g_inline_active = 0;
-    shell_apps_end_scheduler_origin();
-    (void)exit_code;
+    shell_apps_wait_for_task_exit(pid);
+    shell_apps_sync_host_state(task, host);
+    shell_apps_release_task(task);
     return 1;
+}
+
+int shell_apps_try_execute_program(const shell_app_host_t* host, const char* command, const char* args) {
+    if (!command) {
+        return 0;
+    }
+    if (shell_apps_has_extension(command, ".com")) {
+        return shell_apps_try_execute_com(host, command, args);
+    }
+    if (shell_apps_has_extension(command, ".elf")) {
+        return shell_apps_try_execute_elf(host, command, args);
+    }
+    if (shell_apps_try_execute_elf(host, command, args)) {
+        return 1;
+    }
+    return shell_apps_try_execute_com(host, command, args);
 }
 
 int shell_apps_run_background(const shell_app_host_t* host, const char* command, int* pid_out) {
@@ -1416,6 +1858,7 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
     int pid;
     int actual_pid;
     int bytes_read;
+    shell_app_format_t format = APP_FORMAT_NONE;
     unsigned int entry_virtual = 0;
     unsigned int phys_base = 0;
 
@@ -1431,19 +1874,20 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
         return 0;
     }
     log_serial_raw("APPBG002\n");
-    if (shell_apps_has_extension(normalized, ".elf")) {
-        if (!shell_apps_append_extension(normalized, "", 0, filename, sizeof(filename))) {
-            return 0;
-        }
-    } else {
-        if (!shell_apps_append_extension(normalized, ".elf", 0, filename, sizeof(filename))) {
-            return 0;
-        }
-    }
     if (!shell_apps_ensure_host_fat16_ready(host)) {
         return 0;
     }
     log_serial_raw("APPBG003\n");
+
+    if (!shell_apps_has_extension(command, ".com")
+        && shell_apps_stage_elf_candidate(host, command, 0, 0, filename, (int)sizeof(filename), &bytes_read)) {
+        format = APP_FORMAT_ELF;
+    } else if (!shell_apps_has_extension(command, ".elf")
+        && shell_apps_stage_com_candidate(host, command, 0, 0, filename, (int)sizeof(filename), &bytes_read)) {
+        format = APP_FORMAT_COM;
+    } else {
+        return 0;
+    }
 
     pid = shell_apps_find_free_pid();
     if (pid < 0) {
@@ -1458,20 +1902,16 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
     log_serial_raw("APPBG005\n");
 
     task = &g_app_tasks[pid];
-    if (!shell_apps_prepare_background_task(task, host, pid, phys_base)) {
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 1, 1, 0)) {
         shell_apps_release_task(task);
         return 0;
     }
     log_serial_raw("APPBG006\n");
-
-    host->str_to_upper(filename);
-    bytes_read = fat16_read_file_from_dir(*host->current_dir_cluster, filename, g_elf_buffer, APP_MAX_ELF_SIZE);
-    if (bytes_read <= 0) {
-        shell_apps_release_task(task);
-        return 0;
-    }
     log_serial_raw("APPBG007\n");
-    if (shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0) {
+    if ((format == APP_FORMAT_ELF
+            && shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0)
+        || (format == APP_FORMAT_COM
+            && shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0)) {
         shell_apps_release_task(task);
         return 0;
     }
@@ -1479,9 +1919,21 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
 
     task->entry_virtual = entry_virtual;
     shell_apps_set_task_label(task->task_name, (int)sizeof(task->task_name), normalized, "app");
-    shell_apps_set_task_label(task->origin_name, (int)sizeof(task->origin_name), filename, "APP.ELF");
+    shell_apps_set_task_label(
+        task->origin_name,
+        (int)sizeof(task->origin_name),
+        filename,
+        (format == APP_FORMAT_COM) ? "APP.COM" : "APP.ELF"
+    );
     shell_apps_log_task_marker("APPBG010", task);
-    actual_pid = scheduler_spawn_kernel_task(normalized, filename, 1, shell_apps_background_thread, task, task->page_directory);
+    actual_pid = scheduler_spawn_kernel_task(
+        normalized[0] != '\0' ? normalized : "app",
+        filename,
+        1,
+        shell_apps_background_thread,
+        task,
+        task->page_directory
+    );
     if (actual_pid < 0 || actual_pid != pid) {
         shell_apps_release_task(task);
         if (actual_pid >= 0 && actual_pid != pid) {
@@ -1515,9 +1967,6 @@ int shell_apps_stop_background(int pid) {
     shell_apps_release_group_members(leader_pid, leader_pid, 1);
     if (scheduler_terminate_process(leader_pid)) {
         stopped = 1;
-    }
-    if (leader_pid >= APP_SLOT_FIRST_PID && leader_pid < SCHEDULER_MAX_PROCESSES) {
-        shell_apps_release_task(&g_app_tasks[leader_pid]);
     }
 
     return stopped;
@@ -1613,10 +2062,7 @@ int shell_apps_try_execute(const shell_app_host_t* host, const char* command, co
     if (!shell_apps_host_valid(host)) {
         return 0;
     }
-    if (shell_apps_try_execute_elf(host, command, args)) {
-        return 1;
-    }
-    if (shell_apps_try_execute_com(host, command, args)) {
+    if (shell_apps_try_execute_program(host, command, args)) {
         return 1;
     }
     return shell_apps_try_execute_aut(host, command, args);

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import subprocess
 import sys
 import time
 
@@ -9,11 +10,23 @@ from qemu_harness import (
     dismiss_default_gui,
     read_until,
     resolve_disk_path,
+    repo_root,
     send_line,
     spawn_qemu,
     terminate_process,
     wait_for_shell_ready,
 )
+
+ROOT = repo_root()
+
+
+def run_host(cmd, *, env=None):
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Command failed: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
 
 def wait_for_patterns(proc, patterns, timeout_s, *, echo=True):
     deadline = time.time() + timeout_s
@@ -56,7 +69,7 @@ def send_cmd(proc, cmd, patterns, timeout_s=8.0):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate background ELF multitasking")
+    parser = argparse.ArgumentParser(description="Validate background COM multitasking")
     parser.add_argument("--disk", default="minidos.img")
     args = parser.parse_args()
 
@@ -64,6 +77,12 @@ def main():
     if not os.path.exists(img):
         print("ERROR: minidos.img not found. Run make first.", file=sys.stderr)
         return 2
+
+    tool_env = dict(os.environ)
+    tool_env["IMG_PATH"] = img
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptcpu.c", "CMCPU"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptwait.c", "CMWAIT"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptthrd.c", "CMTHRD"], env=tool_env)
 
     proc = spawn_qemu(build_floppy_qemu_cmd(img))
 
@@ -80,19 +99,17 @@ def main():
                 raise RuntimeError("shell banner appeared before main loop became ready")
         dismiss_default_gui(proc, ready_log, 8.0, echo=True)
 
-        send_accept(proc, "cd ptest")
-
-        send_cmd(proc, "runbg ptcpu", ["Started background app PTCPU pid="])
-        send_cmd(proc, "runbg ptwait", ["Started background app PTWAIT pid="])
-        send_cmd(proc, "runbg ptthrd", ["Started background app PTTHRD pid="])
+        send_cmd(proc, "runbg cmcpu", ["Started background app CMCPU pid="])
+        send_cmd(proc, "runbg cmwait", ["Started background app CMWAIT pid="])
+        send_cmd(proc, "runbg cmthrd", ["Started background app CMTHRD pid="])
         cpu_pid = 3
         wait_pid = 4
         thrd_pid = 5
 
         wait_for_patterns(proc, ["PTTHRD100", "PTTHRD101", "PTTHRD110"], 10.0)
 
-        out = send_cmd(proc, "top 200 1", ["PTCPU", "PTWAIT", "PTTHRD", "worker", "PTTHRD.ELF"], timeout_s=12.0)
-        for token in ["PTCPU", "PTWAIT", "PTTHRD", "worker", "PTCPU.ELF", "PTWAIT.ELF", "PTTHRD.ELF"]:
+        out = send_cmd(proc, "top 200 1", ["CMCPU", "CMWAIT", "CMTHRD", "worker", "CMTHRD.COM"], timeout_s=12.0)
+        for token in ["CMCPU", "CMWAIT", "CMTHRD", "worker", "CMCPU.COM", "CMWAIT.COM", "CMTHRD.COM"]:
             if token not in out:
                 raise RuntimeError(f"top output missing {token}:\n{out}")
 
@@ -100,17 +117,17 @@ def main():
         if "Background app group stopped" not in out:
             raise RuntimeError("kill did not report success")
 
-        out = send_cmd(proc, "top 200 1", ["PTCPU", "PTWAIT"], timeout_s=12.0)
-        if "PTTHRD" in out or "worker" in out:
+        out = send_cmd(proc, "top 200 1", ["CMCPU", "CMWAIT"], timeout_s=12.0)
+        if "CMTHRD" in out or "worker" in out:
             raise RuntimeError(f"killed app group still visible in top:\n{out}")
 
         send_cmd(proc, f"kill {cpu_pid}", ["Background app group stopped"])
         send_cmd(proc, f"kill {wait_pid}", ["Background app group stopped"])
         out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
         if "MiniDOS Version 0.1" not in out:
-            raise RuntimeError("shell did not resume after multitask test")
+            raise RuntimeError("shell did not resume after COM multitask test")
 
-        print("PASS: background ELF multitasking works with grouped child threads")
+        print("PASS: background COM multitasking works with grouped child threads")
         return 0
     finally:
         terminate_process(proc)

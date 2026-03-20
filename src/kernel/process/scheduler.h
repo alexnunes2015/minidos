@@ -59,6 +59,8 @@ void scheduler_set_current_name(const char* name);
 void scheduler_set_current_origin(const char* origin_name, int is_executable);
 int scheduler_get_current_pid(void);
 process_state_t scheduler_get_process_state(int pid);
+void scheduler_enter_current_user_mode(unsigned int entry_virtual, unsigned int user_esp) __attribute__((noreturn));
+irq_frame_t* scheduler_exit_current_from_interrupt(irq_frame_t* frame);
 int scheduler_spawn_kernel_task(
     const char* name,
     const char* origin_name,
