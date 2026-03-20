@@ -741,24 +741,41 @@ void paging_activate_directory(unsigned int* pd) {
     load_page_directory(pd);
 }
 
-int paging_build_app_directory(unsigned int* out_pd, unsigned int* out_lowmem_pt0, unsigned int app_phys_base, unsigned int app_bytes) {
-    unsigned int first_index = 0x200000U >> 12;
-    unsigned int page_count = APP_SLOT_BYTES >> 12;
+int paging_build_app_directory(
+    unsigned int* out_pd,
+    unsigned int* out_user_pt,
+    unsigned int app_phys_base,
+    unsigned int app_virt_base,
+    unsigned int app_bytes
+) {
+    unsigned int pde_index = app_virt_base >> 22;
+    unsigned int first_index = (app_virt_base >> 12) & 0x3FFU;
+    unsigned int page_count = (app_bytes + 0xFFFU) >> 12;
 
-    if (!out_pd || !out_lowmem_pt0 || app_bytes == 0 || app_bytes > APP_SLOT_BYTES || page_count > 256U) {
+    if (!out_pd
+        || !out_user_pt
+        || app_bytes == 0
+        || app_bytes > APP_SLOT_BYTES
+        || page_count > 256U
+        || (app_virt_base & 0xFFFU) != 0U
+        || pde_index >= 1024U
+        || (first_index + page_count) > 1024U
+        || pde_index < LOWMEM_PAGE_TABLE_COUNT
+        || page_directory[pde_index] != 0U) {
         return 0;
     }
 
     for (int i = 0; i < 1024; i++) {
         out_pd[i] = page_directory[i];
-        out_lowmem_pt0[i] = lowmem_page_tables[0][i];
+        out_user_pt[i] = 0U;
     }
 
+    /* Keep user code in its own PDE instead of cloning low-memory PT0. */
     for (unsigned int i = 0; i < page_count; i++) {
-        out_lowmem_pt0[first_index + i] = (app_phys_base + (i * 0x1000U)) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+        out_user_pt[first_index + i] = (app_phys_base + (i * 0x1000U)) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
     }
 
-    out_pd[0] = ((unsigned int)out_lowmem_pt0) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+    out_pd[pde_index] = ((unsigned int)out_user_pt) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
     return 1;
 }
 

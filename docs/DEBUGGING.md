@@ -22,7 +22,7 @@ make gdb-kernel
 - `make phase0-check`: clean rebuild plus serial smoke test.
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
 - `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
-- `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers and direct user-mode page faults.
+- `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers, stale low-memory app VAs, and direct user-mode page faults.
 - `make run-no-reboot`: keeps QEMU from rebooting on panic/triple-fault style failures so the last serial output stays visible.
 - `make run-trace`: writes a QEMU trace to `build/qemu-trace.log` for low-level fault analysis.
 - `make run-gdb`: starts QEMU paused with a GDB stub on `localhost:1234`.
@@ -168,6 +168,7 @@ make test-user-isolation
 Check:
 
 - `BADP190` appears after both `BADPTR` and `BADCOM` try to pass a kernel pointer through `int 0x80`
+- `OLDMAP` and `OLDCOM` emit `[paging] #PF detected`, `CR2=0x00200000`, `mode=user`, and `APPFLT900`, proving the old low-memory app window is no longer user-mapped
 - `USRFAULT` and `USRFCOM` emit `[paging] #PF detected`, `CR2=0x00010000`, `mode=user`, and `APPFLT900`
 - `APPRET001` appears after each user fault, proving the shell regained control without a reboot
 - `ver` still works after all negative cases

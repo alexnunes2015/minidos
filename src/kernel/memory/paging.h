@@ -8,6 +8,12 @@ int paging_unmap_page(unsigned int addr);
 unsigned int* paging_get_kernel_directory(void);
 void paging_activate_directory(unsigned int* pd);
 void paging_set_kernel_stack_top(unsigned int stack_top);
-int paging_build_app_directory(unsigned int* out_pd, unsigned int* out_lowmem_pt0, unsigned int app_phys_base, unsigned int app_bytes);
+int paging_build_app_directory(
+    unsigned int* out_pd,
+    unsigned int* out_user_pt,
+    unsigned int app_phys_base,
+    unsigned int app_virt_base,
+    unsigned int app_bytes
+);
 
 #endif

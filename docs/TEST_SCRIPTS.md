@@ -220,11 +220,12 @@ make test-multitask-com
 
 ### 12. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
 Valida o contrato mínimo de isolamento para apps ELF e `.COM` em ring3:
-- instala `BADPTR.ELF`, `USRFAULT.ELF`, `BADCOM.COM` e `USRFCOM.COM` na imagem;
+- instala `BADPTR.ELF`, `OLDMAP.ELF`, `USRFAULT.ELF`, `BADCOM.COM`, `OLDCOM.COM` e `USRFCOM.COM` na imagem;
 - força `A:` e confirma listagem via `elfls`;
 - executa `BADPTR` e `run BADCOM`, exigindo `BADP190`, para provar que um ponteiro de kernel foi rejeitado no `int 0x80` nos dois formatos;
+- executa `OLDMAP` e `run OLDCOM`, exigindo `[paging] #PF detected`, `CR2=0x00200000`, `mode=user` e `APPFLT900`, para provar que a antiga janela virtual `0x00200000` deixou de estar acessível em ring3;
 - executa `USRFAULT` e `USRFCOM`, exigindo `[paging] #PF detected`, `CR2=0x00010000`, `mode=user` e `APPFLT900`;
-- confirma `APPRET001` e que o shell ainda aceita `ver` depois dos quatro cenários negativos.
+- confirma `APPRET001` e que o shell ainda aceita `ver` depois dos seis cenários negativos.
 
 **Uso:**
 ```bash

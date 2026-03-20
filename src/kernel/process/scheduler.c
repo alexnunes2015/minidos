@@ -352,18 +352,30 @@ static int sched_spawn_kernel_thread_internal(
     unsigned int* page_directory,
     int first_pid
 ) {
-    int idx = sched_find_free_slot_from(first_pid);
+    unsigned int flags = sched_read_eflags();
+    int idx;
+
+    __asm__ volatile ("cli");
+    idx = sched_find_free_slot_from(first_pid);
 
     if (idx < 0 || !name || !entry) {
+        if ((flags & EFLAGS_IF) != 0U) {
+            __asm__ volatile ("sti");
+        }
         return -1;
     }
 
-    sched_reset_slot(idx, name, PROCESS_READY);
+    /* Do not expose the slot as runnable until its IRQ-return frame is ready. */
+    sched_reset_slot(idx, name, PROCESS_BLOCKED);
     if (page_directory) {
         g_slots[idx].pcb.context.page_directory = page_directory;
     }
     sched_set_slot_origin(idx, origin_name, origin_is_executable);
     sched_prepare_kernel_thread(&g_slots[idx], entry, arg);
+    g_slots[idx].pcb.state = PROCESS_READY;
+    if ((flags & EFLAGS_IF) != 0U) {
+        __asm__ volatile ("sti");
+    }
     return idx;
 }
 

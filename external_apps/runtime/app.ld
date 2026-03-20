@@ -8,7 +8,7 @@ PHDRS
 
 SECTIONS
 {
-    . = 0x200000;
+    . = 0x01000000;
 
     .text : {
         *(.text.boot)

@@ -14,7 +14,7 @@ Sair do prototipo de troca de contexto por `ret` e fechar um runtime com schedul
 - Teste negativo opcional (`SCHED_TEST_GUARD`) que toca a guard page e valida o `#PF`.
 - GDT/TSS com seletores user, `esp0` por task e handoff `iret` para ring3.
 - `int 0x80` como gate de syscall para apps foreground/background, incluindo ELFs e `.COM`.
-- Page directories por app com janela user dedicada, stacks de user por PID e fault containment para user mode.
+- Page directories por app com janela user dedicada fora da identity map de low memory, stacks de user por PID e fault containment para user mode.
 - Regressao de isolamento (`tests/test_user_isolation.py`) cobrindo ponteiro invalido em syscall e page fault de user mode em ELFs e `.COM`, com retorno ao shell.
 
 ## Marcadores seriais
@@ -35,4 +35,4 @@ Os logs humanos continuam presentes:
 ## Proximos passos
 - Evoluir de slots fixos de 1 MiB para gestao de memoria por processo mais flexivel.
 - Decidir como migrar o shell/bootstrap para uma stack tambem protegida por guard page sem depender da thread bootstrap legacy.
-- Reduzir a dependencia da identity map de low memory clonada para cada processo e reforcar a separacao virtual kernel/user.
+- Evoluir da janela user fixa de 1 MiB para um layout virtual por processo mais flexivel.

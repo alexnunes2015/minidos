@@ -41,10 +41,10 @@ typedef struct {
     unsigned int align;
 } __attribute__((packed)) elf32_program_header_t;
 
-#define APP_LOAD_VIRT_BASE 0x00200000U
-#define APP_LOAD_VIRT_LIMIT 0x00300000U
+#define APP_LOAD_VIRT_BASE 0x01000000U
 #define APP_SLOT_FIRST_PID 3
 #define APP_SLOT_SIZE 0x00100000U
+#define APP_LOAD_VIRT_LIMIT (APP_LOAD_VIRT_BASE + APP_SLOT_SIZE)
 #define APP_BACKGROUND_SLOT_COUNT 4
 #define APP_THREAD_SLOT_COUNT (SCHEDULER_MAX_PROCESSES - APP_SLOT_FIRST_PID)
 #define APP_THREAD_STACK_BYTES 0x00004000U
@@ -93,7 +93,7 @@ typedef struct {
     void (*path_pop)(char* path);
     int (*path_push)(char* path, int max_len, const char* name);
     unsigned int page_directory[1024] __attribute__((aligned(4096)));
-    unsigned int lowmem_pt0[1024] __attribute__((aligned(4096)));
+    unsigned int user_pt[1024] __attribute__((aligned(4096)));
 } shell_app_task_t;
 
 static shell_app_task_t* const g_app_tasks = (shell_app_task_t*)APP_TASK_TABLE_PHYS;
@@ -798,7 +798,7 @@ static int shell_apps_prepare_app_task(
     task->app_phys_base = phys_base;
     task->join_on_exit = join_on_exit ? 1 : 0;
     shell_apps_mem_zero((unsigned char*)phys_base, APP_SLOT_SIZE);
-    if (!paging_build_app_directory(task->page_directory, task->lowmem_pt0, task->app_phys_base, APP_SLOT_SIZE)) {
+    if (!paging_build_app_directory(task->page_directory, task->user_pt, task->app_phys_base, APP_LOAD_VIRT_BASE, APP_SLOT_SIZE)) {
         return 0;
     }
     log_serial_raw("APPBG053\n");
@@ -826,7 +826,7 @@ static int shell_apps_clone_background_task(
     dst->join_on_exit = 0;
     dst->input_ready_logged = 0;
     shell_apps_set_task_label(dst->task_name, (int)sizeof(dst->task_name), task_name, "thread");
-    if (!paging_build_app_directory(dst->page_directory, dst->lowmem_pt0, dst->app_phys_base, APP_SLOT_SIZE)) {
+    if (!paging_build_app_directory(dst->page_directory, dst->user_pt, dst->app_phys_base, APP_LOAD_VIRT_BASE, APP_SLOT_SIZE)) {
         return 0;
     }
     return 1;

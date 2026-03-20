@@ -70,8 +70,10 @@ def main():
     tool_env = dict(os.environ)
     tool_env["IMG_PATH"] = img
     run_host(["./external_apps/add_app.sh", "external_apps/templates/badptr.c", "BADPTR"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/templates/oldmap.c", "OLDMAP"], env=tool_env)
     run_host(["./external_apps/add_app.sh", "external_apps/templates/usrfault.c", "USRFAULT"], env=tool_env)
     run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/badptr.c", "BADCOM"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/oldmap.c", "OLDCOM"], env=tool_env)
     run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/usrfault.c", "USRFCOM"], env=tool_env)
 
     proc = spawn_qemu(build_floppy_qemu_cmd(img))
@@ -94,11 +96,17 @@ def main():
             raise RuntimeError("failed to switch to drive A:")
 
         out = send_cmd(proc, "elfls", ["BADPTR"])
-        extra, matched = read_until(proc, ["USRFAULT"], timeout_s=8.0)
-        out += extra
-        if matched != "USRFAULT":
-            raise RuntimeError("elfls did not list USRFAULT")
-        if "BADPTR" not in out or "USRFAULT" not in out:
+        if "OLDMAP" not in out:
+            extra, matched = read_until(proc, ["OLDMAP"], timeout_s=8.0)
+            out += extra
+            if matched != "OLDMAP":
+                raise RuntimeError("elfls did not list OLDMAP")
+        if "USRFAULT" not in out:
+            extra, matched = read_until(proc, ["USRFAULT"], timeout_s=8.0)
+            out += extra
+            if matched != "USRFAULT":
+                raise RuntimeError("elfls did not list USRFAULT")
+        if "BADPTR" not in out or "OLDMAP" not in out or "USRFAULT" not in out:
             raise RuntimeError(f"elfls output missing isolation apps:\n{out}")
 
         out = run_foreground_app(proc, "badptr", ["BADP190", "BADP900"], timeout_s=12.0)
@@ -108,6 +116,15 @@ def main():
         out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
         if "MiniDOS Version 0.1" not in out:
             raise RuntimeError("shell did not resume after badptr")
+
+        out = run_foreground_app(proc, "oldmap", ["OLDM100", "[paging] #PF detected"], timeout_s=15.0)
+        for marker in ["OLDM100", "APPFLT900", "[paging] #PF detected", "CR2=0x00200000", "mode=user", "APPRET001"]:
+            if marker not in out:
+                raise RuntimeError(f"oldmap output missing {marker}:\n{out}")
+
+        out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
+        if "MiniDOS Version 0.1" not in out:
+            raise RuntimeError("shell did not resume after oldmap")
 
         out = run_foreground_app(proc, "usrfault", ["USRF100", "[paging] #PF detected"], timeout_s=15.0)
         for marker in ["USRF100", "APPFLT900", "[paging] #PF detected", "CR2=0x00010000", "mode=user", "APPRET001"]:
@@ -126,6 +143,15 @@ def main():
         if "MiniDOS Version 0.1" not in out:
             raise RuntimeError("shell did not resume after badcom")
 
+        out = run_foreground_app(proc, "run oldcom", ["OLDM100", "[paging] #PF detected"], timeout_s=15.0)
+        for marker in ["OLDM100", "APPFLT900", "[paging] #PF detected", "CR2=0x00200000", "mode=user", "APPRET001"]:
+            if marker not in out:
+                raise RuntimeError(f"oldcom output missing {marker}:\n{out}")
+
+        out = send_cmd(proc, "ver", ["MiniDOS Version 0.1"])
+        if "MiniDOS Version 0.1" not in out:
+            raise RuntimeError("shell did not resume after oldcom")
+
         out = run_foreground_app(proc, "usrfcom", ["USRF100", "[paging] #PF detected"], timeout_s=15.0)
         for marker in ["USRF100", "APPFLT900", "[paging] #PF detected", "CR2=0x00010000", "mode=user", "APPRET001"]:
             if marker not in out:
@@ -135,7 +161,7 @@ def main():
         if "MiniDOS Version 0.1" not in out:
             raise RuntimeError("shell did not resume after usrfcom")
 
-        print("PASS: ELF and COM apps stay isolated from kernel memory and bad user pointers")
+        print("PASS: ELF and COM apps stay isolated from kernel memory, old low-memory app VAs, and bad user pointers")
         return 0
     finally:
         terminate_process(proc)
