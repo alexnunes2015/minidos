@@ -152,6 +152,7 @@ static void shell_apps_begin_foreground_graphics(shell_app_task_t* task) {
      * backbuffer deferred until the app explicitly presents or blocks on input
      * so the user never sees intermediate redraw steps.
      */
+    video_cursor_suspend_graphics();
     video_set_deferred_present(1);
 }
 

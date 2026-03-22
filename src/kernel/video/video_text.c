@@ -76,6 +76,18 @@ void video_cursor_reset_blink(void) {
     graphics_cursor_show(1);
 }
 
+void video_cursor_suspend_graphics(void) {
+    init_video_once();
+
+    if (!graphics_mode) {
+        return;
+    }
+
+    graphics_cursor_hide(0);
+    graphics_cursor_enabled = 0;
+    graphics_cursor_last_tick = 0;
+}
+
 void video_cursor_blink_step(void) {
     unsigned int period;
     unsigned int now;

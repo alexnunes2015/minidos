@@ -7,6 +7,7 @@ void print_char(char c);
 void update_cursor();
 void video_cursor_reset_blink(void);
 void video_cursor_blink_step(void);
+void video_cursor_suspend_graphics(void);
 int video_is_graphics();
 int video_get_width();
 int video_get_height();

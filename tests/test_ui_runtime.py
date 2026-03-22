@@ -24,6 +24,7 @@ static int back_order = 0;
 static int front_order = 0;
 static int draw_sequence = 0;
 static int test_status = 1;
+static char last_text[128];
 
 static void run_all_tests(void);
 
@@ -37,6 +38,8 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
         if (!text || !text->text) {
             return 1;
         }
+
+        snprintf(last_text, sizeof(last_text), "%s", text->text);
 
         if (strcmp(text->text, "Solo") == 0) {
             saw_single_title = 1;
@@ -79,9 +82,83 @@ static int test_single_window_sparse_zorder(void) {
     return 1;
 }
 
+static int test_text_box_clips_overflow(void) {
+    minidos_app_api_t api;
+    ui_theme_t theme;
+
+    api.syscall = stub_syscall;
+    theme = ui_theme_classic();
+    last_text[0] = '\0';
+
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 0);
+    if (strcmp(last_text, "EFG") != 0) {
+        fprintf(stderr, "text box overflow was not clipped to visible suffix: '%s'\n", last_text);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_close_window_promotes_next_visible(void) {
+    ui_window_manager_t wm;
+    const ui_wm_window_t* back_window;
+    const ui_wm_window_t* front_window;
+    int back_id;
+    int front_id;
+    int front_button_id;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    back_id = ui_wm_create_window(&wm, ui_rect_make(16, 16, 120, 80), "Back", 0);
+    front_id = ui_wm_create_window(&wm, ui_rect_make(24, 24, 120, 80), "Front", 1);
+    if (back_id <= 0 || front_id <= 0) {
+        fprintf(stderr, "failed to create windows for close-window test\n");
+        return 0;
+    }
+
+    if (ui_wm_add_button(&wm, back_id, ui_rect_make(8, 8, 48, 20), "Back") <= 0) {
+        fprintf(stderr, "failed to create back button\n");
+        return 0;
+    }
+    front_button_id = ui_wm_add_button(&wm, front_id, ui_rect_make(8, 8, 48, 20), "Front");
+    if (front_button_id <= 0) {
+        fprintf(stderr, "failed to create front button\n");
+        return 0;
+    }
+
+    ui_wm_set_focus_control(&wm, front_button_id);
+    wm.pressed_window_id = front_id;
+    wm.pressed_control_id = front_button_id;
+    wm.pressed_hit_close = 1;
+
+    ui_wm_close_window(&wm, front_id);
+
+    back_window = ui_wm_find_window_const(&wm, back_id);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!back_window || !front_window) {
+        fprintf(stderr, "window lookup failed after close\n");
+        return 0;
+    }
+    if (front_window->visible) {
+        fprintf(stderr, "closed window is still visible\n");
+        return 0;
+    }
+    if (wm.active_window_id != back_id || !back_window->window.active || front_window->window.active) {
+        fprintf(stderr, "active window was not promoted correctly after close\n");
+        return 0;
+    }
+    if (wm.focused_control_id != 0 || wm.pressed_control_id != 0 || wm.pressed_window_id != 0 || wm.pressed_hit_close != 0) {
+        fprintf(stderr, "close window left stale focus/press state behind\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 static int test_multi_window_draw_order(void) {
     minidos_app_api_t api;
     ui_window_manager_t wm;
+    const ui_wm_window_t* back_window;
+    const ui_wm_window_t* front_window;
     int back_id;
     int front_id;
     int i;
@@ -110,6 +187,18 @@ static int test_multi_window_draw_order(void) {
     }
     if (back_order >= front_order) {
         fprintf(stderr, "window draw order incorrect (back=%d front=%d)\n", back_order, front_order);
+        return 0;
+    }
+
+    back_window = ui_wm_find_window_const(&wm, back_id);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!back_window || !front_window) {
+        fprintf(stderr, "window lookup failed after draw-order test\n");
+        return 0;
+    }
+    if (back_window->z_order < 0 || front_window->z_order > wm.window_count) {
+        fprintf(stderr, "z-order was not compacted correctly (back=%d front=%d count=%d)\n",
+            back_window->z_order, front_window->z_order, wm.window_count);
         return 0;
     }
 
@@ -158,6 +247,14 @@ int main(void) {
 
 static void run_all_tests(void) {
     if (!test_single_window_sparse_zorder()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_text_box_clips_overflow()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_close_window_promotes_next_visible()) {
         test_status = 1;
         return;
     }

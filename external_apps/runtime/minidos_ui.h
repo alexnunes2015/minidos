@@ -404,8 +404,37 @@ static inline void ui_draw_label_centered(const minidos_app_api_t* api, ui_rect_
     ui_draw_text(api, draw_x, draw_y, text, fg, bg);
 }
 
+static inline void ui_draw_text_clipped_right(const minidos_app_api_t* api, int x, int y, const char* text,
+    unsigned int fg, unsigned int bg, int max_chars) {
+    char visible[128];
+    int len;
+    int start = 0;
+    int i;
+
+    if (!api || !text || max_chars <= 0) {
+        return;
+    }
+
+    len = ui_strlen(text);
+    if (len > max_chars) {
+        start = len - max_chars;
+        len = max_chars;
+    }
+    if (len >= (int)sizeof(visible)) {
+        start += len - ((int)sizeof(visible) - 1);
+        len = (int)sizeof(visible) - 1;
+    }
+
+    for (i = 0; i < len; i++) {
+        visible[i] = text[start + i];
+    }
+    visible[len] = '\0';
+    ui_draw_text(api, x, y, visible, fg, bg);
+}
+
 static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect, const char* text, int focused) {
     unsigned int fill;
+    int max_chars;
     if (!theme) {
         return;
     }
@@ -415,7 +444,8 @@ static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme
     ui_fill_rect(api, rect, fill);
     ui_frame_rect(api, rect, focused ? theme->selection_bg : theme->shadow);
     if (text) {
-        ui_draw_text(api, rect.x + 4, rect.y + 4, text, theme->field_text, fill);
+        max_chars = (rect.w - 8) / UI_CHAR_W;
+        ui_draw_text_clipped_right(api, rect.x + 4, rect.y + 4, text, theme->field_text, fill, max_chars);
     }
 }
 
@@ -584,6 +614,44 @@ static inline int ui_wm_create_window(ui_window_manager_t* wm, ui_rect_t bounds,
     return id;
 }
 
+static inline void ui_wm_normalize_z_order(ui_window_manager_t* wm) {
+    int drawn[UI_WM_MAX_WINDOWS];
+    int draw_count;
+    int i;
+
+    if (!wm) {
+        return;
+    }
+
+    for (i = 0; i < UI_WM_MAX_WINDOWS; i++) {
+        drawn[i] = 0;
+    }
+
+    for (draw_count = 0; draw_count < wm->window_count; draw_count++) {
+        int best_index = -1;
+        int best_z = 2147483647;
+
+        for (i = 0; i < wm->window_count; i++) {
+            if (drawn[i]) {
+                continue;
+            }
+            if (best_index >= 0 && wm->windows[i].z_order >= best_z) {
+                continue;
+            }
+
+            best_index = i;
+            best_z = wm->windows[i].z_order;
+        }
+
+        if (best_index < 0) {
+            break;
+        }
+
+        drawn[best_index] = 1;
+        wm->windows[best_index].z_order = draw_count;
+    }
+}
+
 static inline void ui_wm_bring_to_front(ui_window_manager_t* wm, int window_id) {
     int i;
     int max_z = -1;
@@ -591,6 +659,7 @@ static inline void ui_wm_bring_to_front(ui_window_manager_t* wm, int window_id) 
     if (!wm || !target) {
         return;
     }
+    ui_wm_normalize_z_order(wm);
     for (i = 0; i < wm->window_count; i++) {
         if (wm->windows[i].z_order > max_z) {
             max_z = wm->windows[i].z_order;
@@ -729,6 +798,30 @@ static inline int ui_wm_top_window_at(const ui_window_manager_t* wm, int x, int 
             best_id = win->id;
         }
     }
+    return best_id;
+}
+
+static inline int ui_wm_top_visible_window_id(const ui_window_manager_t* wm) {
+    int i;
+    int best_id = 0;
+    int best_z = -2147483647;
+
+    if (!wm) {
+        return 0;
+    }
+
+    for (i = 0; i < wm->window_count; i++) {
+        const ui_wm_window_t* win = &wm->windows[i];
+
+        if (!win->visible) {
+            continue;
+        }
+        if (win->z_order >= best_z) {
+            best_z = win->z_order;
+            best_id = win->id;
+        }
+    }
+
     return best_id;
 }
 
@@ -900,11 +993,31 @@ static inline void ui_wm_close_window(ui_window_manager_t* wm, int window_id) {
     for (i = 0; i < wm->window_count; i++) {
         if (wm->windows[i].id == window_id) {
             wm->windows[i].visible = 0;
-            if (wm->active_window_id == window_id) {
-                wm->active_window_id = 0;
-            }
             break;
         }
+    }
+
+    for (i = 0; i < wm->control_count; i++) {
+        if (wm->controls[i].window_id != window_id) {
+            continue;
+        }
+        wm->controls[i].pressed = 0;
+        wm->controls[i].focused = 0;
+        if (wm->focused_control_id == wm->controls[i].id) {
+            wm->focused_control_id = 0;
+        }
+        if (wm->pressed_control_id == wm->controls[i].id) {
+            wm->pressed_control_id = 0;
+        }
+    }
+
+    if (wm->active_window_id == window_id) {
+        int next_active = ui_wm_top_visible_window_id(wm);
+        ui_wm_set_active_window(wm, next_active);
+    }
+    if (wm->pressed_window_id == window_id) {
+        wm->pressed_window_id = 0;
+        wm->pressed_hit_close = 0;
     }
 }
 

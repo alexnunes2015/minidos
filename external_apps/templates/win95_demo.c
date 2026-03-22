@@ -520,10 +520,6 @@ static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state
 
 static void redraw_window_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
     const ui_wm_window_t* win;
-    ui_rect_t win_rect;
-    ui_rect_t title_rect;
-    ui_rect_t client_rect;
-    ui_rect_t close_rect;
     int c;
 
     if (!api || !state || ui_rect_is_empty(rect)) {
@@ -535,43 +531,16 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
         return;
     }
 
-    win_rect = ui_rect_intersect(rect, win->window.bounds);
-    if (ui_rect_is_empty(win_rect)) {
+    if (ui_rect_is_empty(ui_rect_intersect(rect, win->window.bounds))) {
         return;
     }
 
     /*
-     * Restore only the local scene under the cursor instead of repainting the
-     * whole window. The cursor motion path uses this to keep the screen stable.
+     * The text and bevel primitives redraw beyond the small dirty rect because
+     * they do not clip internally, so repaint the whole window whenever cursor
+     * motion touches it.
      */
-    ui_fill_rect(api, win_rect, state->wm.theme.face);
-
-    title_rect = ui_rect_intersect(win_rect, ui_window_title_bar_rect(&win->window));
-    if (!ui_rect_is_empty(title_rect)) {
-        unsigned int title_bg = win->window.active ? state->wm.theme.title_active_bg : state->wm.theme.title_inactive_bg;
-        unsigned int title_fg = win->window.active ? state->wm.theme.title_active_text : state->wm.theme.title_inactive_text;
-
-        ui_fill_rect(api, title_rect, title_bg);
-        ui_draw_text(api, win->window.bounds.x + 6, win->window.bounds.y + 7,
-            win->window.title ? win->window.title : "", title_fg, title_bg);
-    }
-
-    client_rect = ui_rect_intersect(win_rect, ui_window_client_rect(&win->window));
-    if (!ui_rect_is_empty(client_rect)) {
-        ui_fill_rect(api, client_rect, state->wm.theme.field_bg);
-    }
-
-    close_rect = ui_window_close_button_rect(&win->window);
-    if (!ui_rect_is_empty(ui_rect_intersect(win_rect, close_rect))) {
-        ui_button_t close_button;
-
-        close_button.bounds = close_rect;
-        close_button.label = "X";
-        close_button.pressed = 0;
-        close_button.focused = 0;
-        close_button.enabled = 1;
-        ui_draw_button(api, &state->wm.theme, &close_button);
-    }
+    ui_draw_window(api, &state->wm.theme, &win->window);
 
     for (c = 0; c < state->wm.control_count; c++) {
         const ui_control_t* control = &state->wm.controls[c];
@@ -582,9 +551,6 @@ static void redraw_window_region(const minidos_app_api_t* api, const demo_state_
         }
 
         abs_bounds = ui_wm_control_abs_bounds(&state->wm, control);
-        if (ui_rect_is_empty(ui_rect_intersect(abs_bounds, win_rect))) {
-            continue;
-        }
 
         if (control->type == UI_CONTROL_LABEL) {
             ui_draw_label(api, abs_bounds.x, abs_bounds.y, control->text ? control->text : "",
@@ -730,7 +696,6 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     ui_wm_window_t* win;
     const ui_control_t* pressed_control;
     ui_rect_t pressed_bounds;
-    int coalesced_click;
 
     if (!state || !previous_mouse) {
         return 0;
@@ -739,13 +704,6 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     left_down = ui_mouse_left_down(&state->mouse);
     left_pressed = ui_mouse_left_pressed(previous_mouse, &state->mouse);
     left_released = ui_mouse_left_released(previous_mouse, &state->mouse);
-    coalesced_click = !left_pressed
-        && !left_released
-        && state->mouse.seq != previous_mouse->seq
-        && !ui_mouse_left_down(previous_mouse)
-        && !left_down
-        && state->mouse.x == previous_mouse->x
-        && state->mouse.y == previous_mouse->y;
     start_rect = start_button_rect(state);
     menu_rect = start_menu_rect(state);
     over_start = ui_rect_contains(&start_rect, state->mouse.x, state->mouse.y);
@@ -820,17 +778,6 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     }
 
     win = ui_wm_find_window(&state->wm, state->window_id);
-
-    if (coalesced_click) {
-        if (win && ui_window_hit_close(&win->window, state->mouse.x, state->mouse.y)) {
-            return 1;
-        }
-
-        out_control_id = ui_wm_hit_test_control(&state->wm, state->window_id, state->mouse.x, state->mouse.y);
-        if (out_control_id != 0) {
-            return handle_activated_control(state, out_control_id);
-        }
-    }
 
     if (win && left_pressed
         && out_window_id == state->window_id
