@@ -178,6 +178,7 @@ full-test:
 	$(MAKE) test
 	$(MAKE) test-serial
 	$(MAKE) test-keyboard-soft
+	$(MAKE) test-ui-runtime
 	$(MAKE) test-paging
 	$(MAKE) test-phase5
 	$(MAKE) test-phase3
@@ -192,6 +193,7 @@ ci:
 	$(MAKE) verify-image
 	$(MAKE) test-serial
 	$(MAKE) test-keyboard-soft
+	$(MAKE) test-ui-runtime
 	$(MAKE) test-paging
 	$(MAKE) test-phase5
 	$(MAKE) test-phase3
@@ -228,4 +230,7 @@ test-phase5:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+test-ui-runtime:
+	python3 tests/test_ui_runtime.py
+
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial

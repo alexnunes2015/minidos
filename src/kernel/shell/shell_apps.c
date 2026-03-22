@@ -142,6 +142,27 @@ static void shell_apps_flush_graphics(void) {
     video_present_pending();
 }
 
+static void shell_apps_begin_foreground_graphics(shell_app_task_t* task) {
+    if (!task || task->background) {
+        return;
+    }
+
+    /*
+     * Foreground apps build frames via many small draw syscalls. Keep the
+     * backbuffer deferred until the app explicitly presents or blocks on input
+     * so the user never sees intermediate redraw steps.
+     */
+    video_set_deferred_present(1);
+}
+
+static void shell_apps_end_foreground_graphics(shell_app_task_t* task) {
+    if (!task || task->background) {
+        return;
+    }
+
+    video_set_deferred_present(0);
+}
+
 static void shell_apps_log_task_marker(const char* marker, const shell_app_task_t* task) {
     if (!marker || !task) {
         return;
@@ -539,6 +560,11 @@ static void shell_apps_note_input_ready(shell_app_task_t* task) {
 
 static void shell_apps_note_session_return(shell_app_task_t* task) {
     if (task) {
+        /* Foreground apps may exit on the same key event that triggered the
+         * action. Drop any residual PS/2 bytes so the shell prompt starts
+         * clean instead of echoing a stray character.
+         */
+        keyboard_flush();
         log_serial_raw("APPRET001\n");
         task->input_ready_logged = 0;
     }
@@ -1518,6 +1544,7 @@ void shell_apps_on_current_task_exit(void) {
     leader_pid = shell_apps_group_leader_pid(task);
     shell_apps_log_task_marker("APPBG190", task);
     if (!task->background && task->pid == leader_pid) {
+        shell_apps_end_foreground_graphics(task);
         shell_apps_note_session_return(task);
     }
     if (task->pid == leader_pid) {
@@ -1547,6 +1574,7 @@ void shell_apps_on_current_task_fault(unsigned int vector, unsigned int error_co
     log_serial_raw("\n");
 
     if (!task->background && task->pid == leader_pid) {
+        shell_apps_end_foreground_graphics(task);
         shell_apps_task_out(task, "App faulted and was terminated\n");
         shell_apps_note_session_return(task);
     }
@@ -1651,6 +1679,7 @@ static void shell_apps_background_thread(void* arg) {
         shell_apps_begin_scheduler_origin(task->origin_name);
     }
     shell_apps_ensure_interrupts_enabled();
+    shell_apps_begin_foreground_graphics(task);
     shell_apps_log_task_marker("APPBG100", task);
     if (!shell_apps_prepare_user_launch(task, &entry_virtual, &user_esp)) {
         shell_apps_task_out(task, "User runtime setup failed\n");
@@ -1734,6 +1763,7 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     }
 
     shell_apps_wait_for_task_exit(pid);
+    shell_apps_end_foreground_graphics(task);
     shell_apps_sync_host_state(task, host);
     shell_apps_release_task(task);
     return 1;
@@ -1830,6 +1860,7 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     }
 
     shell_apps_wait_for_task_exit(pid);
+    shell_apps_end_foreground_graphics(task);
     shell_apps_sync_host_state(task, host);
     shell_apps_release_task(task);
     return 1;

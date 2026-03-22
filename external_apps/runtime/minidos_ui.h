@@ -910,20 +910,45 @@ static inline void ui_wm_close_window(ui_window_manager_t* wm, int window_id) {
 
 static inline void ui_wm_draw(const minidos_app_api_t* api, const ui_window_manager_t* wm, int screen_w, int screen_h, const char* desktop_title) {
     int i;
-    int z;
+    int drawn[UI_WM_MAX_WINDOWS];
+    int draw_count;
     if (!wm) {
         return;
     }
 
     ui_draw_desktop(api, &wm->theme, screen_w, screen_h, desktop_title);
 
-    for (z = 0; z <= (wm->window_count + 2); z++) {
+    for (i = 0; i < UI_WM_MAX_WINDOWS; i++) {
+        drawn[i] = 0;
+    }
+
+    for (draw_count = 0; draw_count < wm->window_count; draw_count++) {
+        int best_index = -1;
+        int best_z = 2147483647;
+
         for (i = 0; i < wm->window_count; i++) {
             const ui_wm_window_t* win = &wm->windows[i];
-            int c;
-            if (!win->visible || win->z_order != z) {
+
+            if (!win->visible || drawn[i]) {
                 continue;
             }
+            if (best_index >= 0 && win->z_order >= best_z) {
+                continue;
+            }
+
+            best_index = i;
+            best_z = win->z_order;
+        }
+
+        if (best_index < 0) {
+            break;
+        }
+
+        drawn[best_index] = 1;
+
+        {
+            const ui_wm_window_t* win = &wm->windows[best_index];
+            int c;
 
             ui_draw_window(api, &wm->theme, &win->window);
 
