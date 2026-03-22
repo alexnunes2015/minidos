@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import select
 import socket
 import subprocess
@@ -170,6 +171,38 @@ def _send_mouse_button(qmp_sock, button="left", *, down):
     )
 
 
+def _extract_video_geometry(log_text):
+    matches = re.findall(r"\[video\] init .* w=0x([0-9A-Fa-f]+) h=0x([0-9A-Fa-f]+)", log_text)
+    if not matches:
+        raise RuntimeError("could not parse video geometry from [video] init marker")
+    width_hex, height_hex = matches[-1]
+    return int(width_hex, 16), int(height_hex, 16)
+
+
+def _plan_win95ui_path(screen_w, screen_h):
+    window_w = 420
+    window_h = 220
+    window_x = (screen_w - window_w) // 2
+    window_y = (screen_h - window_h) // 2
+    client_x = window_x + 4
+    client_y = window_y + 22
+
+    return [
+        (window_x + 40, window_y + 18),
+        (window_x + window_w - 104, window_y + 18),
+        (client_x + 120, client_y + 118),
+        (client_x + 324 + 38, client_y + 158 + 12),
+    ]
+
+
+def _move_mouse_to(qmp_sock, current_pos, target_pos):
+    current_x, current_y = current_pos
+    target_x, target_y = target_pos
+
+    _send_mouse_move(qmp_sock, target_x - current_x, target_y - current_y)
+    return target_x, target_y
+
+
 def _extract_last_command_line(log_text):
     lines = log_text.splitlines()
     last = None
@@ -216,6 +249,13 @@ def _install_demo_app():
 def _assert_no_win95ui_debug(log_text):
     if "[win95ui]" in log_text:
         raise RuntimeError("unexpected WIN95UI debug output on serial")
+
+
+def _assert_video_init_marker(log_text):
+    if "[video] init" not in log_text:
+        raise RuntimeError("missing [video] init marker on serial")
+    if " fast=" not in log_text:
+        raise RuntimeError("missing fast-present marker on serial")
 
 
 def _wait_for_app_ready(proc, name, timeout_s, *, echo):
@@ -316,16 +356,17 @@ def main():
             raise
 
         _assert_no_win95ui_debug(log)
+        _assert_video_init_marker(log)
+        screen_w, screen_h = _extract_video_geometry(log)
         if "APPIN001" not in log:
             if _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is None:
                 _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)
                 _wait_for_app_ready(proc, "win95ui", args.cmd_timeout, echo=not args.quiet)
 
-        # Exercise repeated hover redraws over the title bar/client before the exit click.
-        _send_mouse_move(qmp_sock, -150, -100)
-        _send_mouse_move(qmp_sock, 220, 0)
-        _send_mouse_move(qmp_sock, -80, 60)
-        _send_mouse_move(qmp_sock, 166, 122)
+        # Exercise repeated hover redraws over title bar/client before closing the app.
+        mouse_pos = (screen_w // 2, screen_h // 2)
+        for target in _plan_win95ui_path(screen_w, screen_h):
+            mouse_pos = _move_mouse_to(qmp_sock, mouse_pos, target)
         _send_mouse_button(qmp_sock, "left", down=True)
         _send_mouse_button(qmp_sock, "left", down=False)
         log_after, matched = read_until(

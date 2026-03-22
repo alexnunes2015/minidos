@@ -129,6 +129,8 @@ static inline void restore_interrupts(u32 flags) {
     }
 }
 
+static int video_detect_fast_present_mode(void);
+
 static int video_boot_state_valid(void) {
     return g_video_boot_state.magic == VIDEO_BOOT_STATE_MAGIC
         && g_video_boot_state.fb_addr != 0
@@ -168,7 +170,7 @@ static void video_restore_boot_state(void) {
             backbuffer_pitch = (int)required_pitch;
         }
     }
-    fast_present_mode = 0;
+    fast_present_mode = video_detect_fast_present_mode();
     video_ready = 1;
 }
 
@@ -196,6 +198,22 @@ static int min_int(int a, int b) {
     return (a < b) ? a : b;
 }
 
+static int video_detect_fast_present_mode(void) {
+    if (!graphics_mode || !backbuffer_ready || fb == 0 || fb_pitch <= 0) {
+        return 0;
+    }
+    if (red_size != 8 || red_pos != 16 || green_size != 8 || green_pos != 8 || blue_size != 8 || blue_pos != 0) {
+        return 0;
+    }
+    if (fb_bytes_per_pixel == 4) {
+        return 32;
+    }
+    if (fb_bytes_per_pixel == 3) {
+        return 24;
+    }
+    return 0;
+}
+
 static u8 expand_6bit_to_8bit(u8 c) {
     return (u8)((c << 2) | (c >> 4));
 }
@@ -211,6 +229,7 @@ void video_clear_dirty(void) {
 void video_disable_backbuffer(void) {
     backbuffer_ready = 0;
     backbuffer_pitch = 0;
+    fast_present_mode = 0;
     video_clear_dirty();
 }
 
@@ -385,7 +404,7 @@ void init_video_once(void) {
                     backbuffer_pitch = (int)required_pitch;
                 }
             }
-            fast_present_mode = 0;
+            fast_present_mode = video_detect_fast_present_mode();
             video_save_boot_state();
 
             log_serial_raw("[video] init fb=");
@@ -402,6 +421,8 @@ void init_video_once(void) {
             serial_print_hex((u32)backbuffer_ready);
             log_serial_raw(" bp=");
             serial_print_hex((u32)backbuffer_pitch);
+            log_serial_raw(" fast=");
+            serial_print_hex((u32)fast_present_mode);
             log_serial_raw("\n");
         }
     }

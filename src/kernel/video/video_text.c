@@ -45,7 +45,7 @@ static void graphics_cursor_show(int present_now) {
         return;
     }
 
-    graphics_cursor_hide(present_now);
+    graphics_cursor_hide(0);
 
     x0 = text_origin_x + cursor_x * FONT_W;
     y0 = text_origin_y + cursor_y * FONT_H + (FONT_H - 2);
@@ -141,8 +141,13 @@ void cls(void) {
 
     if (graphics_mode) {
         clear_graphics(COLOR_BG);
-        fill_frontbuffer_rect_rgb(0, 0, fb_width, fb_height, COLOR_BG);
-        video_clear_dirty();
+        if (backbuffer_ready) {
+            video_note_dirty(0, 0, fb_width, fb_height);
+            video_present_pending();
+        } else {
+            fill_frontbuffer_rect_rgb(0, 0, fb_width, fb_height, COLOR_BG);
+            video_clear_dirty();
+        }
     } else {
         volatile u8* video = TEXT_VIDEO_MEMORY;
         for (int i = 0; i < TEXT_SCREEN_WIDTH * TEXT_SCREEN_HEIGHT * 2; i += 2) {

@@ -35,6 +35,7 @@ make gdb-kernel
 - `[paging] init`
 - `[paging] enabled`
 - `paging self-test OK`
+- `[video] init fb=... w=... h=... pitch=... bpp=... bb=... bp=... fast=...`
 - `[kbd] scan set 1 selected (translation on)` or `[kbd] scan set 2 selected (translation off)`
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`
@@ -70,6 +71,7 @@ Check:
 - patched `kernel_sectors` still matches the built kernel
 - if the kernel crossed `64 KiB`, stage2 now advances the `ES` window while loading sectors
 - if you see a tiny colored streak or random pixels near the top of the shell, inspect `nm -n build/kernel.elf | tail` and confirm `__bss_end < 0x000A0000`; the graphics text grid now lives in a scratch window at `0x00380000` specifically to keep runtime globals out of the VGA aperture
+- check the `[video] init ... fast=...` marker to confirm whether the preferred `640x480` mode was selected or if stage2 had to fall back to a larger VBE mode, and whether the ASM fast-present path is active
 - serial output reaches the PM checkpoints
 - `BOOT100` appears before disk/drive probing
 - `BOOT110` appears only if the runtime logo files were loaded successfully
@@ -205,6 +207,7 @@ Check:
 - `APPIN001` after `WIN95UI` starts
 - `APPRET001` after the click closes `WIN95UI` or after `q` / `ESC` return from the other apps
 - `[mouse] first packet received` after QMP moves the pointer
+- the test now derives the click path from the active `[video] init` geometry, so a failure here usually means a real GUI layout/input regression rather than a hardcoded-resolution mismatch
 - no `[win95ui]` serial debug lines while the GUI runs
 - shell accepts `ver` after the test clicks `Cancel`
 - `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app

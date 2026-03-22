@@ -263,4 +263,4 @@ If the project evolves toward a real desktop shell, keep the next steps in this 
 
 Do not introduce CSS semantics before the widget tree and event model exist.
 
-The current `win95ui` demo still batches its drawing and calls `present` once per frame. The kernel presents those completed frames from the software backbuffer through the C copy path, while the older ASM fast-present path stays disabled under the preemptive scheduler.
+The current `win95ui` demo still batches its drawing and calls `present` once per frame. The kernel presents those completed frames from the software backbuffer through the ASM fast-present path on standard `24/32 bpp` `R8:G8:B8` framebuffers, and falls back to the generic C copy path when the VBE pixel layout is not directly compatible.

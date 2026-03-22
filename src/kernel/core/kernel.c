@@ -136,9 +136,11 @@ static command_input_t read_command_line(char* buffer, int max_len) {
 
         if (source != CMD_INPUT_SERIAL && keyboard_try_get_char(&c)) {
             source = CMD_INPUT_KEYBOARD;
+            video_set_deferred_present(1);
             if (c == '\n') {
                 print_char('\n');
                 video_cursor_reset_blink();
+                video_set_deferred_present(0);
                 break;
             }
             if (c == '\b') {
@@ -147,12 +149,14 @@ static command_input_t read_command_line(char* buffer, int max_len) {
                     print_char('\b');
                     video_cursor_reset_blink();
                 }
+                video_set_deferred_present(0);
                 continue;
             }
 
             buffer[i++] = c;
             print_char(c);
             video_cursor_reset_blink();
+            video_set_deferred_present(0);
             continue;
         }
 

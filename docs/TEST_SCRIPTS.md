@@ -99,15 +99,17 @@ make test-keyboard
 Valida o caminho completo de rato para GUI:
 - instala `WIN95UI.ELF` na imagem;
 - arranca o MiniDOS com QMP ativo;
+- valida o marcador serial `[video] init ... fast=...` para garantir que o caminho gráfico inicializou com observabilidade suficiente;
 - lança `WIN95UI` por teclado; se algum build já a tiver aberto, reutiliza a instância existente;
 - espera `APPIN001`;
 - espera `APPRET001` depois do clique ou do input de saída;
 - injeta movimento relativo e clique esquerdo por `input-send-event`;
+- deriva a resolução ativa a partir do marcador `[video] init` e calcula o percurso do cursor a partir do centro do ecrã até ao botão `Fechar`, para o mesmo teste funcionar tanto no default `640x480` como nos fallbacks VESA maiores;
 - rejeita qualquer debug `[win95ui]` na serial durante a execução da GUI;
 - confirma que a app devolve controlo ao shell e que `ver` volta a ser aceite;
 - move o rato dentro de `DOSSHELL` e `EDIT` e confirma que `q` / `ESC` continuam a sair das apps sem injetar teclas espúrias.
 
-O teste assume que o cursor começa no centro do ecrã e move-se relativamente até ao botão `Cancel`, o que evita depender de resolução fixa.
+O teste assume que o cursor começa no centro do ecrã e move-se relativamente até ao botão `Fechar`, mas a geometria final é derivada da resolução realmente escolhida no boot.
 
 **Uso:**
 ```bash

@@ -23,6 +23,7 @@
 %define BOOT_DRIVE_HEADS       0x0508
 
 %define VBE_MODE_INFO          0x7000
+%define VBE_CTRL_INFO          0x7200
 
 start:
     ; Save drive number from DL
@@ -214,11 +215,47 @@ show_boot_logo:
     mov byte [BOOT_VIDEO_BPP], 0
     mov dword [BOOT_VIDEO_FB], 0
 
-    mov si, vesa_modes
-.try_next_mode:
-    lodsw
+    mov byte [VBE_CTRL_INFO + 0], 'V'
+    mov byte [VBE_CTRL_INFO + 1], 'B'
+    mov byte [VBE_CTRL_INFO + 2], 'E'
+    mov byte [VBE_CTRL_INFO + 3], '2'
+    mov ax, 0x4F00
+    mov di, VBE_CTRL_INFO
+    int 0x10
+    cmp ax, 0x004F
+    jne .fallback_text
+    xor bx, bx
+    mov ds, bx
+    mov es, bx
+
+    movzx eax, word [VBE_CTRL_INFO + 0x10]
+    shl eax, 4
+    movzx ebx, word [VBE_CTRL_INFO + 0x0E]
+    add eax, ebx
+    mov [vesa_mode_list_ptr], eax
+    test eax, eax
+    jz .fallback_text
+
+    mov si, vesa_preferences
+    mov [vesa_pref_ptr], si
+.try_next_pref:
+    mov si, [vesa_pref_ptr]
+    mov ax, [si]
     cmp ax, 0xFFFF
     je .fallback_text
+    mov [vesa_pref_width], ax
+    mov ax, [si + 2]
+    mov [vesa_pref_height], ax
+    mov ax, [si + 4]
+    mov [vesa_pref_bpp], ax
+
+    mov esi, [vesa_mode_list_ptr]
+    mov [vesa_mode_ptr_current], esi
+.try_next_mode:
+    mov esi, [vesa_mode_ptr_current]
+    mov ax, [esi]
+    cmp ax, 0xFFFF
+    je .next_pref
     mov [vesa_mode_selected], ax
 
     mov cx, ax
@@ -226,20 +263,40 @@ show_boot_logo:
     mov di, VBE_MODE_INFO
     int 0x10
     cmp ax, 0x004F
-    jne .try_next_mode
+    jne .next_mode
+    xor bx, bx
+    mov ds, bx
+    mov es, bx
 
     mov bx, [VBE_MODE_INFO + 0x00] ; ModeAttributes
     test bx, 0x0001                ; Mode supported
-    jz .try_next_mode
+    jz .next_mode
     test bx, 0x0080                ; Linear framebuffer supported
-    jz .try_next_mode
+    jz .next_mode
+
+    mov al, [VBE_MODE_INFO + 0x1B] ; MemoryModel
+    cmp al, 0x06                   ; Direct color
+    jne .next_mode
+
+    mov ax, [VBE_MODE_INFO + 0x12] ; XResolution
+    cmp ax, [vesa_pref_width]
+    jne .next_mode
+    mov ax, [VBE_MODE_INFO + 0x14] ; YResolution
+    cmp ax, [vesa_pref_height]
+    jne .next_mode
+    mov al, [VBE_MODE_INFO + 0x19] ; BitsPerPixel
+    cmp al, byte [vesa_pref_bpp]
+    jne .next_mode
 
     mov ax, 0x4F02
     mov bx, [vesa_mode_selected]
     or bx, 0x4000                  ; request LFB
     int 0x10
     cmp ax, 0x004F
-    jne .try_next_mode
+    jne .next_mode
+    xor bx, bx
+    mov ds, bx
+    mov es, bx
 
     ; Publish VESA mode metadata for the kernel
     mov byte [BOOT_VIDEO_FLAG], 1
@@ -266,6 +323,18 @@ show_boot_logo:
     mov eax, [VBE_MODE_INFO + 0x28] ; PhysBasePtr
     mov [BOOT_VIDEO_FB], eax
     jmp .done
+
+.next_mode:
+    mov esi, [vesa_mode_ptr_current]
+    add esi, 2
+    mov [vesa_mode_ptr_current], esi
+    jmp .try_next_mode
+
+.next_pref:
+    mov si, [vesa_pref_ptr]
+    add si, 6
+    mov [vesa_pref_ptr], si
+    jmp .try_next_pref
 
 .fallback_text:
     mov ax, 0x0003
@@ -430,13 +499,28 @@ msg_pm_cr0: db '[Stage2] PM checkpoint 3: set CR0.PE', 0x0D, 0x0A, 0
 msg_before_jump: db '[Stage2] Before far jump', 0x0D, 0x0A, 0
 
 vesa_mode_selected: dw 0
-vesa_modes:
-    dw 0x111                ; 640x480x16
-    dw 0x112                ; 640x480x24
-    dw 0x114                ; 800x600x16 fallback
-    dw 0x115                ; 800x600x24 fallback
-    dw 0x117                ; 1024x768x16 fallback
-    dw 0x118                ; 1024x768x24 fallback
+vesa_pref_ptr: dw 0
+vesa_pref_width: dw 0
+vesa_pref_height: dw 0
+vesa_pref_bpp: dw 0
+vesa_mode_list_ptr: dd 0
+vesa_mode_ptr_current: dd 0
+vesa_preferences:
+    dw  640,  480, 32
+    dw  640,  480, 24
+    dw  640,  480, 16
+    dw  800,  600, 32
+    dw  800,  600, 24
+    dw  800,  600, 16
+    dw 1024,  768, 32
+    dw 1024,  768, 24
+    dw 1024,  768, 16
+    dw 1280,  720, 32
+    dw 1280,  720, 24
+    dw 1280,  720, 16
+    dw 1280, 1024, 32
+    dw 1280, 1024, 24
+    dw 1280, 1024, 16
     dw 0xFFFF
 
 times 2048-($-$$) db 0      ; Pad to 2048 bytes
