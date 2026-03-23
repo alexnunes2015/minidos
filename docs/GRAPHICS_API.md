@@ -69,6 +69,7 @@ Color palette for the classic desktop look:
 - face/light/shadow colors for beveled widgets
 - active/inactive title bar colors
 - field and selection colors
+- optional `desktop_bg_bitmap` path that `ui_draw_desktop` will attempt to paint (24/32-bit BMP, ≤ `UI_BITMAP_MAX_FILE_SIZE`)
 
 Use `ui_theme_classic()` as the default bootstrap theme.
 
@@ -133,6 +134,7 @@ Children are represented by `ui_control_t` and support:
 - `ui_mouse_left_down(...)`
 - `ui_mouse_left_pressed(...)`
 - `ui_mouse_left_released(...)`
+- `ui_draw_bitmap(api, path, x, y, w, h)`
 
 These are enough to implement custom controls without touching kernel code.
 
@@ -156,6 +158,9 @@ The initial reusable widget layer includes:
 - `ui_draw_label_centered`
 - `ui_draw_text_box`
 - `ui_draw_cursor`
+- `ui_draw_bitmap`
+
+`ui_draw_bitmap` loads an uncompressed BMP (`BI_RGB`) that is <= `UI_BITMAP_MAX_FILE_SIZE` (256 KiB by default) and paints it at `(x, y)`, scaling to the provided `w x h` rectangle when both dimensions are positive (pass `w` or `h` ≤ 0 to keep the source size). Only 24-bit and 32-bit bitmaps are supported; magenta (`#FF00FF`) pixels in 24-bit images or pixels whose alpha byte is zero are treated as transparent so earlier drawings remain visible.
 
 `ui_draw_cursor` now renders from a generated `16x16` bitmap header. The default asset pipeline is:
 

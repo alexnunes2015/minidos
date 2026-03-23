@@ -45,6 +45,7 @@ typedef struct {
     int mouse_pressed_control_id;
     int drag_offset_x;
     int drag_offset_y;
+    ui_rect_t drag_preview_bounds;
     int start_menu_open;
     int start_button_pressed;
     int start_menu_pressed_item;
@@ -194,6 +195,13 @@ static ui_rect_t current_window_rect(const demo_state_t* state) {
     return win->window.bounds;
 }
 
+static ui_rect_t current_drag_preview_rect(const demo_state_t* state) {
+    if (!state || !state->dragging) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+    return state->drag_preview_bounds;
+}
+
 static ui_rect_t start_menu_rect(const demo_state_t* state) {
     int menu_y;
 
@@ -319,35 +327,39 @@ static int handle_start_menu_action(demo_state_t* state, int action_id) {
     return 0;
 }
 
-static void clamp_window(demo_state_t* state) {
-    ui_wm_window_t* win;
-
-    if (!state) {
+static void clamp_rect_to_desktop(const demo_state_t* state, ui_rect_t* rect) {
+    if (!state || !rect) {
         return;
     }
 
-    win = ui_wm_find_window(&state->wm, state->window_id);
-    if (!win) {
+    if (rect->x < 0) {
+        rect->x = 0;
+    }
+    if (rect->y < 0) {
+        rect->y = 0;
+    }
+    if (rect->x + rect->w > state->sw) {
+        rect->x = state->sw - rect->w;
+    }
+    if (rect->y + rect->h > state->sh - TASKBAR_H) {
+        rect->y = (state->sh - TASKBAR_H) - rect->h;
+    }
+    if (rect->x < 0) {
+        rect->x = 0;
+    }
+    if (rect->y < 0) {
+        rect->y = 0;
+    }
+}
+
+static void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* state) {
+    if (!api || !state || !state->dragging || ui_rect_is_empty(state->drag_preview_bounds)) {
         return;
     }
 
-    if (win->window.bounds.x < 0) {
-        win->window.bounds.x = 0;
-    }
-    if (win->window.bounds.y < 0) {
-        win->window.bounds.y = 0;
-    }
-    if (win->window.bounds.x + win->window.bounds.w > state->sw) {
-        win->window.bounds.x = state->sw - win->window.bounds.w;
-    }
-    if (win->window.bounds.y + win->window.bounds.h > state->sh - TASKBAR_H) {
-        win->window.bounds.y = (state->sh - TASKBAR_H) - win->window.bounds.h;
-    }
-    if (win->window.bounds.x < 0) {
-        win->window.bounds.x = 0;
-    }
-    if (win->window.bounds.y < 0) {
-        win->window.bounds.y = 0;
+    ui_frame_rect(api, state->drag_preview_bounds, state->wm.theme.selection_bg);
+    if (state->drag_preview_bounds.w > 4 && state->drag_preview_bounds.h > 4) {
+        ui_frame_rect(api, ui_rect_inset(state->drag_preview_bounds, 2), state->wm.theme.light);
     }
 }
 
@@ -426,7 +438,6 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
     ui_rect_t taskbar;
     ui_rect_t start_rect;
     ui_rect_t task_rect;
-    ui_rect_t brand_rect;
     ui_rect_t clock_rect;
     ui_button_t start_button;
     const ui_theme_t* theme;
@@ -440,8 +451,6 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
     start_rect = start_button_rect(state);
     task_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, 170, 20);
     clock_rect = taskbar_clock_rect(state);
-    brand_rect = ui_rect_make(clock_rect.x - 94, taskbar.y + 4, 86, 20);
-
     ui_draw_panel(api, theme, taskbar, 1);
 
     start_button.bounds = start_rect;
@@ -453,9 +462,6 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
 
     ui_draw_panel(api, theme, task_rect, 0);
     ui_draw_text(api, task_rect.x + 8, task_rect.y + 6, "MiniDOS 95 Demo", theme->text, theme->face);
-
-    ui_draw_panel(api, theme, brand_rect, 0);
-    ui_draw_label_centered(api, brand_rect, "A:\\ GUI", theme->text, theme->face);
 
     ui_draw_panel(api, theme, clock_rect, 0);
     ui_draw_label_centered(api, clock_rect, state->clock_text, theme->text, theme->face);
@@ -487,9 +493,6 @@ static void render_clock_update(const minidos_app_api_t* api, const demo_state_t
 static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
     ui_rect_t desktop;
     ui_rect_t top_bar;
-    ui_rect_t remainder[4];
-    int count;
-    int i;
 
     if (!api || !state || ui_rect_is_empty(rect)) {
         return;
@@ -502,19 +505,16 @@ static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state
     }
 
     ui_fill_rect(api, rect, state->wm.theme.desktop_bg);
+    if (state->wm.theme.desktop_bg_bitmap) {
+        (void)ui_draw_bitmap_clipped(api,
+            state->wm.theme.desktop_bg_bitmap,
+            0, 0, state->sw, state->sh,
+            rect);
+    }
 
     top_bar = ui_rect_intersect(rect, ui_rect_make(0, 0, state->sw, 2));
     if (!ui_rect_is_empty(top_bar)) {
         ui_fill_rect(api, top_bar, state->wm.theme.desktop_accent);
-    }
-
-    count = ui_rect_subtract(rect, taskbar_rect(state), remainder, 4);
-    for (i = 0; i < count; i++) {
-        ui_fill_rect(api, remainder[i], state->wm.theme.desktop_bg);
-        top_bar = ui_rect_intersect(remainder[i], ui_rect_make(0, 0, state->sw, 2));
-        if (!ui_rect_is_empty(top_bar)) {
-            ui_fill_rect(api, top_bar, state->wm.theme.desktop_accent);
-        }
     }
 }
 
@@ -623,6 +623,80 @@ static void render_partial_motion(const minidos_app_api_t* api,
         }
     }
 
+    if (state->start_menu_open && !drew_start_menu) {
+        draw_start_menu(api, state);
+    }
+
+    if (state->mouse.present) {
+        ui_draw_cursor(api, state->mouse.x, state->mouse.y,
+            state->wm.theme.light, state->wm.theme.dark_shadow);
+    }
+
+    ui_present(api);
+}
+
+static void render_partial_drag(const minidos_app_api_t* api,
+    const demo_state_t* state,
+    ui_rect_t previous_drag_rect,
+    const app_mouse_state_t* previous_mouse) {
+    ui_rect_t old_cursor;
+    ui_rect_t new_cursor;
+    ui_rect_t dirty_rects[4];
+    ui_rect_t bar_rect;
+    ui_rect_t menu_rect;
+    int dirty_count = 0;
+    int drew_taskbar_overlay = 0;
+    int drew_start_menu = 0;
+    int i;
+
+    if (!api || !state || !previous_mouse) {
+        return;
+    }
+
+    old_cursor = cursor_rect_at(previous_mouse->x, previous_mouse->y);
+    new_cursor = cursor_rect_at(state->mouse.x, state->mouse.y);
+
+    if (!ui_rect_is_empty(previous_drag_rect)) {
+        dirty_rects[dirty_count++] = previous_drag_rect;
+    }
+
+    if (!ui_rect_is_empty(state->drag_preview_bounds) && dirty_count < 4) {
+        dirty_rects[dirty_count++] = state->drag_preview_bounds;
+    }
+
+    if (!ui_rect_is_empty(old_cursor) && dirty_count < 4) {
+        dirty_rects[dirty_count++] = old_cursor;
+    }
+    if (!ui_rect_is_empty(new_cursor) && dirty_count < 4) {
+        dirty_rects[dirty_count++] = new_cursor;
+    }
+
+    bar_rect = taskbar_rect(state);
+    menu_rect = start_menu_rect(state);
+
+    for (i = 0; i < dirty_count; i++) {
+        ui_rect_t area = dirty_rects[i];
+
+        redraw_desktop_region(api, state, area);
+        redraw_window_region(api, state, area);
+
+        if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
+            draw_taskbar_overlay(api, state);
+            drew_taskbar_overlay = 1;
+        }
+
+        if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
+            draw_start_menu(api, state);
+            drew_start_menu = 1;
+        }
+    }
+
+    if (state->start_menu_open && !drew_start_menu) {
+        draw_start_menu(api, state);
+    }
+
+    draw_drag_outline(api, state);
+
     if (state->mouse.present) {
         ui_draw_cursor(api, state->mouse.x, state->mouse.y,
             state->wm.theme.light, state->wm.theme.dark_shadow);
@@ -641,6 +715,7 @@ static void render(const minidos_app_api_t* api, const demo_state_t* state) {
 
     draw_taskbar_overlay(api, state);
     draw_start_menu(api, state);
+    draw_drag_outline(api, state);
 
     if (state->mouse.present) {
         ui_draw_cursor(api, state->mouse.x, state->mouse.y,
@@ -810,17 +885,22 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
         state->dragging = 1;
         state->drag_offset_x = state->mouse.x - win->window.bounds.x;
         state->drag_offset_y = state->mouse.y - win->window.bounds.y;
+        state->drag_preview_bounds = win->window.bounds;
         update_status_text(state, "A arrastar a janela.");
     }
 
     if (state->dragging && left_down && win) {
-        win->window.bounds.x = state->mouse.x - state->drag_offset_x;
-        win->window.bounds.y = state->mouse.y - state->drag_offset_y;
-        clamp_window(state);
+        state->drag_preview_bounds.x = state->mouse.x - state->drag_offset_x;
+        state->drag_preview_bounds.y = state->mouse.y - state->drag_offset_y;
+        clamp_rect_to_desktop(state, &state->drag_preview_bounds);
     }
 
     if (left_released) {
+        if (state->dragging && win) {
+            win->window.bounds = state->drag_preview_bounds;
+        }
         state->dragging = 0;
+        state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
 
         if (!activated
             && state->mouse_pressed_control_id != 0) {
@@ -858,6 +938,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->mouse_pressed_control_id = 0;
     state->drag_offset_x = 0;
     state->drag_offset_y = 0;
+    state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
     state->start_menu_open = 0;
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
@@ -865,6 +946,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
+    state->wm.theme.desktop_bg_bitmap = "bg.bmp";
 
     x = (state->sw - window_w) / 2;
     y = (state->sh - window_h) / 2;
@@ -934,6 +1016,7 @@ int app_main(const minidos_app_api_t* api) {
         if (event_mask & APP_EVENT_MOUSE) {
             app_mouse_state_t previous_mouse = state.mouse;
             ui_rect_t previous_window_rect = current_window_rect(&state);
+            ui_rect_t previous_drag_rect = current_drag_preview_rect(&state);
             int previous_start_menu_open = state.start_menu_open;
             int previous_start_button_pressed = state.start_button_pressed;
             int previous_start_menu_pressed_item = state.start_menu_pressed_item;
@@ -947,7 +1030,9 @@ int app_main(const minidos_app_api_t* api) {
             }
             if (state.mouse.x != previous_mouse.x || state.mouse.y != previous_mouse.y) {
                 ui_rect_t next_window_rect = current_window_rect(&state);
+                ui_rect_t next_drag_rect = current_drag_preview_rect(&state);
                 int motion_changed_layout = !rect_equal(previous_window_rect, next_window_rect)
+                    || !rect_equal(previous_drag_rect, next_drag_rect)
                     || previous_start_menu_open != state.start_menu_open
                     || previous_start_button_pressed != state.start_button_pressed
                     || previous_start_menu_pressed_item != state.start_menu_pressed_item
@@ -955,6 +1040,15 @@ int app_main(const minidos_app_api_t* api) {
 
                 if (!motion_changed_layout) {
                     render_partial_motion(api, &state, &previous_mouse);
+                    continue;
+                }
+                if (!rect_equal(previous_drag_rect, next_drag_rect)
+                    && rect_equal(previous_window_rect, next_window_rect)
+                    && previous_start_menu_open == state.start_menu_open
+                    && previous_start_button_pressed == state.start_button_pressed
+                    && previous_start_menu_pressed_item == state.start_menu_pressed_item
+                    && previous_start_menu_hot_item == state.start_menu_hot_item) {
+                    render_partial_drag(api, &state, previous_drag_rect, &previous_mouse);
                     continue;
                 }
             }

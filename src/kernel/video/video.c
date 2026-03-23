@@ -72,6 +72,9 @@ int dirty_x = 0;
 int dirty_y = 0;
 int dirty_w = 0;
 int dirty_h = 0;
+int dirty_rect_count = 0;
+int dirty_overflow = 0;
+video_dirty_rect_t dirty_rects[VIDEO_DIRTY_RECT_CAPACITY] = {0};
 
 int text_cols = TEXT_SCREEN_WIDTH;
 int text_rows = TEXT_SCREEN_HEIGHT;
@@ -198,6 +201,55 @@ static int min_int(int a, int b) {
     return (a < b) ? a : b;
 }
 
+static void video_update_dirty_union(int x, int y, int w, int h) {
+    if (!dirty_valid) {
+        dirty_valid = 1;
+        dirty_x = x;
+        dirty_y = y;
+        dirty_w = w;
+        dirty_h = h;
+        return;
+    }
+
+    int right = x + w;
+    int bottom = y + h;
+    int current_right = dirty_x + dirty_w;
+    int current_bottom = dirty_y + dirty_h;
+
+    if (x < dirty_x) {
+        dirty_x = x;
+    }
+    if (y < dirty_y) {
+        dirty_y = y;
+    }
+    if (right > current_right) {
+        current_right = right;
+    }
+    if (bottom > current_bottom) {
+        current_bottom = bottom;
+    }
+
+    dirty_w = current_right - dirty_x;
+    dirty_h = current_bottom - dirty_y;
+}
+
+static void video_record_dirty_rect(int x, int y, int w, int h) {
+    if (dirty_overflow) {
+        return;
+    }
+
+    if (dirty_rect_count < VIDEO_DIRTY_RECT_CAPACITY) {
+        dirty_rects[dirty_rect_count].x = x;
+        dirty_rects[dirty_rect_count].y = y;
+        dirty_rects[dirty_rect_count].w = w;
+        dirty_rects[dirty_rect_count].h = h;
+        dirty_rect_count++;
+        return;
+    }
+
+    dirty_overflow = 1;
+    dirty_rect_count = 0;
+}
 static int video_detect_fast_present_mode(void) {
     if (!graphics_mode || !backbuffer_ready || fb == 0 || fb_pitch <= 0) {
         return 0;
@@ -224,6 +276,8 @@ void video_clear_dirty(void) {
     dirty_y = 0;
     dirty_w = 0;
     dirty_h = 0;
+    dirty_rect_count = 0;
+    dirty_overflow = 0;
 }
 
 void video_disable_backbuffer(void) {
@@ -298,36 +352,8 @@ void video_note_dirty(int x, int y, int w, int h) {
     y = y0;
     w = x1 - x0;
     h = y1 - y0;
-
-    if (!dirty_valid) {
-        dirty_valid = 1;
-        dirty_x = x;
-        dirty_y = y;
-        dirty_w = w;
-        dirty_h = h;
-        return;
-    }
-
-    right = x + w;
-    bottom = y + h;
-    current_right = dirty_x + dirty_w;
-    current_bottom = dirty_y + dirty_h;
-
-    if (x < dirty_x) {
-        dirty_x = x;
-    }
-    if (y < dirty_y) {
-        dirty_y = y;
-    }
-    if (right > current_right) {
-        current_right = right;
-    }
-    if (bottom > current_bottom) {
-        current_bottom = bottom;
-    }
-
-    dirty_w = current_right - dirty_x;
-    dirty_h = current_bottom - dirty_y;
+    video_update_dirty_union(x, y, w, h);
+    video_record_dirty_rect(x, y, w, h);
 }
 
 void init_video_once(void) {

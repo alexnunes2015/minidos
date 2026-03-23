@@ -164,6 +164,15 @@ copy_payload_tree() {
 
     write_ptest_readme_tree "$target_root"
     copy_boot_logo_tree "$target_root"
+
+    local win95_bg="$ROOT_DIR/external_apps/apps/win95_demo/test.bmp"
+    if [ -f "$win95_bg" ]; then
+        cp "$win95_bg" "$target_root/test.bmp"
+    fi
+    local win95_wallpaper="$ROOT_DIR/external_apps/apps/win95_demo/bg.bmp"
+    if [ -f "$win95_wallpaper" ]; then
+        cp "$win95_wallpaper" "$target_root/bg.bmp"
+    fi
 }
 
 build_bundled_apps
@@ -314,6 +323,21 @@ EOF
             fi
         fi
         echo "✓ Boot logo added"
+    fi
+
+    local win95_bg="$ROOT_DIR/external_apps/apps/win95_demo/test.bmp"
+    if [ -f "$win95_bg" ]; then
+        if ! mcopy -o -i "$DISK_IMG" "$win95_bg" ::/test.bmp; then
+            echo "ERROR: failed to write test.bmp via mtools" >&2
+            return 1
+        fi
+    fi
+    local win95_wallpaper="$ROOT_DIR/external_apps/apps/win95_demo/bg.bmp"
+    if [ -f "$win95_wallpaper" ]; then
+        if ! mcopy -o -i "$DISK_IMG" "$win95_wallpaper" ::/bg.bmp; then
+            echo "ERROR: failed to write bg.bmp via mtools" >&2
+            return 1
+        fi
     fi
 }
 

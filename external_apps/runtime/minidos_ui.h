@@ -9,6 +9,158 @@
 #define UI_DIRTY_RECTS_MAX 8
 #define UI_WM_MAX_WINDOWS 8
 #define UI_WM_MAX_CONTROLS 64
+#define UI_BITMAP_MAX_FILE_SIZE (256 * 1024)
+#define UI_BITMAP_TRANSPARENT_COLOR 0xFF00FFu
+#define UI_BITMAP_PATH_MAX 128
+typedef struct {
+    char path[UI_BITMAP_PATH_MAX];
+    int valid;
+    int src_w;
+    int src_h;
+    int abs_src_h;
+    int top_down;
+    unsigned int bit_count;
+    unsigned int row_stride;
+    unsigned int data_offset;
+    unsigned int bytes_per_pixel;
+    unsigned char data[UI_BITMAP_MAX_FILE_SIZE];
+} ui_bitmap_cache_t;
+
+static ui_bitmap_cache_t g_ui_bitmap_cache;
+
+static inline int ui_path_equal(const char* a, const char* b) {
+    if (!a || !b) {
+        return 0;
+    }
+    int i = 0;
+    while (i < UI_BITMAP_PATH_MAX) {
+        char ca = a[i];
+        char cb = b[i];
+        if (ca == '\0' && cb == '\0') {
+            return 1;
+        }
+        if (ca != cb) {
+            return 0;
+        }
+        if (ca == '\0') {
+            break;
+        }
+        i++;
+    }
+    return 1;
+}
+
+static inline void ui_path_copy(char* dst, const char* src) {
+    if (!dst) {
+        return;
+    }
+    int i = 0;
+    if (src) {
+        while (i < (UI_BITMAP_PATH_MAX - 1) && src[i] != '\0') {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
+static inline unsigned int ui_bitmap_read_u16(const unsigned char* data) {
+    return (unsigned int)data[0] | ((unsigned int)data[1] << 8);
+}
+
+static inline unsigned int ui_bitmap_read_u32(const unsigned char* data) {
+    return (unsigned int)data[0]
+        | ((unsigned int)data[1] << 8)
+        | ((unsigned int)data[2] << 16)
+        | ((unsigned int)data[3] << 24);
+}
+
+static int ui_bitmap_cache_load(const minidos_app_api_t* api, const char* path) {
+    if (!api || !path) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    if (g_ui_bitmap_cache.valid && ui_path_equal(g_ui_bitmap_cache.path, path)) {
+        return 1;
+    }
+
+    int file_size = app_file_size(api, path);
+    if (file_size <= 0 || file_size > UI_BITMAP_MAX_FILE_SIZE) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    int bytes_read = app_file_read(api, path, g_ui_bitmap_cache.data, file_size);
+    if (bytes_read != file_size || file_size < 54) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    if (g_ui_bitmap_cache.data[0] != 'B' || g_ui_bitmap_cache.data[1] != 'M') {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    unsigned int data_offset = ui_bitmap_read_u32(g_ui_bitmap_cache.data + 10);
+    if (data_offset >= (unsigned int)file_size || data_offset < 54) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    unsigned int info_size = ui_bitmap_read_u32(g_ui_bitmap_cache.data + 14);
+    if (info_size < 40) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    int src_w = (int)ui_bitmap_read_u32(g_ui_bitmap_cache.data + 18);
+    int src_h = (int)ui_bitmap_read_u32(g_ui_bitmap_cache.data + 22);
+    unsigned int planes = ui_bitmap_read_u16(g_ui_bitmap_cache.data + 26);
+    unsigned int bit_count = ui_bitmap_read_u16(g_ui_bitmap_cache.data + 28);
+    unsigned int compression = ui_bitmap_read_u32(g_ui_bitmap_cache.data + 30);
+
+    if (planes != 1 || compression != 0 || src_w <= 0 || src_h == 0) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    if (bit_count != 24 && bit_count != 32) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    int abs_src_h = src_h < 0 ? -src_h : src_h;
+    if (abs_src_h <= 0) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    unsigned int row_stride = (((unsigned int)src_w * bit_count + 31u) / 32u) * 4u;
+    if (row_stride == 0) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    unsigned int pixel_bytes = row_stride * (unsigned int)abs_src_h;
+    if (data_offset + pixel_bytes > (unsigned int)file_size) {
+        g_ui_bitmap_cache.valid = 0;
+        return 0;
+    }
+
+    g_ui_bitmap_cache.src_w = src_w;
+    g_ui_bitmap_cache.src_h = src_h;
+    g_ui_bitmap_cache.abs_src_h = abs_src_h;
+    g_ui_bitmap_cache.top_down = (src_h < 0);
+    g_ui_bitmap_cache.bit_count = bit_count;
+    g_ui_bitmap_cache.row_stride = row_stride;
+    g_ui_bitmap_cache.data_offset = data_offset;
+    g_ui_bitmap_cache.bytes_per_pixel = bit_count / 8u;
+    ui_path_copy(g_ui_bitmap_cache.path, path);
+    g_ui_bitmap_cache.valid = 1;
+    return 1;
+}
+
 
 typedef struct {
     int x;
@@ -40,6 +192,7 @@ typedef struct {
     unsigned int field_text;
     unsigned int selection_bg;
     unsigned int selection_text;
+    const char* desktop_bg_bitmap;
 } ui_theme_t;
 
 typedef struct {
@@ -274,6 +427,162 @@ static inline unsigned int ui_rgb(unsigned int r, unsigned int g, unsigned int b
     return ((r & 0xFFu) << 16) | ((g & 0xFFu) << 8) | (b & 0xFFu);
 }
 
+static inline int ui_draw_bitmap(const minidos_app_api_t* api, const char* path, int dst_x, int dst_y, int dst_w, int dst_h) {
+    ui_bitmap_cache_t* cache = &g_ui_bitmap_cache;
+    const unsigned char* file_data;
+    int draw_w;
+    int draw_h;
+    unsigned int src_w;
+    int abs_src_h;
+    int top_down;
+    unsigned int row_stride;
+    unsigned int bytes_per_pixel;
+    const unsigned char* pixel_base;
+    app_gfx_rect_t pixel_rect;
+
+    if (!ui_bitmap_cache_load(api, path)) {
+        return 0;
+    }
+
+    file_data = cache->data;
+    src_w = (unsigned int)cache->src_w;
+    abs_src_h = cache->abs_src_h;
+    top_down = cache->top_down;
+    row_stride = cache->row_stride;
+    bytes_per_pixel = cache->bytes_per_pixel;
+    pixel_base = file_data + cache->data_offset;
+
+    draw_w = dst_w > 0 ? dst_w : (int)src_w;
+    draw_h = dst_h > 0 ? dst_h : abs_src_h;
+    if (draw_w <= 0 || draw_h <= 0) {
+        return 0;
+    }
+
+    pixel_rect.w = 1;
+    pixel_rect.h = 1;
+
+    for (int dy = 0; dy < draw_h; dy++) {
+        int src_y = (dy * abs_src_h) / draw_h;
+        if (src_y >= abs_src_h) {
+            src_y = abs_src_h - 1;
+        }
+        int row_index = top_down ? src_y : (abs_src_h - 1 - src_y);
+        const unsigned char* row_ptr = pixel_base + (unsigned int)row_index * row_stride;
+
+        for (int dx = 0; dx < draw_w; dx++) {
+            int src_x = (dx * (int)src_w) / draw_w;
+            if (src_x >= (int)src_w) {
+                src_x = (int)src_w - 1;
+            }
+
+            const unsigned char* pixel = row_ptr + (unsigned int)src_x * bytes_per_pixel;
+            unsigned char blue = pixel[0];
+            unsigned char green = pixel[1];
+            unsigned char red = pixel[2];
+            unsigned char alpha = (bytes_per_pixel == 4) ? pixel[3] : 0xFF;
+
+            if (bytes_per_pixel == 4) {
+                if (alpha == 0) {
+                    continue;
+                }
+            } else {
+                if (ui_rgb(red, green, blue) == UI_BITMAP_TRANSPARENT_COLOR) {
+                    continue;
+                }
+            }
+
+            pixel_rect.x = dst_x + dx;
+            pixel_rect.y = dst_y + dy;
+            pixel_rect.color = ui_rgb(red, green, blue);
+            (void)app_gfx_rect(api, &pixel_rect);
+        }
+    }
+
+    return 1;
+}
+
+static inline int ui_draw_bitmap_clipped(const minidos_app_api_t* api, const char* path,
+    int dst_x, int dst_y, int dst_w, int dst_h, ui_rect_t clip) {
+    ui_bitmap_cache_t* cache = &g_ui_bitmap_cache;
+    const unsigned char* pixel_base;
+    ui_rect_t dest_rect;
+    ui_rect_t draw_rect;
+    unsigned int src_w;
+    int abs_src_h;
+    int top_down;
+    unsigned int row_stride;
+    unsigned int bytes_per_pixel;
+    app_gfx_rect_t pixel_rect;
+
+    if (!ui_bitmap_cache_load(api, path)) {
+        return 0;
+    }
+
+    src_w = (unsigned int)cache->src_w;
+    abs_src_h = cache->abs_src_h;
+    top_down = cache->top_down;
+    row_stride = cache->row_stride;
+    bytes_per_pixel = cache->bytes_per_pixel;
+    pixel_base = cache->data + cache->data_offset;
+    dest_rect = ui_rect_make(dst_x, dst_y, dst_w > 0 ? dst_w : (int)src_w, dst_h > 0 ? dst_h : abs_src_h);
+    draw_rect = ui_rect_intersect(dest_rect, clip);
+
+    if (ui_rect_is_empty(draw_rect)) {
+        return 1;
+    }
+
+    pixel_rect.w = 1;
+    pixel_rect.h = 1;
+
+    for (int y = draw_rect.y; y < draw_rect.y + draw_rect.h; y++) {
+        int local_y = y - dest_rect.y;
+        int src_y = (local_y * abs_src_h) / dest_rect.h;
+        int row_index;
+        const unsigned char* row_ptr;
+
+        if (src_y >= abs_src_h) {
+            src_y = abs_src_h - 1;
+        }
+        row_index = top_down ? src_y : (abs_src_h - 1 - src_y);
+        row_ptr = pixel_base + (unsigned int)row_index * row_stride;
+
+        for (int x = draw_rect.x; x < draw_rect.x + draw_rect.w; x++) {
+            int local_x = x - dest_rect.x;
+            int src_x = (local_x * (int)src_w) / dest_rect.w;
+            const unsigned char* pixel;
+            unsigned char blue;
+            unsigned char green;
+            unsigned char red;
+            unsigned char alpha;
+
+            if (src_x >= (int)src_w) {
+                src_x = (int)src_w - 1;
+            }
+
+            pixel = row_ptr + (unsigned int)src_x * bytes_per_pixel;
+            blue = pixel[0];
+            green = pixel[1];
+            red = pixel[2];
+            alpha = (bytes_per_pixel == 4) ? pixel[3] : 0xFF;
+
+            if (bytes_per_pixel == 4) {
+                if (alpha == 0) {
+                    continue;
+                }
+            } else if (ui_rgb(red, green, blue) == UI_BITMAP_TRANSPARENT_COLOR) {
+                continue;
+            }
+
+            pixel_rect.x = x;
+            pixel_rect.y = y;
+            pixel_rect.color = ui_rgb(red, green, blue);
+            (void)app_gfx_rect(api, &pixel_rect);
+        }
+    }
+
+    return 1;
+}
+
 static inline int ui_mouse_left_down(const app_mouse_state_t* mouse) {
     return mouse && ((mouse->buttons & APP_MOUSE_LEFT) != 0);
 }
@@ -305,6 +614,7 @@ static inline ui_theme_t ui_theme_classic(void) {
     theme.field_text = 0x000000u;
     theme.selection_bg = 0x000080u;
     theme.selection_text = 0xFFFFFFu;
+    theme.desktop_bg_bitmap = 0;
     return theme;
 }
 
@@ -1167,7 +1477,12 @@ static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_
         return;
     }
 
+    int drew_bitmap = 0;
     ui_clear(api, theme->desktop_bg);
+    if (theme->desktop_bg_bitmap) {
+        drew_bitmap = ui_draw_bitmap(api, theme->desktop_bg_bitmap, 0, 0, width, height);
+    }
+    (void)drew_bitmap;
     ui_fill_rect(api, ui_rect_make(0, 0, width, 2), theme->desktop_accent);
 
     taskbar = ui_rect_make(0, height - 28, width, 28);

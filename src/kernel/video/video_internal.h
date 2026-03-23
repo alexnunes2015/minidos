@@ -67,6 +67,18 @@ extern int dirty_y;
 extern int dirty_w;
 extern int dirty_h;
 
+#define VIDEO_DIRTY_RECT_CAPACITY 512
+typedef struct {
+    int x;
+    int y;
+    int w;
+    int h;
+} video_dirty_rect_t;
+
+extern int dirty_rect_count;
+extern int dirty_overflow;
+extern video_dirty_rect_t dirty_rects[VIDEO_DIRTY_RECT_CAPACITY];
+
 extern int text_cols;
 extern int text_rows;
 extern int text_origin_x;

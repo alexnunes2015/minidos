@@ -1,5 +1,21 @@
 #include "video_internal.h"
 
+static inline void write_frontbuffer_pixel_packed(volatile u8* dst, int fb_bytes, u32 packed) {
+    if (fb_bytes == 4) {
+        *(volatile u32*)dst = packed;
+        return;
+    }
+
+    if (fb_bytes == 3) {
+        dst[0] = (u8)(packed & 0xFFu);
+        dst[1] = (u8)((packed >> 8) & 0xFFu);
+        dst[2] = (u8)((packed >> 16) & 0xFFu);
+        return;
+    }
+
+    *(volatile u16*)dst = (u16)packed;
+}
+
 static u32 scale_component(u8 c, u8 bits, u8 pos) {
     if (bits == 0) {
         return 0;
@@ -19,20 +35,7 @@ static u32 pack_rgb(u8 r, u8 g, u8 b) {
 void write_frontbuffer_pixel(volatile u8* dst, u32 rgb) {
     int fb_bytes = video_fb_bytes_per_pixel();
     u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
-
-    if (fb_bytes == 4) {
-        *(volatile u32*)dst = packed;
-        return;
-    }
-
-    if (fb_bytes == 3) {
-        dst[0] = (u8)(packed & 0xFFu);
-        dst[1] = (u8)((packed >> 8) & 0xFFu);
-        dst[2] = (u8)((packed >> 16) & 0xFFu);
-        return;
-    }
-
-    *(volatile u16*)dst = (u16)packed;
+    write_frontbuffer_pixel_packed(dst, fb_bytes, packed);
 }
 
 void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb) {
@@ -75,12 +78,13 @@ void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb) {
     h = y1 - y0;
     fb_bytes = video_fb_bytes_per_pixel();
 
+    u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
     for (py = 0; py < h; py++) {
         volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
         int px;
 
         for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel(row + (px * fb_bytes), rgb);
+            write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
         }
     }
 }
@@ -137,13 +141,14 @@ void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
         }
     }
 
+    u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
+    int fb_bytes = video_fb_bytes_per_pixel();
     for (py = 0; py < h; py++) {
-        int fb_bytes = video_fb_bytes_per_pixel();
         volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
         int px;
 
         for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel(row + (px * fb_bytes), rgb);
+            write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
         }
     }
 }

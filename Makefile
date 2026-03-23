@@ -44,7 +44,9 @@ KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BU
 APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
 APP_SOURCES := $(shell find external_apps/apps -type f -name '*.c' | sort)
 CURSOR_ASSETS := $(shell find $(CURSOR_ASSETS_DIR) -type f | sort)
-QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
+QEMU_RAM ?= 64M
+QEMU_CPUS ?= 2
+QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m $(QEMU_RAM) -smp $(QEMU_CPUS) -vga cirrus -serial stdio
 
 # Ensure drive.o is included
 

@@ -1,5 +1,20 @@
 #include "video_internal.h"
 
+static unsigned long long video_dirty_rects_area(void) {
+    unsigned long long area = 0ULL;
+
+    for (int i = 0; i < dirty_rect_count; i++) {
+        int w = dirty_rects[i].w;
+        int h = dirty_rects[i].h;
+        if (w <= 0 || h <= 0) {
+            continue;
+        }
+        area += (unsigned long long)w * (unsigned long long)h;
+    }
+
+    return area;
+}
+
 static void video_wait_vretrace(void) {
     int i;
     for (i = 0; i < 8192; i++) {
@@ -94,10 +109,27 @@ void video_present_pending(void) {
         return;
     }
 
-    if (dirty_w > (fb_width >> 2) || dirty_h > (fb_height >> 2)) {
-        video_wait_vretrace();
+    {
+        unsigned long long total_pixels = (unsigned long long)fb_width * (unsigned long long)fb_height;
+        unsigned long long dirty_area = dirty_overflow
+            ? (unsigned long long)dirty_w * (unsigned long long)dirty_h
+            : video_dirty_rects_area();
+        unsigned long long vsync_threshold = total_pixels >> 2;
+        if (vsync_threshold == 0) {
+            vsync_threshold = 1;
+        }
+        if (dirty_area >= vsync_threshold) {
+            video_wait_vretrace();
+        }
     }
-    video_copy_rect_to_front(dirty_x, dirty_y, dirty_w, dirty_h);
+    if (dirty_overflow || dirty_rect_count == 0) {
+        video_copy_rect_to_front(dirty_x, dirty_y, dirty_w, dirty_h);
+    } else {
+        for (int i = 0; i < dirty_rect_count; i++) {
+            video_dirty_rect_t* rect = &dirty_rects[i];
+            video_copy_rect_to_front(rect->x, rect->y, rect->w, rect->h);
+        }
+    }
     video_clear_dirty();
 }
 
