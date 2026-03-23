@@ -575,9 +575,13 @@ static void render_partial_motion(const minidos_app_api_t* api,
     const app_mouse_state_t* previous_mouse) {
     ui_rect_t old_cursor;
     ui_rect_t new_cursor;
-    ui_rect_t area;
     ui_rect_t bar_rect;
     ui_rect_t menu_rect;
+    ui_rect_t dirty_rects[2];
+    int dirty_count = 0;
+    int drew_taskbar_overlay = 0;
+    int drew_start_menu = 0;
+    int i;
 
     if (!api || !state || !previous_mouse) {
         return;
@@ -585,19 +589,38 @@ static void render_partial_motion(const minidos_app_api_t* api,
 
     old_cursor = cursor_rect_at(previous_mouse->x, previous_mouse->y);
     new_cursor = cursor_rect_at(state->mouse.x, state->mouse.y);
-    area = ui_rect_union(old_cursor, new_cursor);
 
-    redraw_desktop_region(api, state, area);
-    redraw_window_region(api, state, area);
-
-    bar_rect = taskbar_rect(state);
-    if (!ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
-        draw_taskbar_overlay(api, state);
+    if (!ui_rect_is_empty(old_cursor)) {
+        dirty_rects[dirty_count++] = old_cursor;
+    }
+    if (!ui_rect_is_empty(new_cursor)) {
+        if (dirty_count == 0) {
+            dirty_rects[dirty_count++] = new_cursor;
+        } else if (ui_rects_intersect(dirty_rects[0], new_cursor)) {
+            dirty_rects[0] = ui_rect_union(dirty_rects[0], new_cursor);
+        } else {
+            dirty_rects[dirty_count++] = new_cursor;
+        }
     }
 
+    bar_rect = taskbar_rect(state);
     menu_rect = start_menu_rect(state);
-    if (state->start_menu_open && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
-        draw_start_menu(api, state);
+
+    for (i = 0; i < dirty_count; i++) {
+        ui_rect_t area = dirty_rects[i];
+
+        redraw_desktop_region(api, state, area);
+        redraw_window_region(api, state, area);
+
+        if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
+            draw_taskbar_overlay(api, state);
+            drew_taskbar_overlay = 1;
+        }
+
+        if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
+            draw_start_menu(api, state);
+            drew_start_menu = 1;
+        }
     }
 
     if (state->mouse.present) {
