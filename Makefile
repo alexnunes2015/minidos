@@ -42,7 +42,7 @@ KERNEL_OBJECTS = $(patsubst $(KERNEL_DIR)/%.c, $(BUILD_DIR)/%.o, $(KERNEL_SOURCE
 KERNEL_DEPS = $(KERNEL_OBJECTS:.o=.d)
 KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BUILD_DIR)/video/backbuffer_present.o
 APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
-APP_TEMPLATE_SOURCES := $(shell find external_apps/templates -type f | sort)
+APP_SOURCES := $(shell find external_apps/apps -type f -name '*.c' | sort)
 CURSOR_ASSETS := $(shell find $(CURSOR_ASSETS_DIR) -type f | sort)
 QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m 16M -serial stdio
 
@@ -107,7 +107,7 @@ $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
 # Disk image - create 1.44MB FAT12 floppy image
-minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_TEMPLATE_SOURCES) $(CURSOR_ASSETS)
+minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_SOURCES) $(CURSOR_ASSETS)
 	@# Convert boot logo if BMP exists
 	@if [ -f "$(BOOTLOGO_DIR)/boot_logo.bmp" ]; then \
 		echo "Converting boot logo..."; \

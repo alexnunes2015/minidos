@@ -80,9 +80,9 @@ def main():
 
     tool_env = dict(os.environ)
     tool_env["IMG_PATH"] = img
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptcpu.c", "CMCPU"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptwait.c", "CMWAIT"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/ptthrd.c", "CMTHRD"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/ptcpu/ptcpu.c", "CMCPU"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/ptwait/ptwait.c", "CMWAIT"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/ptthrd/ptthrd.c", "CMTHRD"], env=tool_env)
 
     proc = spawn_qemu(build_floppy_qemu_cmd(img))
 

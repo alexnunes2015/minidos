@@ -69,12 +69,12 @@ def main():
 
     tool_env = dict(os.environ)
     tool_env["IMG_PATH"] = img
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/badptr.c", "BADPTR"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/oldmap.c", "OLDMAP"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/usrfault.c", "USRFAULT"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/badptr.c", "BADCOM"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/oldmap.c", "OLDCOM"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/templates/usrfault.c", "USRFCOM"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/badptr/badptr.c", "BADPTR"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/oldmap/oldmap.c", "OLDMAP"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/usrfault/usrfault.c", "USRFAULT"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/badptr/badptr.c", "BADCOM"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/oldmap/oldmap.c", "OLDCOM"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "--format", "com", "external_apps/apps/usrfault/usrfault.c", "USRFCOM"], env=tool_env)
 
     proc = spawn_qemu(build_floppy_qemu_cmd(img))
 

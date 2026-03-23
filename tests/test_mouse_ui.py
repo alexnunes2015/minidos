@@ -240,7 +240,7 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
 
 def _install_demo_app():
     subprocess.run(
-        ["./external_apps/add_app.sh", "external_apps/templates/win95_demo.c", "WIN95UI"],
+        ["./external_apps/add_app.sh", "external_apps/apps/win95_demo/win95_demo.c", "WIN95UI"],
         cwd=repo_root(),
         check=True,
     )

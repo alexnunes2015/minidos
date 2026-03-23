@@ -37,11 +37,13 @@ Use:
 Examples:
 
 ```bash
-./external_apps/add_app.sh external_apps/templates/hello.c
-./external_apps/add_app.sh external_apps/templates/stress.c STRESS
-./external_apps/add_app.sh --format com external_apps/templates/hello.c HELLOCOM
+./external_apps/add_app.sh external_apps/apps/hello/hello.c
+./external_apps/add_app.sh external_apps/apps/stress/stress.c STRESS
+./external_apps/add_app.sh --format com external_apps/apps/hello/hello.c HELLOCOM
 ./external_apps/add_app.sh /tmp/my_app.c TESTAPP
 ```
+
+Each bundled example lives under `external_apps/apps/<name>/<name>.c`, so point the helper at that path when you want to rebuild an app or copy it into `minidos.img`.
 
 The utility will:
 1. Build a 32-bit app in the selected format (`.ELF` by default, `.COM` with `--format com`).
@@ -63,7 +65,7 @@ or (equivalent):
 run hello
 ```
 
-The repository also includes `external_apps/templates/stress.c`, a shell-launched
+The repository also includes `external_apps/apps/stress/stress.c`, a shell-launched
 stress app that churns repeated directory scans, ELF reads, graphics presents,
 and return-to-shell flow while emitting stable serial markers (`STRS100`,
 `STRS110`, `STRS190`, `STRS900`) for regression scripts.

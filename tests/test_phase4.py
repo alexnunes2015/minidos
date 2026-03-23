@@ -72,9 +72,9 @@ def main():
 
     tool_env = dict(os.environ)
     tool_env["IMG_PATH"] = img
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/hello_elf.c", "HELLOELF"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/stat_elf.c", "STATELF"], env=tool_env)
-    run_host(["./external_apps/add_app.sh", "external_apps/templates/stress.c", "STRESS"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/hello_elf/hello_elf.c", "HELLOELF"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/stat_elf/stat_elf.c", "STATELF"], env=tool_env)
+    run_host(["./external_apps/add_app.sh", "external_apps/apps/stress/stress.c", "STRESS"], env=tool_env)
 
     qemu_cmd = build_floppy_qemu_cmd(img)
     proc = spawn_qemu(qemu_cmd)

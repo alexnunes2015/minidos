@@ -43,7 +43,7 @@ Non-goals for this phase:
 
 - `external_apps/runtime/minidos_ui.h`: header-only UI toolkit for external apps
 - `external_apps/runtime/minidos_cursor_bitmap.h`: generated cursor bitmap header used by the UI runtime
-- `external_apps/templates/win95_demo.c`: reference app that exercises the toolkit
+- `external_apps/apps/win95_demo/win95_demo.c`: reference app that exercises the toolkit
 - `assets/cursor/`: cursor bitmap source + conversion kit
 
 ## Main Types
@@ -213,7 +213,7 @@ int app_main(const minidos_app_api_t* api) {
 }
 ```
 
-For a fuller example, use `external_apps/templates/win95_demo.c`.
+For a fuller example, use `external_apps/apps/win95_demo/win95_demo.c`.
 
 ## Build / Validation
 
@@ -221,7 +221,7 @@ Build and install the demo app into `minidos.img`:
 
 ```bash
 make
-./external_apps/add_app.sh external_apps/templates/win95_demo.c WIN95UI
+./external_apps/add_app.sh external_apps/apps/win95_demo/win95_demo.c WIN95UI
 ```
 
 Then boot MiniDOS and run:

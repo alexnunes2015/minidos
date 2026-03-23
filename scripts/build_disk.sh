@@ -8,15 +8,15 @@ DISK_SECTORS=2880
 RESERVED_SECTORS=192
 KERNEL_LOAD_SECTOR=5
 APP_SPECS=$(cat <<'EOF'
-GUESS100|GAMES|external_apps/templates/guess100.c
-DOSSHELL||external_apps/templates/dosshell.c
-EDIT||external_apps/templates/edit.c
-WIN95UI||external_apps/templates/win95_demo.c
-PTCPU|PTEST|external_apps/templates/ptcpu.c
-PTWAIT|PTEST|external_apps/templates/ptwait.c
-PTIO|PTEST|external_apps/templates/ptio.c
-PTGFX|PTEST|external_apps/templates/ptgfx.c
-PTTHRD|PTEST|external_apps/templates/ptthrd.c
+GUESS100|GAMES|external_apps/apps/guess100/guess100.c
+DOSSHELL||external_apps/apps/dosshell/dosshell.c
+EDIT||external_apps/apps/edit/edit.c
+WIN95UI||external_apps/apps/win95_demo/win95_demo.c
+PTCPU|PTEST|external_apps/apps/ptcpu/ptcpu.c
+PTWAIT|PTEST|external_apps/apps/ptwait/ptwait.c
+PTIO|PTEST|external_apps/apps/ptio/ptio.c
+PTGFX|PTEST|external_apps/apps/ptgfx/ptgfx.c
+PTTHRD|PTEST|external_apps/apps/ptthrd/ptthrd.c
 EOF
 )
 
