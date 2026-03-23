@@ -317,10 +317,6 @@ void video_note_dirty(int x, int y, int w, int h) {
     int y0;
     int x1;
     int y1;
-    int right;
-    int bottom;
-    int current_right;
-    int current_bottom;
 
     if (!graphics_mode || !backbuffer_ready || w <= 0 || h <= 0) {
         return;

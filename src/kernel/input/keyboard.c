@@ -3,6 +3,8 @@
 #include "video.h"
 #include "timer.h"
 
+#define KEY_ALT_EVENT 0x14
+
 // I/O Port functions
 static inline unsigned char inb(unsigned short port) {
     unsigned char val;
@@ -327,7 +329,7 @@ static char keyboard_process_scancode_set1(unsigned char scancode) {
         if (scancode == 0x38) {
             alt_pressed = 1;
             extended_code = 0;
-            return 0;
+            return KEY_ALT_EVENT;
         }
         if (scancode == 0xB8) {
             alt_pressed = 0;
@@ -356,7 +358,7 @@ static char keyboard_process_scancode_set1(unsigned char scancode) {
     }
     if (scancode == 0x38) {
         alt_pressed = 1;
-        return 0;
+        return KEY_ALT_EVENT;
     }
     if (scancode == 0xB8) {
         alt_pressed = 0;
@@ -397,10 +399,11 @@ static char keyboard_process_scancode_set2(unsigned char scancode) {
 
     if (extended_code) {
         if (scancode == 0x11) {
+            int ret = break_code ? 0 : KEY_ALT_EVENT;
             alt_pressed = break_code ? 0 : 1;
             break_code = 0;
             extended_code = 0;
-            return 0;
+            return ret;
         }
         if (scancode == 0x14) {
             ctrl_pressed = break_code ? 0 : 1;
@@ -446,9 +449,10 @@ static char keyboard_process_scancode_set2(unsigned char scancode) {
         return 0;
     }
     if (scancode == 0x11) {
+        int ret = break_code ? 0 : KEY_ALT_EVENT;
         alt_pressed = break_code ? 0 : 1;
         break_code = 0;
-        return 0;
+        return ret;
     }
     if (scancode == 0x58) {
         if (!break_code) {
