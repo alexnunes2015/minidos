@@ -85,6 +85,8 @@ typedef struct {
     int clip_y;             /* clip rect y */
     int clip_w;             /* clip rect width */
     int clip_h;             /* clip rect height */
+    int dest_w;             /* destination width; <= 0 uses source width */
+    int dest_h;             /* destination height; <= 0 uses source height */
 } app_gfx_surface_blit_t;
 
 typedef struct {

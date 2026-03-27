@@ -1,4 +1,5 @@
 #include "video_internal.h"
+#include "timer.h"
 
 static unsigned long long video_dirty_rects_area(void) {
     unsigned long long area = 0ULL;
@@ -17,14 +18,26 @@ static unsigned long long video_dirty_rects_area(void) {
 
 static void video_wait_vretrace(void) {
     int i;
+    unsigned int start_tick = 0;
+    int use_timer = timer_is_ready();
+
+    if (use_timer) {
+        start_tick = timer_get_ticks();
+    }
     for (i = 0; i < 8192; i++) {
         if (!(inb(0x3DA) & 0x08)) {
             break;
+        }
+        if (use_timer && (unsigned int)(timer_get_ticks() - start_tick) >= 2U) {
+            return;
         }
     }
     for (i = 0; i < 8192; i++) {
         if (inb(0x3DA) & 0x08) {
             break;
+        }
+        if (use_timer && (unsigned int)(timer_get_ticks() - start_tick) >= 2U) {
+            return;
         }
     }
 }

@@ -278,11 +278,14 @@ blit.clip_x = -1;            /* -1 = no clipping */
 blit.clip_y = 0;
 blit.clip_w = 0;
 blit.clip_h = 0;
+blit.dest_w = 640;           /* <= 0 keeps source size */
+blit.dest_h = 480;
 app_gfx_surface_blit(api, &blit);
 ```
 
 The kernel validates the descriptor and the user-space buffer range before blitting.
 Invalid descriptors (NULL buffer, non-positive dimensions, out-of-range buffer pointer) are rejected without corrupting the frame.
+When `dest_w`/`dest_h` differ from the source size, the kernel scales the surface during the blit, so apps can reuse a smaller decoded wallpaper cache without falling back to per-pixel syscalls.
 
 ### BMP wallpaper caching (`ui_wallpaper_surface_t`)
 
@@ -295,13 +298,18 @@ if (ui_wallpaper_surface_load(api, "WALLPAPR.BMP")) {
 }
 
 /* For dirty-rect restore (e.g. after cursor or window motion): */
-ui_wallpaper_surface_blit(api, 0, 0, rect.x, rect.y, rect.w, rect.h);
+if (ui_wallpaper_surface_matches("WALLPAPR.BMP")) {
+    ui_wallpaper_surface_blit_scaled(api, 0, 0, screen_w, screen_h, rect.x, rect.y, rect.w, rect.h);
+} else {
+    ui_draw_bitmap_clipped(api, "WALLPAPR.BMP", 0, 0, screen_w, screen_h, rect);
+}
 ```
 
 **Contract and fallback:**
 - Supported formats: 24bpp and 32bpp uncompressed BMP (same as `ui_draw_bitmap`)
 - Max decoded surface: `UI_WALLPAPER_SURFACE_MAX_BYTES` (340 KB) — covers 24bpp BMPs up to the 256 KB file limit
-- If the BMP cannot be opened, parsed, or exceeds the limit: `ui_wallpaper_surface_load` returns 0, `g_ui_wallpaper_surface.valid` stays 0, and `ui_wallpaper_surface_blit` returns 0 — the caller can fall back to `ui_fill_rect` (solid colour)
+- If the BMP cannot be opened, parsed, or exceeds the limit: `ui_wallpaper_surface_load` returns 0, `g_ui_wallpaper_surface.valid` stays 0, and the wallpaper helpers return 0 — the caller can fall back to `ui_fill_rect` (solid colour) or `ui_draw_bitmap_clipped`
+- If the decoded surface size does not match the target desktop size, `ui_wallpaper_surface_blit_scaled` lets the kernel scale it in one blit for both full renders and dirty-rect restores
 - `WIN95UI` looks for `WALLPAPR.BMP` at startup; if absent or invalid it runs with the solid teal desktop unchanged
 
 **Validation:**

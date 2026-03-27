@@ -237,12 +237,13 @@ static int ui_wallpaper_surface_load(const minidos_app_api_t* api, const char* p
     return 1;
 }
 
-/*
- * Blit the wallpaper surface at (dst_x, dst_y) using the fast surface syscall.
- * clip_x/y/w/h: region to restore (-1 to blit full surface).
- * Returns 1 on success, 0 if surface not loaded.
- */
-static inline int ui_wallpaper_surface_blit(const minidos_app_api_t* api, int dst_x, int dst_y, int clip_x, int clip_y, int clip_w, int clip_h) {
+static inline int ui_wallpaper_surface_matches(const char* path) {
+    return g_ui_wallpaper_surface.valid && path && ui_path_equal(g_ui_wallpaper_surface.path, path);
+}
+
+static inline int ui_wallpaper_surface_blit_scaled(const minidos_app_api_t* api,
+    int dst_x, int dst_y, int dst_w, int dst_h,
+    int clip_x, int clip_y, int clip_w, int clip_h) {
     ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
     app_gfx_surface_blit_t blit;
 
@@ -261,7 +262,38 @@ static inline int ui_wallpaper_surface_blit(const minidos_app_api_t* api, int ds
     blit.clip_y = clip_y;
     blit.clip_w = clip_w;
     blit.clip_h = clip_h;
+    blit.dest_w = dst_w;
+    blit.dest_h = dst_h;
     return app_gfx_surface_blit(api, &blit);
+}
+
+/*
+ * Blit the wallpaper surface at (dst_x, dst_y) using the fast surface syscall.
+ * clip_x/y/w/h: region to restore (-1 to blit full surface).
+ * Returns 1 on success, 0 if surface not loaded.
+ */
+static inline int ui_wallpaper_surface_blit(const minidos_app_api_t* api, int dst_x, int dst_y, int clip_x, int clip_y, int clip_w, int clip_h) {
+    return ui_wallpaper_surface_blit_scaled(api,
+        dst_x,
+        dst_y,
+        g_ui_wallpaper_surface.width,
+        g_ui_wallpaper_surface.height,
+        clip_x,
+        clip_y,
+        clip_w,
+        clip_h);
+}
+
+static inline int ui_wallpaper_surface_ready(void) {
+    return g_ui_wallpaper_surface.valid;
+}
+
+static inline int ui_wallpaper_surface_width(void) {
+    return g_ui_wallpaper_surface.width;
+}
+
+static inline int ui_wallpaper_surface_height(void) {
+    return g_ui_wallpaper_surface.height;
 }
 
 typedef struct {
@@ -1582,7 +1614,11 @@ static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_
     int drew_bitmap = 0;
     ui_clear(api, theme->desktop_bg);
     if (theme->desktop_bg_bitmap) {
-        drew_bitmap = ui_draw_bitmap(api, theme->desktop_bg_bitmap, 0, 0, width, height);
+        if (ui_wallpaper_surface_matches(theme->desktop_bg_bitmap)) {
+            drew_bitmap = ui_wallpaper_surface_blit_scaled(api, 0, 0, width, height, -1, 0, 0, 0);
+        } else {
+            drew_bitmap = ui_draw_bitmap(api, theme->desktop_bg_bitmap, 0, 0, width, height);
+        }
     }
     (void)drew_bitmap;
     ui_fill_rect(api, ui_rect_make(0, 0, width, 2), theme->desktop_accent);

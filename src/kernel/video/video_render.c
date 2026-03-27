@@ -250,10 +250,14 @@ int video_blit_surface_desc(const void* d) {
         int clip_y;
         int clip_w;
         int clip_h;
+        int dest_w;
+        int dest_h;
     } blit_desc_t;
 
     const blit_desc_t* b;
     int x0, y0, x1, y1;
+    int dest_w;
+    int dest_h;
     int py;
 
     if (!d || !graphics_mode) {
@@ -266,11 +270,17 @@ int video_blit_surface_desc(const void* d) {
         return 0;
     }
 
+    dest_w = (b->dest_w > 0) ? b->dest_w : b->width;
+    dest_h = (b->dest_h > 0) ? b->dest_h : b->height;
+    if (dest_w <= 0 || dest_h <= 0) {
+        return 0;
+    }
+
     /* Full destination rect */
     x0 = b->dest_x;
     y0 = b->dest_y;
-    x1 = b->dest_x + b->width;
-    y1 = b->dest_y + b->height;
+    x1 = b->dest_x + dest_w;
+    y1 = b->dest_y + dest_h;
 
     /* Apply clip rect when valid */
     if (b->clip_w > 0 && b->clip_h > 0) {
@@ -294,11 +304,17 @@ int video_blit_surface_desc(const void* d) {
 
     for (py = y0; py < y1; py++) {
         int px;
-        int src_y = py - b->dest_y;
+        int src_y = ((py - b->dest_y) * b->height) / dest_h;
+        if (src_y >= b->height) {
+            src_y = b->height - 1;
+        }
         const unsigned char* src_row = b->buffer + (unsigned int)(src_y * b->stride);
 
         for (px = x0; px < x1; px++) {
-            int src_x = px - b->dest_x;
+            int src_x = ((px - b->dest_x) * b->width) / dest_w;
+            if (src_x >= b->width) {
+                src_x = b->width - 1;
+            }
             /* XRGB8888: byte[0]=X, byte[1]=R, byte[2]=G, byte[3]=B */
             const unsigned char* p = src_row + (unsigned int)(src_x * 4);
             u32 rgb = ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
@@ -306,6 +322,8 @@ int video_blit_surface_desc(const void* d) {
         }
     }
 
+    video_note_dirty_locked(x0, y0, x1 - x0, y1 - y0);
     video_unlock();
+    video_maybe_present_pending();
     return 1;
 }

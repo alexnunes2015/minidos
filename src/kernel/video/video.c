@@ -483,22 +483,16 @@ void init_video_once(void) {
             fast_present_mode = video_detect_fast_present_mode();
             video_save_boot_state();
 
-            log_serial_raw("[video] init fb=");
+            log_serial_raw("[vid] fb=");
             serial_print_hex((u32)fb);
-            log_serial_raw(" w=");
+            log_serial_raw("w=");
             serial_print_hex((u32)fb_width);
-            log_serial_raw(" h=");
+            log_serial_raw("h=");
             serial_print_hex((u32)fb_height);
-            log_serial_raw(" pitch=");
+            log_serial_raw("p=");
             serial_print_hex((u32)fb_pitch);
-            log_serial_raw(" bpp=");
+            log_serial_raw("b=");
             serial_print_hex((u32)fb_bpp);
-            log_serial_raw(" bb=");
-            serial_print_hex((u32)backbuffer_ready);
-            log_serial_raw(" bp=");
-            serial_print_hex((u32)backbuffer_pitch);
-            log_serial_raw(" fast=");
-            serial_print_hex((u32)fast_present_mode);
             log_serial_raw("\n");
         }
     }

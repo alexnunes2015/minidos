@@ -44,9 +44,21 @@ KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BU
 APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
 APP_SOURCES := $(shell find external_apps/apps -type f -name '*.c' | sort)
 CURSOR_ASSETS := $(shell find $(CURSOR_ASSETS_DIR) -type f | sort)
-QEMU_RAM ?= 64M
+QEMU_RAM ?= 32M
 QEMU_CPUS ?= 2
-QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a -m $(QEMU_RAM) -smp $(QEMU_CPUS) -vga cirrus -serial stdio
+QEMU_ACCEL_FLAGS := $(if $(wildcard /dev/kvm),-accel kvm -cpu host,-accel tcg -cpu qemu32)
+QEMU_DISPLAY ?= none
+QEMU_DISPLAY_FLAGS = -display $(QEMU_DISPLAY)
+QEMU_BASE_FLAGS = $(QEMU_ACCEL_FLAGS) $(QEMU_DISPLAY_FLAGS) -boot a -m $(QEMU_RAM) -smp $(QEMU_CPUS) -vga std -serial stdio
+
+define run_qemu
+	TMPDIR=$$(mktemp -d); \
+	cp minidos.img $$TMPDIR/minidos.img; \
+	$(QEMU) $(QEMU_BASE_FLAGS) -drive file=$$TMPDIR/minidos.img,format=raw,if=floppy,index=0 $(1); \
+	RC=$$?; \
+	rm -rf $$TMPDIR; \
+	exit $$RC
+endef
 
 # Ensure drive.o is included
 
@@ -57,16 +69,16 @@ QEMU_FLOPPY_FLAGS = -drive file=minidos.img,format=raw,if=floppy,index=0 -boot a
 all: minidos.img
 
 run: minidos.img
-	$(QEMU) $(QEMU_FLOPPY_FLAGS)
+	$(call run_qemu,-display gtk)
 
 run-no-reboot: minidos.img
-	$(QEMU) $(QEMU_FLOPPY_FLAGS) -no-reboot -no-shutdown
+	$(call run_qemu,-no-reboot -no-shutdown)
 
 run-trace: minidos.img | $(BUILD_DIR)
-	$(QEMU) $(QEMU_FLOPPY_FLAGS) -monitor none -display none -no-reboot -no-shutdown -d int,guest_errors,cpu_reset -D $(BUILD_DIR)/qemu-trace.log
+	$(call run_qemu,-monitor none -display none -no-reboot -no-shutdown -d int,guest_errors,cpu_reset -D $(BUILD_DIR)/qemu-trace.log)
 
 run-gdb: minidos.img $(BUILD_DIR)/kernel.elf
-	$(QEMU) $(QEMU_FLOPPY_FLAGS) -monitor none -display none -no-reboot -no-shutdown -S -gdb tcp::1234
+	$(call run_qemu,-monitor none -display none -no-reboot -no-shutdown -S -gdb tcp::1234)
 
 gdb-kernel: $(BUILD_DIR)/kernel.elf scripts/kernel.gdb
 	$(GDB) -x scripts/kernel.gdb

@@ -508,9 +508,8 @@ static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state
 
     ui_fill_rect(api, rect, state->wm.theme.desktop_bg);
     if (state->wm.theme.desktop_bg_bitmap) {
-        /* Fast path: use cached decoded surface with clip rect for dirty-rect restore */
-        if (!ui_wallpaper_surface_blit(api, 0, 0, rect.x, rect.y, rect.w, rect.h)) {
-            /* Fallback: slow per-pixel draw when surface not ready */
+        if (!ui_wallpaper_surface_matches(state->wm.theme.desktop_bg_bitmap)
+            || !ui_wallpaper_surface_blit_scaled(api, 0, 0, state->sw, state->sh, rect.x, rect.y, rect.w, rect.h)) {
             (void)ui_draw_bitmap_clipped(api,
                 state->wm.theme.desktop_bg_bitmap,
                 0, 0, state->sw, state->sh,
@@ -953,7 +952,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
 
     ui_wm_init(&state->wm, ui_theme_classic());
 
-    /* Preload wallpaper surface once; enables fast blit path in redraw_desktop_region */
+    /* Preload wallpaper surface once; full and partial redraws then scale in-kernel. */
     if (ui_wallpaper_surface_load(api, WALLPAPER_BMP_PATH)) {
         state->wm.theme.desktop_bg_bitmap = WALLPAPER_BMP_PATH;
     }

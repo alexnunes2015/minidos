@@ -16,6 +16,11 @@
 #define BOOT_SPLASH_CURSOR_Y     24
 #define BOOT_SPLASH_CURSOR_W     12
 #define BOOT_SPLASH_CURSOR_H     18
+#define BOOT_SPLASH_LOGO_PIXELS_BYTES (320 * 200)
+#define BOOT_SPLASH_LOGO_PALETTE_BYTES (256 * 3)
+#define BOOT_SPLASH_LOGO_BASE_ADDR 0x00390000u
+#define BOOT_SPLASH_LOGO_PIXELS ((unsigned char*)BOOT_SPLASH_LOGO_BASE_ADDR)
+#define BOOT_SPLASH_LOGO_PALETTE ((unsigned char*)(BOOT_SPLASH_LOGO_BASE_ADDR + BOOT_SPLASH_LOGO_PIXELS_BYTES))
 
 typedef struct {
     int active;
@@ -30,8 +35,6 @@ typedef struct {
 } boot_splash_state_t;
 
 static boot_splash_state_t g_boot_splash;
-static unsigned char g_logo_pixels[320 * 200];
-static unsigned char g_logo_palette[256 * 3];
 
 static unsigned int boot_splash_current_frame(unsigned int ticks) {
     unsigned int hz;
@@ -131,13 +134,13 @@ void boot_splash_try_load_logo(void) {
         return;
     }
 
-    logo_bytes = fat16_read_file("BOOTLOGO.DAT", g_logo_pixels, sizeof(g_logo_pixels));
-    pal_bytes = fat16_read_file("BOOTLOGO.PAL", g_logo_palette, sizeof(g_logo_palette));
-    if (logo_bytes != (int)sizeof(g_logo_pixels) || pal_bytes != (int)sizeof(g_logo_palette)) {
+    logo_bytes = fat16_read_file("BOOTLOGO.DAT", BOOT_SPLASH_LOGO_PIXELS, BOOT_SPLASH_LOGO_PIXELS_BYTES);
+    pal_bytes = fat16_read_file("BOOTLOGO.PAL", BOOT_SPLASH_LOGO_PALETTE, BOOT_SPLASH_LOGO_PALETTE_BYTES);
+    if (logo_bytes != (int)BOOT_SPLASH_LOGO_PIXELS_BYTES || pal_bytes != (int)BOOT_SPLASH_LOGO_PALETTE_BYTES) {
         return;
     }
 
-    video_draw_indexed_image_centered(g_logo_pixels, 320, 200, g_logo_palette);
+    video_draw_indexed_image_centered(BOOT_SPLASH_LOGO_PIXELS, 320, 200, BOOT_SPLASH_LOGO_PALETTE);
     g_boot_splash.logo_loaded = 1;
     g_boot_splash.logo_tick = timer_is_ready() ? timer_get_ticks() : g_boot_splash.start_tick;
     if (timer_is_ready()) {

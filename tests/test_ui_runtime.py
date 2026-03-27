@@ -342,6 +342,8 @@ static int test_surface_blit_syscall_dispatched(void) {
     blit.clip_y = 0;
     blit.clip_w = 0;
     blit.clip_h = 0;
+    blit.dest_w = 8;
+    blit.dest_h = 6;
 
     app_gfx_surface_blit(&api, &blit);
 
@@ -349,7 +351,11 @@ static int test_surface_blit_syscall_dispatched(void) {
         fprintf(stderr, "expected 1 surface blit syscall, got %d\n", gfx_surface_blit_calls);
         return 0;
     }
-    if (last_surface_blit.buffer != pixels || last_surface_blit.width != 2 || last_surface_blit.height != 2) {
+    if (last_surface_blit.buffer != pixels
+        || last_surface_blit.width != 2
+        || last_surface_blit.height != 2
+        || last_surface_blit.dest_w != 8
+        || last_surface_blit.dest_h != 6) {
         fprintf(stderr, "surface blit descriptor fields not passed correctly\n");
         return 0;
     }
@@ -469,6 +475,49 @@ static int test_wallpaper_surface_fallback_on_invalid(void) {
     return 1;
 }
 
+static int test_wallpaper_surface_scaled_blit_uses_dest_size(void) {
+    minidos_app_api_t api;
+    ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
+
+    api.syscall = stub_syscall;
+    gfx_surface_blit_calls = 0;
+    memset(&last_surface_blit, 0, sizeof(last_surface_blit));
+
+    s->valid = 1;
+    strcpy(s->path, "WALL.BMP");
+    s->width = 320;
+    s->height = 200;
+    s->stride = 1280;
+
+    if (!ui_wallpaper_surface_matches("WALL.BMP")) {
+        fprintf(stderr, "wallpaper surface path match failed\n");
+        return 0;
+    }
+
+    if (!ui_wallpaper_surface_blit_scaled(&api, 0, 0, 640, 480, 10, 20, 30, 40)) {
+        fprintf(stderr, "scaled wallpaper blit helper failed\n");
+        return 0;
+    }
+
+    if (gfx_surface_blit_calls != 1) {
+        fprintf(stderr, "expected scaled wallpaper blit syscall\n");
+        return 0;
+    }
+
+    if (last_surface_blit.dest_w != 640 || last_surface_blit.dest_h != 480) {
+        fprintf(stderr, "scaled wallpaper blit did not preserve destination size\n");
+        return 0;
+    }
+
+    if (last_surface_blit.clip_x != 10 || last_surface_blit.clip_y != 20
+        || last_surface_blit.clip_w != 30 || last_surface_blit.clip_h != 40) {
+        fprintf(stderr, "scaled wallpaper blit did not preserve clip rect\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 static void run_all_tests(void) {
     if (!test_single_window_sparse_zorder()) {
         test_status = 1;
@@ -499,6 +548,10 @@ static void run_all_tests(void) {
         return;
     }
     if (!test_wallpaper_surface_fallback_on_invalid()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_wallpaper_surface_scaled_blit_uses_dest_size()) {
         test_status = 1;
         return;
     }
