@@ -1,0 +1,76 @@
+schema: spec-driven
+
+context: |
+  MiniDOS is a minimalist educational operating system targeting x86 real hardware and QEMU.
+  It boots in 16-bit Real Mode (NASM bootloader) and transitions to 32-bit Protected Mode for
+  a freestanding C kernel. There is no libc — all primitives are implemented from scratch.
+
+  Tech stack:
+  - Language: C (freestanding, -m32 -ffreestanding) + NASM assembly
+  - Build: GNU Make, gcc, ld, objcopy, nasm
+  - Disk: FAT12 floppy boot image (1.44 MB) + FAT16 runtime on ATA secondary disks
+  - Emulation: qemu-system-i386 (primary target); real BIOS hardware is a secondary target
+  - Tests: Python 3 test harness (tests/qemu_harness.py) running QEMU headlessly, checking
+    serial (COM1) output for deterministic acceptance markers
+  - Debug: serial COM1 markers (e.g. BOOT012, DISK021, IRQ001), GDB over QEMU stub
+
+  Kernel subsystems and source layout:
+  - src/boot/           — 16-bit boot sector + stage2 loader (VBE mode scan, PM transition)
+  - src/kernel/core/    — entry point, GDT, IDT/ISR, paging, linker script
+  - src/kernel/video/   — VGA text, VESA LFB framebuffer, software backbuffer, fast-present ASM path
+  - src/kernel/storage/ — ATA PIO (disk_id 0–3), FAT16 (fat16.c / fat16_dir.c / fat16_file.c),
+                          BIOS disk thunk for boot floppy
+  - src/kernel/input/   — PS/2 keyboard (IRQ1 + scan-code set 1/2), PS/2 mouse (IRQ12)
+  - src/kernel/time/    — RTC, PIT/IRQ0 kernel tick
+  - src/kernel/debug/   — serial logging
+  - src/kernel/memory/  — paging (identity map 16 MiB + VESA region, guard pages)
+  - src/kernel/process/ — process_t, scheduler (round-robin over IRQ0), ring3 entry, TSS, int 0x80
+  - src/kernel/shell/   — shell dispatcher, shell_builtin.c, shell_apps.c (ELF32/COM loader), shell_fs.c
+  - external_apps/      — userland apps (ELF32 ET_EXEC, fixed 1 MiB slot at 0x01000000)
+  - tests/              — Python test suites per phase + shared QEMU harness
+  - scripts/            — disk image creation (build_disk.sh)
+  - docs/               — DESIGN.md, ROADMAP.md, DEVELOPMENT_PROTOCOL.md, DEBUGGING.md, etc.
+
+  Memory layout (key fixed addresses):
+  - 0x10000               — kernel load address
+  - 0x00380000            — text grid scratch buffer
+  - 0x00600000            — scheduler kernel stack arena (guard pages per thread)
+  - 0x00B00000            — graphics backbuffer scratch (up to 1280x1024x32)
+  - 0x01000000-0x01100000 — user app window (ring3, U/S pages)
+
+  Completed phases (as of 2026-03-27):
+  - Phase 0: stable baseline + make phase0-check
+  - Phase 1: paging with identity map + #PF handler
+  - Phase 2: IDT/ISR, IRQ-driven keyboard, panic with serial dump
+  - Phase 3: ATA disk_id 0-3, FAT16 write (copy/ren/mkdir/rmdir/del), multi-disk isolation
+  - Phase 4: ELF32 loader, syscall ABI (puts/get_char/file_size), elfls command
+  - Phase 5: preemptive scheduler over IRQ0, ring3 entry (ELF + COM), int 0x80 gate,
+             guard pages, user-fault containment, foreground/background app lifecycle
+
+  Active work areas (next likely changes):
+  - Richer per-process virtual memory (replace fixed 1 MiB app slot)
+  - Interrupt diagnostics hardening and regression coverage
+  - GPU/video subsystem improvements (multithreaded render, BMP wallpaper surface cache)
+
+  Conventions and invariants (from docs/DEVELOPMENT_PROTOCOL.md):
+  - One task = one primary subsystem owner; never mix unrelated critical subsystems
+  - Any behavioral change must update at least one automated test or validation command
+  - Any architectural change must update docs in the same task
+  - Validation tiers: Tier 1 = make phase0-check, Tier 2 = make verify-image + focused suites,
+    Tier 3 = make ci
+  - Serial markers must be deterministic (BOOT012 style); no timing sleeps in tests
+  - Prefer explicit acceptance markers over prose in test harness
+
+rules:
+  proposal:
+    - Scope to exactly one subsystem owner (boot, paging/interrupts, disk/FAT, shell,
+      scheduler, userland, video, docs/tooling)
+    - Include a "Non-goals" section to make scope boundaries explicit
+    - Reference the relevant validation tier (Tier 1/2/3) from DEVELOPMENT_PROTOCOL.md
+    - If the change touches syscall ABI, image layout, or boot flow, name the docs to update
+  tasks:
+    - Each task must have a single clear acceptance criterion verifiable by a make target
+      or explicit test command
+    - Split tasks that would touch more than one critical subsystem boundary
+    - Include the exact make/test commands to run for validation
+    - Mark tasks that require doc updates explicitly

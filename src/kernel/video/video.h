@@ -16,8 +16,10 @@ void video_fill_rect(int x, int y, int w, int h, unsigned int rgb);
 void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigned int bg);
 void video_present_pending(void);
 void video_set_deferred_present(int enabled);
+int video_start_stress_workers(int worker_count, int iterations);
 int video_draw_indexed_image_centered(const unsigned char* pixels, int width, int height, const unsigned char* palette);
 void video_draw_boot_gradient(unsigned int frame);
 void video_show_bsod(const char* stop_code, const char* detail);
+int video_blit_surface_desc(const void* blit_desc);
 
 #endif

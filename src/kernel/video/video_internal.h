@@ -124,15 +124,24 @@ static inline int video_fb_bytes_per_pixel(void) {
 
 void init_video_once(void);
 
+void video_lock(void);
+void video_unlock(void);
+
 void video_clear_dirty(void);
+void video_clear_dirty_locked(void);
 void video_disable_backbuffer(void);
+void video_disable_backbuffer_locked(void);
 int __attribute__((noinline, regparm(0))) video_backbuffer_rect_fits(int x, int y, int w, int h);
 void video_note_dirty(int x, int y, int w, int h);
+void video_note_dirty_locked(int x, int y, int w, int h);
 
 void write_frontbuffer_pixel(volatile u8* dst, u32 rgb);
 void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb);
+void fill_frontbuffer_rect_rgb_locked(int x, int y, int w, int h, u32 rgb);
 void fill_rect_rgb(int x, int y, int w, int h, u32 rgb);
+void fill_rect_rgb_locked(int x, int y, int w, int h, u32 rgb);
 void draw_pixel(int x, int y, u32 rgb);
+void draw_pixel_locked(int x, int y, u32 rgb);
 void clear_graphics(u32 rgb);
 
 const u8* glyph_for_char(char c);

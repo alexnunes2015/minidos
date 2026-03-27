@@ -38,6 +38,7 @@ enum {
     MINIDOS_SYSCALL_THREAD_YIELD = 30,
     MINIDOS_SYSCALL_THREAD_SELF = 31,
     MINIDOS_SYSCALL_EXIT = 32,
+    MINIDOS_SYSCALL_GFX_SURFACE_BLIT = 33,
 };
 
 enum {
@@ -67,6 +68,24 @@ typedef struct {
     unsigned int fg;
     unsigned int bg;
 } app_gfx_text_t;
+
+enum {
+    APP_SURFACE_FORMAT_XRGB8888 = 0,  /* 32-bit pixels: X:8 R:8 G:8 B:8 */
+};
+
+typedef struct {
+    unsigned char* buffer;  /* pointer to pixel data (user space) */
+    int width;              /* surface width in pixels */
+    int height;             /* surface height in pixels */
+    int stride;             /* bytes per row (typically width * 4 for XRGB8888) */
+    int format;             /* APP_SURFACE_FORMAT_* */
+    int dest_x;             /* destination x in frame */
+    int dest_y;             /* destination y in frame */
+    int clip_x;             /* clip rect x (or -1 for no clipping) */
+    int clip_y;             /* clip rect y */
+    int clip_w;             /* clip rect width */
+    int clip_h;             /* clip rect height */
+} app_gfx_surface_blit_t;
 
 typedef struct {
     int x;
@@ -158,6 +177,10 @@ static inline int app_gfx_size(const minidos_app_api_t* api, int* out_w, int* ou
 
 static inline int app_gfx_present(const minidos_app_api_t* api) {
     return app_syscall(api, MINIDOS_SYSCALL_GFX_PRESENT, 0, 0, 0);
+}
+
+static inline int app_gfx_surface_blit(const minidos_app_api_t* api, const app_gfx_surface_blit_t* blit) {
+    return app_syscall(api, MINIDOS_SYSCALL_GFX_SURFACE_BLIT, (unsigned int)blit, 0, 0);
 }
 
 static inline int app_mouse_state(const minidos_app_api_t* api, app_mouse_state_t* out) {

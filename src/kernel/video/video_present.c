@@ -68,7 +68,7 @@ static void video_copy_rect_to_front(int x, int y, int w, int h) {
     w = x1 - x0;
     h = y1 - y0;
     if (!video_backbuffer_rect_fits(x, y, w, h)) {
-        video_disable_backbuffer();
+        video_disable_backbuffer_locked();
         return;
     }
 
@@ -105,7 +105,9 @@ static void video_copy_rect_to_front(int x, int y, int w, int h) {
 
 void video_present_pending(void) {
     init_video_once();
+    video_lock();
     if (!graphics_mode || !backbuffer_ready || !dirty_valid) {
+        video_unlock();
         return;
     }
 
@@ -130,11 +132,16 @@ void video_present_pending(void) {
             video_copy_rect_to_front(rect->x, rect->y, rect->w, rect->h);
         }
     }
-    video_clear_dirty();
+    video_clear_dirty_locked();
+    video_unlock();
 }
 
 void video_maybe_present_pending(void) {
-    if (!present_deferred) {
+    video_lock();
+    int deferred = present_deferred;
+    video_unlock();
+
+    if (!deferred) {
         video_present_pending();
     }
 }
@@ -145,8 +152,11 @@ void video_set_deferred_present(int enabled) {
         return;
     }
 
+    video_lock();
+    present_deferred = enabled ? 1 : 0;
+    video_unlock();
+
     if (!enabled) {
         video_present_pending();
     }
-    present_deferred = enabled ? 1 : 0;
 }

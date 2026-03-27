@@ -1,0 +1,4 @@
+- [x] Refatorar pipeline para suportar múltiplas threads
+- [x] Implementar sistema de locks / sync
+- [x] Testar concorrência
+- [x] Benchmark vs versão anterior

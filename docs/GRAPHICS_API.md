@@ -12,6 +12,7 @@ The kernel already exposes low-level graphics syscalls for applications through 
 - `app_gfx_text`
 - `app_gfx_size`
 - `app_gfx_present`
+- `app_gfx_surface_blit` — blit a pre-decoded XRGB8888 pixel surface in one operation
 - `app_mouse_state`
 - `app_wait_event`
 - `app_wait_event_timeout`
@@ -41,9 +42,10 @@ Non-goals for this phase:
 
 ## Files
 
-- `external_apps/runtime/minidos_ui.h`: header-only UI toolkit for external apps
+- `external_apps/runtime/minidos_app.h`: low-level syscall ABI, including `app_gfx_surface_blit_t` descriptor
+- `external_apps/runtime/minidos_ui.h`: header-only UI toolkit; includes `ui_wallpaper_surface_t` and BMP decode/blit helpers
 - `external_apps/runtime/minidos_cursor_bitmap.h`: generated cursor bitmap header used by the UI runtime
-- `external_apps/apps/win95_demo/win95_demo.c`: reference app that exercises the toolkit
+- `external_apps/apps/win95_demo/win95_demo.c`: reference app that exercises the toolkit; uses wallpaper surface caching
 - `assets/cursor/`: cursor bitmap source + conversion kit
 
 ## Main Types
@@ -162,7 +164,9 @@ The initial reusable widget layer includes:
 
 `ui_draw_bitmap` loads an uncompressed BMP (`BI_RGB`) that is <= `UI_BITMAP_MAX_FILE_SIZE` (256 KiB by default) and paints it at `(x, y)`, scaling to the provided `w x h` rectangle when both dimensions are positive (pass `w` or `h` ≤ 0 to keep the source size). Only 24-bit and 32-bit bitmaps are supported; magenta (`#FF00FF`) pixels in 24-bit images or pixels whose alpha byte is zero are treated as transparent so earlier drawings remain visible.
 
-`ui_draw_cursor` now renders from a generated `16x16` bitmap header. The default asset pipeline is:
+The `WIN95UI` demo keeps `desktop_bg_bitmap` disabled by default because the current BMP helper still expands images through rectangle draws; this preserves the optional wallpaper API without making the demo's normal interaction path pay that cost every frame.
+
+`ui_draw_cursor` now renders from a generated bitmap header and emits horizontal runs instead of 1x1 rects wherever possible. The default asset pipeline is:
 
 1. place `cursor.png` in `assets/cursor/` for alpha transparency, or `cursor.bmp` as fallback
 2. run `make` or `./external_apps/add_app.sh ...`
@@ -254,6 +258,57 @@ make test-mouse
 ```
 
 The `win95ui` demo also uses `app_wait_event_timeout(api, ..., 1000)` plus `app_get_time(api, ...)` to refresh the taskbar clock once per second without blocking on user input forever.
+
+## BMP Wallpaper and Surface Blit
+
+### Surface blit syscall (`app_gfx_surface_blit`)
+
+Apps can transfer a pre-decoded pixel surface into the current frame with a single syscall instead of one `app_gfx_rect` per pixel:
+
+```c
+app_gfx_surface_blit_t blit;
+blit.buffer = pixels;        /* XRGB8888 decoded pixel data */
+blit.width  = surface_w;
+blit.height = surface_h;
+blit.stride = surface_w * 4;
+blit.format = APP_SURFACE_FORMAT_XRGB8888;
+blit.dest_x = 0;
+blit.dest_y = 0;
+blit.clip_x = -1;            /* -1 = no clipping */
+blit.clip_y = 0;
+blit.clip_w = 0;
+blit.clip_h = 0;
+app_gfx_surface_blit(api, &blit);
+```
+
+The kernel validates the descriptor and the user-space buffer range before blitting.
+Invalid descriptors (NULL buffer, non-positive dimensions, out-of-range buffer pointer) are rejected without corrupting the frame.
+
+### BMP wallpaper caching (`ui_wallpaper_surface_t`)
+
+`minidos_ui.h` provides a runtime-side wallpaper cache that decodes a BMP file once and reuses the result across redraws:
+
+```c
+/* On first call: reads file, validates BMP header, decodes to XRGB8888 */
+if (ui_wallpaper_surface_load(api, "WALLPAPR.BMP")) {
+    state->wm.theme.desktop_bg_bitmap = "WALLPAPR.BMP";
+}
+
+/* For dirty-rect restore (e.g. after cursor or window motion): */
+ui_wallpaper_surface_blit(api, 0, 0, rect.x, rect.y, rect.w, rect.h);
+```
+
+**Contract and fallback:**
+- Supported formats: 24bpp and 32bpp uncompressed BMP (same as `ui_draw_bitmap`)
+- Max decoded surface: `UI_WALLPAPER_SURFACE_MAX_BYTES` (340 KB) — covers 24bpp BMPs up to the 256 KB file limit
+- If the BMP cannot be opened, parsed, or exceeds the limit: `ui_wallpaper_surface_load` returns 0, `g_ui_wallpaper_surface.valid` stays 0, and `ui_wallpaper_surface_blit` returns 0 — the caller can fall back to `ui_fill_rect` (solid colour)
+- `WIN95UI` looks for `WALLPAPR.BMP` at startup; if absent or invalid it runs with the solid teal desktop unchanged
+
+**Validation:**
+```bash
+python3 tests/test_ui_runtime.py
+```
+Tests cover: syscall dispatch, pixel decode correctness (BGR->XRGB8888, bottom-up row order), and fallback on missing file.
 
 ## Design Notes
 

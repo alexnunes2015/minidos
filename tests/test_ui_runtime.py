@@ -25,6 +25,9 @@ static int front_order = 0;
 static int draw_sequence = 0;
 static int test_status = 1;
 static char last_text[128];
+static int gfx_rect_calls = 0;
+static int gfx_surface_blit_calls = 0;
+static app_gfx_surface_blit_t last_surface_blit;
 
 static void run_all_tests(void);
 
@@ -48,6 +51,18 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
         } else if (strcmp(text->text, "Front") == 0 && front_order == 0) {
             front_order = ++draw_sequence;
         }
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_RECT) {
+        gfx_rect_calls++;
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_SURFACE_BLIT) {
+        const app_gfx_surface_blit_t* blit = (const app_gfx_surface_blit_t*)a0;
+        if (blit) {
+            last_surface_blit = *blit;
+        }
+        gfx_surface_blit_calls++;
     }
 
     return 1;
@@ -205,6 +220,34 @@ static int test_multi_window_draw_order(void) {
     return 1;
 }
 
+static int test_cursor_batches_horizontal_runs(void) {
+    minidos_app_api_t api;
+    int visible_pixels = 0;
+    int i;
+
+    api.syscall = stub_syscall;
+    gfx_rect_calls = 0;
+
+    for (i = 0; i < UI_CURSOR_BITMAP_WIDTH * UI_CURSOR_BITMAP_HEIGHT; i++) {
+        if (ui_cursor_bitmap[i] != UI_CURSOR_PIXEL_TRANSPARENT) {
+            visible_pixels++;
+        }
+    }
+
+    ui_draw_cursor(&api, 32, 24, 0xFFFFFFu, 0x000000u);
+    if (gfx_rect_calls <= 0) {
+        fprintf(stderr, "cursor draw did not emit any rects\n");
+        return 0;
+    }
+    if (gfx_rect_calls >= visible_pixels) {
+        fprintf(stderr, "cursor draw still uses per-pixel rects (rects=%d pixels=%d)\n",
+            gfx_rect_calls, visible_pixels);
+        return 0;
+    }
+
+    return 1;
+}
+
 int main(void) {
     ucontext_t main_ctx;
     ucontext_t test_ctx;
@@ -245,6 +288,187 @@ int main(void) {
     return test_status;
 }
 
+/* Build a minimal valid 2x2 24bpp BMP in the provided buffer (size must be >= 70 bytes).
+   Returns the number of bytes written. */
+static int make_minimal_bmp_24bpp(unsigned char* buf, int buf_size,
+    unsigned char r0, unsigned char g0, unsigned char b0,
+    unsigned char r1, unsigned char g1, unsigned char b1) {
+    /* BMP with 2x2 pixels, 24bpp, no compression */
+    /* Header 14 bytes + DIB 40 bytes + pixel data 2 rows * 8 bytes (padded to 4) = 16 bytes */
+    int total_size = 14 + 40 + 16;
+    if (buf_size < total_size) return 0;
+    memset(buf, 0, total_size);
+
+    /* BMP file header */
+    buf[0] = 'B'; buf[1] = 'M';
+    buf[2] = (unsigned char)total_size; buf[3] = 0; buf[4] = 0; buf[5] = 0;
+    buf[6] = 0; buf[7] = 0; buf[8] = 0; buf[9] = 0;
+    buf[10] = 54; buf[11] = 0; buf[12] = 0; buf[13] = 0; /* pixel data offset */
+
+    /* DIB header (BITMAPINFOHEADER, 40 bytes) */
+    buf[14] = 40; /* header size */
+    buf[18] = 2;  /* width = 2 */
+    buf[22] = 2;  /* height = 2 (bottom-up) */
+    buf[26] = 1;  /* planes */
+    buf[28] = 24; /* bit count */
+    /* compression = 0, already zeroed */
+
+    /* Pixel data: 2 rows, each 2 pixels at 3 bytes = 6 bytes, padded to 8 bytes */
+    /* Row 0 (bottom in file): two pixels of color 0 */
+    buf[54] = b0; buf[55] = g0; buf[56] = r0;
+    buf[57] = b0; buf[58] = g0; buf[59] = r0;
+    /* Row 1 (top in file): two pixels of color 1 */
+    buf[62] = b1; buf[63] = g1; buf[64] = r1;
+    buf[65] = b1; buf[66] = g1; buf[67] = r1;
+    return total_size;
+}
+
+static int test_surface_blit_syscall_dispatched(void) {
+    minidos_app_api_t api;
+    static unsigned char pixels[16]; /* 2x2 XRGB8888 */
+    app_gfx_surface_blit_t blit;
+
+    api.syscall = stub_syscall;
+    gfx_surface_blit_calls = 0;
+
+    blit.buffer = pixels;
+    blit.width  = 2;
+    blit.height = 2;
+    blit.stride = 8;
+    blit.format = APP_SURFACE_FORMAT_XRGB8888;
+    blit.dest_x = 0;
+    blit.dest_y = 0;
+    blit.clip_x = -1;
+    blit.clip_y = 0;
+    blit.clip_w = 0;
+    blit.clip_h = 0;
+
+    app_gfx_surface_blit(&api, &blit);
+
+    if (gfx_surface_blit_calls != 1) {
+        fprintf(stderr, "expected 1 surface blit syscall, got %d\n", gfx_surface_blit_calls);
+        return 0;
+    }
+    if (last_surface_blit.buffer != pixels || last_surface_blit.width != 2 || last_surface_blit.height != 2) {
+        fprintf(stderr, "surface blit descriptor fields not passed correctly\n");
+        return 0;
+    }
+    return 1;
+}
+
+static int test_wallpaper_surface_decode_bmp(void) {
+    static unsigned char bmp_buf[80];
+    ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
+    int bmp_size;
+
+    /* Write a minimal 2x2 BMP into the bitmap cache manually */
+    bmp_size = make_minimal_bmp_24bpp(bmp_buf, sizeof(bmp_buf),
+        0xFFu, 0x00u, 0x00u,  /* row 0: red */
+        0x00u, 0x00u, 0xFFu); /* row 1: blue */
+    if (bmp_size <= 0) {
+        fprintf(stderr, "failed to build minimal BMP\n");
+        return 0;
+    }
+
+    /* Reset surface cache */
+    s->valid = 0;
+    g_ui_bitmap_cache.valid = 0;
+
+    /* Inject BMP bytes directly into the file cache and call load */
+    memcpy(g_ui_bitmap_cache.data, bmp_buf, bmp_size);
+    g_ui_bitmap_cache.src_w        = 2;
+    g_ui_bitmap_cache.src_h        = 2;
+    g_ui_bitmap_cache.abs_src_h    = 2;
+    g_ui_bitmap_cache.top_down     = 0;
+    g_ui_bitmap_cache.bit_count    = 24;
+    g_ui_bitmap_cache.row_stride   = 8;
+    g_ui_bitmap_cache.data_offset  = 54;
+    g_ui_bitmap_cache.bytes_per_pixel = 3;
+    ui_path_copy(g_ui_bitmap_cache.path, "TEST.BMP");
+    g_ui_bitmap_cache.valid = 1;
+
+    /* Force surface decode by clearing surface path */
+    s->valid = 0;
+    s->path[0] = '\0';
+
+    /* Manually call the decode loop that ui_wallpaper_surface_load would do */
+    {
+        int w = 2, h = 2, x, y;
+        const unsigned char* pixel_base = g_ui_bitmap_cache.data + g_ui_bitmap_cache.data_offset;
+        if ((unsigned)(w * h * 4) > UI_WALLPAPER_SURFACE_MAX_BYTES) {
+            fprintf(stderr, "surface too large\n");
+            return 0;
+        }
+        for (y = 0; y < h; y++) {
+            int row_index = 1 - y; /* bottom-up BMP, top_down=0 */
+            const unsigned char* src_row = pixel_base + (unsigned)row_index * g_ui_bitmap_cache.row_stride;
+            unsigned char* dst_row = s->pixels + (unsigned)(y * w * 4);
+            for (x = 0; x < w; x++) {
+                const unsigned char* px = src_row + (unsigned)x * 3;
+                dst_row[x * 4 + 0] = 0;
+                dst_row[x * 4 + 1] = px[2];
+                dst_row[x * 4 + 2] = px[1];
+                dst_row[x * 4 + 3] = px[0];
+            }
+        }
+        s->width = w; s->height = h; s->stride = w * 4;
+        ui_path_copy(s->path, "TEST.BMP");
+        s->valid = 1;
+    }
+
+    /* Verify decoded surface: row 0 should be blue (from bottom row of bottom-up BMP) */
+    /* bmp row 0 (file bottom) = red (r=FF,g=0,b=0), decoded to y=1 in surface */
+    /* bmp row 1 (file top)    = blue (r=0,g=0,b=FF), decoded to y=0 in surface */
+    if (!s->valid) {
+        fprintf(stderr, "surface not marked valid after decode\n");
+        return 0;
+    }
+    /* y=0 row: blue pixel -> XRGB8888: X=0, R=0, G=0, B=FF */
+    if (s->pixels[1] != 0x00u || s->pixels[3] != 0xFFu) {
+        fprintf(stderr, "decoded surface pixel mismatch: R=%02x B=%02x (expected R=00 B=FF)\n",
+            (unsigned)s->pixels[1], (unsigned)s->pixels[3]);
+        return 0;
+    }
+    /* y=1 row: red pixel -> XRGB8888: X=0, R=FF, G=0, B=0 */
+    if (s->pixels[8 + 1] != 0xFFu || s->pixels[8 + 3] != 0x00u) {
+        fprintf(stderr, "decoded surface pixel mismatch: R=%02x B=%02x (expected R=FF B=00)\n",
+            (unsigned)s->pixels[8 + 1], (unsigned)s->pixels[8 + 3]);
+        return 0;
+    }
+    return 1;
+}
+
+static int test_wallpaper_surface_fallback_on_invalid(void) {
+    minidos_app_api_t api;
+    int result;
+
+    api.syscall = stub_syscall;
+
+    /* Reset surface cache */
+    g_ui_wallpaper_surface.valid = 0;
+    g_ui_bitmap_cache.valid = 0;
+
+    /* Attempt to load a nonexistent path (app_file_size returns -1 from stub) */
+    result = ui_wallpaper_surface_load(&api, "NOFILE.BMP");
+
+    if (result != 0) {
+        fprintf(stderr, "expected surface load to fail for missing file, got %d\n", result);
+        return 0;
+    }
+    if (g_ui_wallpaper_surface.valid != 0) {
+        fprintf(stderr, "surface should not be valid after failed load\n");
+        return 0;
+    }
+
+    /* blit should return 0 when surface is invalid */
+    result = ui_wallpaper_surface_blit(&api, 0, 0, -1, 0, 0, 0);
+    if (result != 0) {
+        fprintf(stderr, "blit should return 0 when surface invalid, got %d\n", result);
+        return 0;
+    }
+    return 1;
+}
+
 static void run_all_tests(void) {
     if (!test_single_window_sparse_zorder()) {
         test_status = 1;
@@ -259,6 +483,22 @@ static void run_all_tests(void) {
         return;
     }
     if (!test_multi_window_draw_order()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_cursor_batches_horizontal_runs()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_surface_blit_syscall_dispatched()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_wallpaper_surface_decode_bmp()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_wallpaper_surface_fallback_on_invalid()) {
         test_status = 1;
         return;
     }

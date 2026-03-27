@@ -121,6 +121,22 @@ python3 tests/test_mouse_ui.py
 make test-mouse
 ```
 
+### 11. `tests/test_video_stress.py` - Teste de stress multithread da camada gráfica
+Este script valida a nova infraestrutura multithread do vídeo:
+- arranca o MiniDOS e aguarda a shell pronta
+- envia o comando `videostress` ao shell com parâmetros configuráveis
+- espera as mensagens `PTVIDEO100`, `PTVIDEO110` e `PTVIDEO200` para confirmar que os workers arrancaram e terminaram
+- garante que cada worker conclui as iterações e regista ticks/time para os benchmarks
+
+**Uso:**
+```bash
+python3 tests/test_video_stress.py
+```
+
+**Notas:**
+- não requer GUI
+- dá visibilidade imediata nos logs serial dos tempos médios da pipeline gráfica
+
 ### 7. `tests/test_phase3.py` - Regressão crítica de disco/FAT16 (Fase 3)
 Executa um cenário multi-disco/multi-partição crítico. O próprio teste:
 - cria discos virtuais de dados;

@@ -1,8 +1,10 @@
 #include "video_internal.h"
 #include "logger.h"
 #include "serial.h"
+#include "scheduler.h"
 
 #define VIDEO_BOOT_STATE_MAGIC 0x56494430u
+#define VIDEO_LOCK_OWNER_NONE (-2)
 
 typedef struct {
     u32 magic;
@@ -101,6 +103,40 @@ int video_backbuffer_present_h = 0;
  * banked framebuffer window and shows up as colored artifacts on screen.
  */
 char (*const text_buffer)[MAX_TEXT_COLS] = VIDEO_TEXT_BUFFER_BASE;
+
+static volatile int g_video_lock_flag = 0;
+static volatile int g_video_lock_owner = VIDEO_LOCK_OWNER_NONE;
+static volatile int g_video_lock_depth = 0;
+
+static int video_lock_owner_id(void) {
+    int pid = scheduler_get_current_pid();
+    return (pid < 0) ? -1 : pid;
+}
+
+void video_lock(void) {
+    int owner = video_lock_owner_id();
+    if (g_video_lock_owner == owner) {
+        g_video_lock_depth++;
+        return;
+    }
+    while (__sync_lock_test_and_set(&g_video_lock_flag, 1)) {
+        __asm__ volatile ("pause");
+    }
+    g_video_lock_owner = owner;
+    g_video_lock_depth = 1;
+}
+
+void video_unlock(void) {
+    int owner = video_lock_owner_id();
+    if (g_video_lock_owner != owner) {
+        return;
+    }
+    g_video_lock_depth--;
+    if (g_video_lock_depth == 0) {
+        g_video_lock_owner = VIDEO_LOCK_OWNER_NONE;
+        __sync_lock_release(&g_video_lock_flag);
+    }
+}
 
 static inline u8 mem8(u32 addr) {
     u8 val;
@@ -270,7 +306,7 @@ static u8 expand_6bit_to_8bit(u8 c) {
     return (u8)((c << 2) | (c >> 4));
 }
 
-void video_clear_dirty(void) {
+void video_clear_dirty_locked(void) {
     dirty_valid = 0;
     dirty_x = 0;
     dirty_y = 0;
@@ -280,11 +316,23 @@ void video_clear_dirty(void) {
     dirty_overflow = 0;
 }
 
-void video_disable_backbuffer(void) {
+void video_clear_dirty(void) {
+    video_lock();
+    video_clear_dirty_locked();
+    video_unlock();
+}
+
+void video_disable_backbuffer_locked(void) {
     backbuffer_ready = 0;
     backbuffer_pitch = 0;
     fast_present_mode = 0;
-    video_clear_dirty();
+    video_clear_dirty_locked();
+}
+
+void video_disable_backbuffer(void) {
+    video_lock();
+    video_disable_backbuffer_locked();
+    video_unlock();
 }
 
 __attribute__((noinline, regparm(0)))
@@ -312,7 +360,7 @@ int video_backbuffer_rect_fits(int x, int y, int w, int h) {
     return row_bytes <= (VIDEO_BACKBUFFER_MAX_BYTES - row_offset);
 }
 
-void video_note_dirty(int x, int y, int w, int h) {
+void video_note_dirty_locked(int x, int y, int w, int h) {
     int x0;
     int y0;
     int x1;
@@ -350,6 +398,12 @@ void video_note_dirty(int x, int y, int w, int h) {
     h = y1 - y0;
     video_update_dirty_union(x, y, w, h);
     video_record_dirty_rect(x, y, w, h);
+}
+
+void video_note_dirty(int x, int y, int w, int h) {
+    video_lock();
+    video_note_dirty_locked(x, y, w, h);
+    video_unlock();
 }
 
 void init_video_once(void) {
@@ -524,8 +578,10 @@ void video_fill_rect(int x, int y, int w, int h, unsigned int rgb) {
         return;
     }
 
-    fill_rect_rgb(x, y, w, h, rgb);
-    video_note_dirty(x, y, w, h);
+    video_lock();
+    fill_rect_rgb_locked(x, y, w, h, rgb);
+    video_note_dirty_locked(x, y, w, h);
+    video_unlock();
     video_maybe_present_pending();
 }
 
@@ -607,4 +663,79 @@ void video_draw_boot_gradient(unsigned int frame) {
 
     video_note_dirty(0, bar_y, fb_width, bar_h);
     video_maybe_present_pending();
+}
+
+#define VIDEO_STRESS_MAX_WORKERS 6
+
+typedef struct {
+    int id;
+    int iterations;
+    int screen_w;
+    int screen_h;
+    unsigned int color_base;
+} video_stress_job_t;
+
+static video_stress_job_t g_video_stress_jobs[VIDEO_STRESS_MAX_WORKERS];
+
+static void video_stress_worker(void* raw_job) {
+    video_stress_job_t* job = (video_stress_job_t*)raw_job;
+    if (!job) {
+        scheduler_exit_current_task();
+    }
+
+    int width = job->screen_w;
+    int height = job->screen_h;
+    if (width <= 0 || height <= 0 || job->iterations <= 0) {
+        scheduler_exit_current_task();
+    }
+
+    for (int i = 0; i < job->iterations; i++) {
+        int size = 16 + (i % 96);
+        int max_x = width - size;
+        if (max_x <= 0) {
+            max_x = 1;
+        }
+        int max_y = height - size;
+        if (max_y <= 0) {
+            max_y = 1;
+        }
+        int x = (i * 31 + job->id * 17) % max_x;
+        int y = (i * 29 + job->id * 13) % max_y;
+        u32 color = (job->color_base + (i * 0x00030301u)) & 0x00FFFFFFu;
+
+        video_fill_rect(x, y, size, size, color);
+        scheduler_yield();
+    }
+
+    log_serial_raw("PTVIDEO200\n");
+    scheduler_exit_current_task();
+}
+
+int video_start_stress_workers(int worker_count, int iterations) {
+    init_video_once();
+    if (!graphics_mode || worker_count <= 0 || iterations <= 0) {
+        return 0;
+    }
+
+    if (worker_count > VIDEO_STRESS_MAX_WORKERS) {
+        worker_count = VIDEO_STRESS_MAX_WORKERS;
+    }
+
+    int started = 0;
+    for (int i = 0; i < worker_count; i++) {
+        video_stress_job_t* job = &g_video_stress_jobs[i];
+        job->id = i;
+        job->iterations = iterations;
+        job->screen_w = fb_width;
+        job->screen_h = fb_height;
+        job->color_base = 0x00102030u + ((unsigned int)i * 0x00010101u);
+
+        int pid = scheduler_spawn_kernel_task("videostress", "videostress", 0, video_stress_worker, job, 0);
+        if (pid < 0) {
+            break;
+        }
+        started++;
+    }
+
+    return started;
 }

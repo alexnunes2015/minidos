@@ -5,6 +5,8 @@
 #define KEY_ESC   27
 #define KEY_SPACE 32
 #define TASKBAR_H 28
+/* User-supplied wallpaper BMP (optional; loaded once at startup) */
+#define WALLPAPER_BMP_PATH "BG.BMP"
 #define START_BUTTON_W 74
 #define START_BUTTON_H 20
 #define START_MENU_W 220
@@ -506,10 +508,14 @@ static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state
 
     ui_fill_rect(api, rect, state->wm.theme.desktop_bg);
     if (state->wm.theme.desktop_bg_bitmap) {
-        (void)ui_draw_bitmap_clipped(api,
-            state->wm.theme.desktop_bg_bitmap,
-            0, 0, state->sw, state->sh,
-            rect);
+        /* Fast path: use cached decoded surface with clip rect for dirty-rect restore */
+        if (!ui_wallpaper_surface_blit(api, 0, 0, rect.x, rect.y, rect.w, rect.h)) {
+            /* Fallback: slow per-pixel draw when surface not ready */
+            (void)ui_draw_bitmap_clipped(api,
+                state->wm.theme.desktop_bg_bitmap,
+                0, 0, state->sw, state->sh,
+                rect);
+        }
     }
 
     top_bar = ui_rect_intersect(rect, ui_rect_make(0, 0, state->sw, 2));
@@ -946,7 +952,11 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
-    state->wm.theme.desktop_bg_bitmap = "bg.bmp";
+
+    /* Preload wallpaper surface once; enables fast blit path in redraw_desktop_region */
+    if (ui_wallpaper_surface_load(api, WALLPAPER_BMP_PATH)) {
+        state->wm.theme.desktop_bg_bitmap = WALLPAPER_BMP_PATH;
+    }
 
     x = (state->sw - window_w) / 2;
     y = (state->sh - window_h) / 2;

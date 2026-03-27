@@ -12,6 +12,9 @@
 #define UI_BITMAP_MAX_FILE_SIZE (256 * 1024)
 #define UI_BITMAP_TRANSPARENT_COLOR 0xFF00FFu
 #define UI_BITMAP_PATH_MAX 128
+/* Max decoded XRGB8888 pixels for wallpaper surface (covers 24bpp source up to 256KB) */
+#define UI_WALLPAPER_SURFACE_MAX_BYTES (348160)
+
 typedef struct {
     char path[UI_BITMAP_PATH_MAX];
     int valid;
@@ -26,7 +29,18 @@ typedef struct {
     unsigned char data[UI_BITMAP_MAX_FILE_SIZE];
 } ui_bitmap_cache_t;
 
+/* Decoded XRGB8888 wallpaper surface, populated once from the BMP file cache */
+typedef struct {
+    char path[UI_BITMAP_PATH_MAX];
+    unsigned char pixels[UI_WALLPAPER_SURFACE_MAX_BYTES];
+    int width;
+    int height;
+    int stride;   /* bytes per row = width * 4 */
+    int valid;
+} ui_wallpaper_surface_t;
+
 static ui_bitmap_cache_t g_ui_bitmap_cache;
+static ui_wallpaper_surface_t g_ui_wallpaper_surface;
 
 static inline int ui_path_equal(const char* a, const char* b) {
     if (!a || !b) {
@@ -161,6 +175,94 @@ static int ui_bitmap_cache_load(const minidos_app_api_t* api, const char* path) 
     return 1;
 }
 
+/*
+ * Decode the loaded BMP file cache into the wallpaper surface as XRGB8888.
+ * Returns 1 on success, 0 if the BMP is too large, already cached, or not loaded.
+ * Falls back to 0 (invalid surface) silently on any error.
+ */
+static int ui_wallpaper_surface_load(const minidos_app_api_t* api, const char* path) {
+    ui_bitmap_cache_t* c;
+    ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
+    const unsigned char* pixel_base;
+    int w, h, y, x;
+    unsigned int total_bytes;
+
+    if (!api || !path) {
+        s->valid = 0;
+        return 0;
+    }
+
+    /* Already decoded for this path */
+    if (s->valid && ui_path_equal(s->path, path)) {
+        return 1;
+    }
+
+    s->valid = 0;
+
+    if (!ui_bitmap_cache_load(api, path)) {
+        return 0;
+    }
+
+    c = &g_ui_bitmap_cache;
+    w = c->src_w;
+    h = c->abs_src_h;
+    total_bytes = (unsigned int)(w * h * 4);
+
+    if (w <= 0 || h <= 0 || total_bytes > UI_WALLPAPER_SURFACE_MAX_BYTES) {
+        return 0;
+    }
+
+    pixel_base = c->data + c->data_offset;
+
+    for (y = 0; y < h; y++) {
+        int row_index = c->top_down ? y : (h - 1 - y);
+        const unsigned char* src_row = pixel_base + (unsigned int)row_index * c->row_stride;
+        unsigned char* dst_row = s->pixels + (unsigned int)(y * w * 4);
+
+        for (x = 0; x < w; x++) {
+            const unsigned char* px = src_row + (unsigned int)x * c->bytes_per_pixel;
+            /* BMP is BGR; surface is XRGB8888: byte order X, R, G, B */
+            dst_row[x * 4 + 0] = 0;       /* X */
+            dst_row[x * 4 + 1] = px[2];   /* R */
+            dst_row[x * 4 + 2] = px[1];   /* G */
+            dst_row[x * 4 + 3] = px[0];   /* B */
+        }
+    }
+
+    s->width  = w;
+    s->height = h;
+    s->stride = w * 4;
+    ui_path_copy(s->path, path);
+    s->valid = 1;
+    return 1;
+}
+
+/*
+ * Blit the wallpaper surface at (dst_x, dst_y) using the fast surface syscall.
+ * clip_x/y/w/h: region to restore (-1 to blit full surface).
+ * Returns 1 on success, 0 if surface not loaded.
+ */
+static inline int ui_wallpaper_surface_blit(const minidos_app_api_t* api, int dst_x, int dst_y, int clip_x, int clip_y, int clip_w, int clip_h) {
+    ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
+    app_gfx_surface_blit_t blit;
+
+    if (!s->valid) {
+        return 0;
+    }
+
+    blit.buffer = s->pixels;
+    blit.width  = s->width;
+    blit.height = s->height;
+    blit.stride = s->stride;
+    blit.format = APP_SURFACE_FORMAT_XRGB8888;
+    blit.dest_x = dst_x;
+    blit.dest_y = dst_y;
+    blit.clip_x = clip_x;
+    blit.clip_y = clip_y;
+    blit.clip_w = clip_w;
+    blit.clip_h = clip_h;
+    return app_gfx_surface_blit(api, &blit);
+}
 
 typedef struct {
     int x;
@@ -1502,21 +1604,29 @@ static inline void ui_draw_desktop(const minidos_app_api_t* api, const ui_theme_
 
 static inline void ui_draw_cursor(const minidos_app_api_t* api, int x, int y, unsigned int fill, unsigned int outline) {
     int row;
-    int col;
     int draw_x = x - UI_CURSOR_HOTSPOT_X;
     int draw_y = y - UI_CURSOR_HOTSPOT_Y;
 
     for (row = 0; row < UI_CURSOR_BITMAP_HEIGHT; row++) {
-        for (col = 0; col < UI_CURSOR_BITMAP_WIDTH; col++) {
+        int col = 0;
+
+        while (col < UI_CURSOR_BITMAP_WIDTH) {
             unsigned char pixel = ui_cursor_bitmap[(row * UI_CURSOR_BITMAP_WIDTH) + col];
+            int start;
             unsigned int color;
 
             if (pixel == UI_CURSOR_PIXEL_TRANSPARENT) {
+                col++;
                 continue;
             }
 
+            start = col;
             color = (pixel == UI_CURSOR_PIXEL_OUTLINE) ? outline : fill;
-            ui_fill_rect(api, ui_rect_make(draw_x + col, draw_y + row, 1, 1), color);
+            while (col < UI_CURSOR_BITMAP_WIDTH
+                && ui_cursor_bitmap[(row * UI_CURSOR_BITMAP_WIDTH) + col] == pixel) {
+                col++;
+            }
+            ui_fill_rect(api, ui_rect_make(draw_x + start, draw_y + row, col - start, 1), color);
         }
     }
 }

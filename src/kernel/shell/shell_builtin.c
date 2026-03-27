@@ -649,6 +649,7 @@ static int shell_builtin_cmd_help(const shell_builtin_host_t* host) {
     host->out_screen("  box <x> <y> <w> <h> <rgb>  - Draw rectangle border\n");
     host->out_screen("  text <x> <y> <fg> <bg> <msg> - Draw text\n");
     host->out_screen("  window <x> <y> <w> <h> <title> - Draw simple window\n");
+    host->out_screen("  videostress [workers] [iterations] - Run multi-thread video stress test\n");
     host->out_screen("  help          - This help\n");
     return 1;
 }
@@ -940,6 +941,59 @@ static int shell_builtin_cmd_window(const shell_builtin_host_t* host, const char
     return 1;
 }
 
+static int shell_builtin_cmd_videostress(const shell_builtin_host_t* host, const char* args) {
+    if (!shell_builtin_host_valid(host)) {
+        return 0;
+    }
+
+    unsigned int params[2] = {0, 0};
+    const char* rest = 0;
+    unsigned int workers = 0;
+    unsigned int iterations = 0;
+
+    if (args && args[0] != '\0') {
+        if (!shell_builtin_parse_n_uints(args, params, 2, &rest) || (rest && rest[0] != '\0')) {
+            host->out_both("Usage: videostress [workers] [iterations]\n");
+            return 1;
+        }
+        workers = params[0];
+        iterations = params[1];
+    }
+
+    if (workers == 0) {
+        workers = 2;
+    }
+    if (iterations == 0) {
+        iterations = 120;
+    }
+
+    char buf[16];
+    int len;
+
+    host->out_both("PTVIDEO100 start workers=");
+    len = shell_builtin_uint_to_dec(workers, buf);
+    buf[len] = '\0';
+    host->out_both(buf);
+
+    host->out_both(" iterations=");
+    len = shell_builtin_uint_to_dec(iterations, buf);
+    buf[len] = '\0';
+    host->out_both(buf);
+
+    int started = video_start_stress_workers((int)workers, (int)iterations);
+    host->out_both(" started=");
+    len = shell_builtin_uint_to_dec((unsigned int)started, buf);
+    buf[len] = '\0';
+    host->out_both(buf);
+    host->out_both("\n");
+
+    if (started < (int)workers) {
+        host->out_both("PTVIDEO110 limited by scheduler slots\n");
+    }
+
+    return 1;
+}
+
 int shell_builtin_try_execute(const shell_builtin_host_t* host, const char* command, const char* args) {
     if (!shell_builtin_host_valid(host) || !command || !args) {
         return 0;
@@ -997,6 +1051,9 @@ int shell_builtin_try_execute(const shell_builtin_host_t* host, const char* comm
     }
     if (shell_builtin_mystrcmp(command, "window") == 0) {
         return shell_builtin_cmd_window(host, args);
+    }
+    if (shell_builtin_mystrcmp(command, "videostress") == 0) {
+        return shell_builtin_cmd_videostress(host, args);
     }
     if (shell_builtin_mystrcmp(command, "dmesg") == 0) {
         log_dump_buffer(LOG_DEST_BOTH);

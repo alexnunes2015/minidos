@@ -1310,6 +1310,14 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         return 1;
     }
 
+    if (num == MINIDOS_SYSCALL_GFX_SURFACE_BLIT) {
+        app_gfx_surface_blit_t blit;
+        if (task->background || !shell_apps_copy_user_bytes(task, (const void*)a0, &blit, sizeof(blit))) return 0;
+        if (!blit.buffer || blit.width <= 0 || blit.height <= 0 || blit.stride <= 0) return 0;
+        if (!shell_apps_user_range_valid(task, (unsigned int)blit.buffer, (unsigned int)(blit.height * blit.stride))) return 0;
+        return video_blit_surface_desc(&blit);
+    }
+
     if (num == MINIDOS_SYSCALL_CHDIR) {
         int result = 0;
         int previous_drive = 0;

@@ -36,6 +36,9 @@ make gdb-kernel
 - `[paging] enabled`
 - `paging self-test OK`
 - `[video] init fb=... w=... h=... pitch=... bpp=... bb=... bp=... fast=...`
+- `PTVIDEO100 start workers=... iterations=... started=...` when the `videostress` command launches worker threads
+- `PTVIDEO110 limited by scheduler slots` when the stress test could not start all requested workers
+- `PTVIDEO200 worker=<n> ticks=<t> iterations=<i>` when a stress worker exits with timing info
 - `[kbd] scan set 1 selected (translation on)` or `[kbd] scan set 2 selected (translation off)`
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`

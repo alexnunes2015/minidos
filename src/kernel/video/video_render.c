@@ -39,6 +39,16 @@ void write_frontbuffer_pixel(volatile u8* dst, u32 rgb) {
 }
 
 void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb) {
+    if (!graphics_mode || w <= 0 || h <= 0) {
+        return;
+    }
+
+    video_lock();
+    fill_frontbuffer_rect_rgb_locked(x, y, w, h, rgb);
+    video_unlock();
+}
+
+void fill_frontbuffer_rect_rgb_locked(int x, int y, int w, int h, u32 rgb) {
     int x0;
     int y0;
     int x1;
@@ -90,6 +100,16 @@ void fill_frontbuffer_rect_rgb(int x, int y, int w, int h, u32 rgb) {
 }
 
 void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
+    if (!graphics_mode || w <= 0 || h <= 0) {
+        return;
+    }
+
+    video_lock();
+    fill_rect_rgb_locked(x, y, w, h, rgb);
+    video_unlock();
+}
+
+void fill_rect_rgb_locked(int x, int y, int w, int h, u32 rgb) {
     int x0;
     int y0;
     int x1;
@@ -129,7 +149,7 @@ void fill_rect_rgb(int x, int y, int w, int h, u32 rgb) {
 
     if (backbuffer_ready) {
         if (!video_backbuffer_rect_fits(x, y, w, h)) {
-            video_disable_backbuffer();
+            video_disable_backbuffer_locked();
         } else {
             video_backbuffer_fill_base = video_backbuffer + (y * backbuffer_pitch) + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL);
             video_backbuffer_fill_pitch = backbuffer_pitch;
@@ -158,9 +178,19 @@ void draw_pixel(int x, int y, u32 rgb) {
         return;
     }
 
+    video_lock();
+    draw_pixel_locked(x, y, rgb);
+    video_unlock();
+}
+
+void draw_pixel_locked(int x, int y, u32 rgb) {
+    if (x < 0 || x >= fb_width || y < 0 || y >= fb_height) {
+        return;
+    }
+
     if (backbuffer_ready) {
         if (!video_backbuffer_rect_fits(x, y, 1, 1)) {
-            video_disable_backbuffer();
+            video_disable_backbuffer_locked();
         } else {
             volatile u32* p = (volatile u32*)(void*)(video_backbuffer + (y * backbuffer_pitch)
                 + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
@@ -204,4 +234,78 @@ void video_note_cell(int col, int row) {
 
 void video_note_text_area(void) {
     video_note_dirty(text_origin_x, text_origin_y, text_cols * FONT_W, text_rows * FONT_H);
+}
+
+int video_blit_surface_desc(const void* d) {
+    /* Local mirror of app_gfx_surface_blit_t (must match runtime layout) */
+    typedef struct {
+        const unsigned char* buffer;
+        int width;
+        int height;
+        int stride;
+        int format;
+        int dest_x;
+        int dest_y;
+        int clip_x;
+        int clip_y;
+        int clip_w;
+        int clip_h;
+    } blit_desc_t;
+
+    const blit_desc_t* b;
+    int x0, y0, x1, y1;
+    int py;
+
+    if (!d || !graphics_mode) {
+        return 0;
+    }
+
+    b = (const blit_desc_t*)d;
+
+    if (!b->buffer || b->width <= 0 || b->height <= 0 || b->stride <= 0) {
+        return 0;
+    }
+
+    /* Full destination rect */
+    x0 = b->dest_x;
+    y0 = b->dest_y;
+    x1 = b->dest_x + b->width;
+    y1 = b->dest_y + b->height;
+
+    /* Apply clip rect when valid */
+    if (b->clip_w > 0 && b->clip_h > 0) {
+        if (b->clip_x             > x0) x0 = b->clip_x;
+        if (b->clip_y             > y0) y0 = b->clip_y;
+        if (b->clip_x + b->clip_w < x1) x1 = b->clip_x + b->clip_w;
+        if (b->clip_y + b->clip_h < y1) y1 = b->clip_y + b->clip_h;
+    }
+
+    /* Clamp to framebuffer */
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > fb_width)  x1 = fb_width;
+    if (y1 > fb_height) y1 = fb_height;
+
+    if (x0 >= x1 || y0 >= y1) {
+        return 1;
+    }
+
+    video_lock();
+
+    for (py = y0; py < y1; py++) {
+        int px;
+        int src_y = py - b->dest_y;
+        const unsigned char* src_row = b->buffer + (unsigned int)(src_y * b->stride);
+
+        for (px = x0; px < x1; px++) {
+            int src_x = px - b->dest_x;
+            /* XRGB8888: byte[0]=X, byte[1]=R, byte[2]=G, byte[3]=B */
+            const unsigned char* p = src_row + (unsigned int)(src_x * 4);
+            u32 rgb = ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
+            draw_pixel_locked(px, py, rgb);
+        }
+    }
+
+    video_unlock();
+    return 1;
 }
