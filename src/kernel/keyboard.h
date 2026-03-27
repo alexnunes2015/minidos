@@ -1,13 +1,7 @@
-#ifndef KEYBOARD_H
-#define KEYBOARD_H
+#ifndef KERNEL_KEYBOARD_COMPAT_H
+#define KERNEL_KEYBOARD_COMPAT_H
 
-void keyboard_read_line(char* buffer, int max_len);
-char keyboard_get_char();
-int keyboard_try_get_char(char* out);
-int keyboard_has_input(void);
-void keyboard_init(void);
-void keyboard_flush(void);
-void keyboard_handle_irq(void);
-void keyboard_set_irq_mode(int enabled);
+/* Preserve legacy include paths while keeping input/keyboard.h authoritative. */
+#include "input/keyboard.h"
 
 #endif

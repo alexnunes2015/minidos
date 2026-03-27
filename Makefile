@@ -131,7 +131,8 @@ minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.b
 	@./scripts/build_disk.sh
 
 clean:
-	rm -rf $(BUILD_DIR) minidos.img
+	rm -rf $(BUILD_DIR) minidos.img .venv
+	find tests -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 verify-image: minidos.img scripts/verify_image.sh
 	bash scripts/verify_image.sh
@@ -185,6 +186,9 @@ test-multitask-com: minidos.img
 test-user-isolation: minidos.img
 	python3 tests/test_user_isolation.py
 
+test-storage-failure: minidos.img
+	python3 tests/test_storage_failure.py
+
 full-test:
 	$(MAKE) clean
 	$(MAKE) all
@@ -200,6 +204,7 @@ full-test:
 	$(MAKE) test-multitask
 	$(MAKE) test-multitask-com
 	$(MAKE) test-user-isolation
+	$(MAKE) test-storage-failure
 
 ci:
 	$(MAKE) clean
@@ -215,6 +220,7 @@ ci:
 	$(MAKE) test-multitask
 	$(MAKE) test-multitask-com
 	$(MAKE) test-user-isolation
+	$(MAKE) test-storage-failure
 
 test: test-help test-ver test-drives
 

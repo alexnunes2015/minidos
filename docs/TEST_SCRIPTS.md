@@ -121,6 +121,23 @@ python3 tests/test_mouse_ui.py
 make test-mouse
 ```
 
+### 10. `tests/test_storage_failure.py` - Validação de degradação de storage
+Valida o caminho de falha de storage onde `root_entries` inválido faz o kernel abortar com marcadores deterministas:
+- copia o disco `minidos.img` para um temporário e zera os campos `root_entries` do BPB;
+- arranca o MiniDOS contra essa imagem alterada;
+- espera os marcadores `DISK021` e `STOP 0x00000004` para comprovar que o kernel detecta a ausência de um volume válido e entra numa parada controlada;
+- o teste termina após o BSOD determinista, garantindo que não há reinvenção de `A:` nem scripts silenciosos.
+
+**Uso:**
+```bash
+python3 tests/test_storage_failure.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-storage-failure
+```
+
 ### 11. `tests/test_video_stress.py` - Teste de stress multithread da camada gráfica
 Este script valida a nova infraestrutura multithread do vídeo:
 - arranca o MiniDOS e aguarda a shell pronta
@@ -185,6 +202,7 @@ Valida o runtime real do scheduler e a proteção de memória por guard page:
 - confirma o boot do scheduler com `SCHED100`, `SCHED110`, `SCHED120` e `SCHED190`;
 - exige que o self-test da fase termine antes do shell entrar no loop principal;
 - no modo negativo (`--expect-guard`), recompila com `SCHED_TEST_GUARD` e espera `SCHED150`, `SCHED900` e `[paging] #PF detected`;
+- falhas fatais no bootstrap do scheduler passam a expor `STOP 0x00000006` ou `STOP 0x00000007` no serial antes do BSOD;
 - garante que overflow/fuga para a guard page vira falha observável, em vez de corrupção silenciosa de stack.
 
 **Uso:**
@@ -330,25 +348,31 @@ Todos os testes mostram a saída serial que inclui:
 - `BOOT100` - Splash do kernel ativado
 - `BOOT110` - `BOOTLOGO.DAT` / `BOOTLOGO.PAL` carregados com sucesso
 - `BOOT190` - Splash fechado e shell prestes a assumir o ecrã
+- `BOOT300` - Modo degradado: storage indisponível para processar `AUTOEXEC.AUT`, mas o shell continua a arrancar
 - `[Stage2] Loading kernel...` - Kernel sendo carregado
 - `[Stage2] Kernel loaded` - Kernel pronto
 - `[Stage2] Entering PM...` - Transição para modo protegido
-- `[kbd] scan set 1 selected (translation on)` / `[kbd] scan set 2 selected (translation off)` - Decoder do teclado alinhado com o modo do controlador PS/2
+- `[kbd] scan set 1` / `[kbd] scan set 2` - Decoder do teclado alinhado com o modo do controlador PS/2 (set 1 = translation on, set 2 = translation off)
 - `[mouse] PS/2 mouse enabled on IRQ12` - Porta auxiliar PS/2 ativa e reporting ligado
 - `[mouse] first packet received` - Primeiro pacote de rato observado em runtime
 - `APPIN001` / `APPRET001` - Contrato serial de entrada e retorno de apps interativas
+- `DISK021` - Nenhum volume de boot/partição válido foi detetado; o shell continua sem inventar `A:`
 - `APPFLT900` - Fault de userland contido à app/grupo atual
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled` - Caminho de interrupções ativo
 - `SCHED100` / `SCHED110` / `SCHED120` / `SCHED190` - Bootstrap e self-test positivo do scheduler/runtime
 - `SCHED150` / `SCHED900` - Armamento do teste negativo e fault de guard page identificado
+- `STOP 0x00000006` / `STOP 0x00000007` - Hard-fail auditavel do bootstrap do scheduler antes da shell
 - `[sched] phase5 context-switch self-test OK` - Self-test de scheduler concluído
 - `[paging] init` / `[paging] enabled` - Sequência de ativação de paging
 - `paging self-test OK` - Self-test de mapeamento concluído
 - `[paging] #PF detected` + `CR2=...` - Diagnóstico de page fault (teste negativo)
+- `MiniDOS Shell Ready.` - Shell initialized and printed the ready prompt message.
+- `[INFO][kernel] Entering main loop` - Scheduler-enabled interactive loop is now active.
+- `SHELL100` - Deterministic marker that signals the shell is ready for scripted command injection.
 
 **Nota:** O `stage2` já avança a janela `ES` ao carregar kernels acima de `64 KiB`, por isso o `kernel_sectors` pode ultrapassar `128` sem corromper o payload carregado.
 
-**Nota:** Entre `BOOT100` e `BOOT110`, o placeholder visual é um ecrã preto com cursor a piscar. Depois de `BOOT110`, o logo passa a ocupar o ecrã e o shell só toma controlo após 5 segundos dessa janela visual. Compare `BOOT100`, `BOOT110`, `Initializing disk driver...`, `Detecting drives and partitions...` e `BOOT190` para separar tempo real de I/O da espera visual final.
+**Nota:** Entre `BOOT100` e `BOOT110`, o placeholder visual é um ecrã preto com cursor a piscar. Depois de `BOOT110`, o logo passa a ocupar o ecrã e o shell só toma controlo após 5 segundos dessa janela visual. Compare `BOOT100`, `BOOT110`, `Initializing disk driver...`, `Detecting drives and partitions...`, `BOOT190` e `BOOT300` para separar tempo real de I/O da espera visual final e distinguir um boot normal de um arranque em modo degradado sem `AUTOEXEC.AUT`.
 
 **Nota:** `ps` e `top` reportam tarefas visíveis ao scheduler. O campo `mem` ainda significa apenas reserva de stack do kernel mais guard page; não é RSS real e também não inclui o slot user de 1 MiB mapeado para apps em ring3.
 

@@ -11,11 +11,14 @@ import time
 import subprocess
 
 from qemu_harness import (
+    KBD_READY_MARKERS,
     build_floppy_qemu_cmd,
     read_until,
     resolve_disk_path,
     spawn_qemu,
     terminate_process,
+    wait_for_marker_sequence,
+    wait_for_shell_ready,
 )
 
 def _qmp_read_line(qmp_sock, timeout=2.0):
@@ -55,6 +58,10 @@ def _qmp_exec(qmp_sock, cmd, args=None):
         if "error" in obj:
             raise RuntimeError(f"QMP command failed: {obj['error']}")
     raise RuntimeError(f"QMP timeout for command: {cmd}")
+
+
+def _qmp_socket_root() -> str:
+    return "/tmp"
 
 
 def _qmp_connect(socket_path, timeout_s=10.0):
@@ -221,7 +228,9 @@ def main():
         print(f"ERROR: disk image not found: {disk_path}", file=sys.stderr)
         return 2
 
-    qmp_socket = os.path.join(tempfile.gettempdir(), f"minidos-qmp-{os.getpid()}.sock")
+    qmp_dir = os.environ.get("TMPDIR_QMP", _qmp_socket_root())
+    os.makedirs(qmp_dir, exist_ok=True)
+    qmp_socket = os.path.join(qmp_dir, f"minidos-qmp-{os.getpid()}.sock")
     try:
         os.unlink(qmp_socket)
     except FileNotFoundError:
@@ -237,20 +246,19 @@ def main():
 
     qmp_sock = None
     try:
-        ready_markers = [
-            "Entering main loop",
-            "Failed to bind socket",
-            "Operation not permitted",
-        ]
-        log, matched = read_until(proc, ready_markers, args.ready_timeout, echo=not args.quiet)
-        if not matched:
-            print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
-            return 1
+        log, matched = wait_for_shell_ready(
+            proc,
+            args.ready_timeout,
+            echo=not args.quiet,
+        )
         if "Failed to bind socket" in log or "Operation not permitted" in log:
             if args.soft_skip_env:
                 print("SKIP: QMP/socket blocked by environment restrictions", file=sys.stderr)
                 return 0
             print("ERROR: QMP/socket blocked by environment restrictions", file=sys.stderr)
+            return 1
+        if not matched:
+            print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
             return 1
 
         try:
@@ -260,6 +268,16 @@ def main():
                 print(f"SKIP: QMP unavailable in this environment ({exc})", file=sys.stderr)
                 return 0
             raise
+
+        kbd_log, kbd_matched = wait_for_marker_sequence(
+            proc,
+            [KBD_READY_MARKERS],
+            args.ready_timeout,
+            echo=not args.quiet,
+        )
+        if not kbd_matched:
+            raise RuntimeError("timeout waiting for keyboard-ready marker")
+        log += kbd_log
 
         if "APPIN001" in log or _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is not None:
             _send_key(qmp_sock, "esc")

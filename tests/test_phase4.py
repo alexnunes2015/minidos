@@ -14,6 +14,7 @@ from qemu_harness import (
     send_line,
     spawn_qemu,
     terminate_process,
+    wait_for_marker,
     wait_for_shell_ready,
 )
 
@@ -54,12 +55,6 @@ def send_text(proc, text):
     proc.stdin.flush()
 
 
-def wait_for_marker(proc, marker, timeout_s):
-    _, matched = read_until(proc, [marker], timeout_s=timeout_s)
-    if not matched:
-        raise RuntimeError(f"Timeout waiting for marker: {marker}")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Validate foreground ELF execution path")
     parser.add_argument("--disk", default="minidos.img")
@@ -80,16 +75,9 @@ def main():
     proc = spawn_qemu(qemu_cmd)
 
     try:
-        ready_deadline = time.time() + 30.0
         ready_log, matched = wait_for_shell_ready(proc, 30.0)
         if not matched:
             raise RuntimeError("timeout waiting for shell readiness")
-        if matched != "Entering main loop":
-            remaining = max(0.1, ready_deadline - time.time())
-            extra_log, matched = read_until(proc, ["Entering main loop"], timeout_s=remaining)
-            ready_log += extra_log
-            if not matched:
-                raise RuntimeError("shell banner appeared before main loop became ready")
         ready_log, _ = dismiss_default_gui(proc, ready_log, 8.0, echo=True)
         out = send_cmd(proc, "elfls", ["STRESS"])
         if "HELLOELF.ELF" not in out or "STATELF" not in out or "STRESS" not in out:

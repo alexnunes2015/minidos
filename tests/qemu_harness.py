@@ -4,12 +4,31 @@ import subprocess
 import time
 
 
-DEFAULT_SHELL_READY_MARKERS = [
-    "Entering main loop",
-    "MiniDOS Shell Ready.",
-    "MiniDOS Shell Ready",
-    "MiniDOS v0.1 Kernel Started",
+STAGE2_READY_MARKERS = [
+    "[Stage2] Entering PM...",
 ]
+
+BOOT_READY_MARKERS = [
+    "BOOT100",
+    "BOOT110",
+    "BOOT190",
+    "BOOT300",
+]
+
+SCHED_READY_MARKERS = [
+    "SCHED190",
+]
+
+SHELL_READY_MARKERS = [
+    "SHELL100",
+    "Entering main loop",
+]
+
+KBD_READY_MARKERS = ["[kbd] scan set 1", "[kbd] scan set 2"]
+
+MOUSE_READY_MARKERS = ["[mouse] PS/2 mouse enabled on IRQ12", "[mouse] first packet received"]
+
+SHELL_PROMPT_MARKERS = ["MiniDOS Shell Ready.", "MiniDOS Shell Ready"]
 
 
 def repo_root():
@@ -90,11 +109,98 @@ def read_until(proc, patterns, timeout_s, *, echo=True, max_buf=40000):
     return buf, None
 
 
+def wait_for_marker_sequence(proc, marker_groups, timeout_s, *, echo=True, max_buf=60000):
+    log = ""
+    deadline = time.time() + timeout_s
+    last_matched = None
+
+    for group in marker_groups:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return log, None
+        chunk, matched = read_until(
+            proc,
+            list(group),
+            remaining,
+            echo=echo,
+            max_buf=max_buf,
+        )
+        log += chunk
+        if not matched:
+            return log, None
+        last_matched = matched
+
+    return log, last_matched
+
+
+def wait_for_marker(proc, marker, timeout_s, *, echo=True, max_buf=40000):
+    log, matched = read_until(proc, [marker], timeout_s, echo=echo, max_buf=max_buf)
+    if not matched:
+        raise RuntimeError(f"timeout waiting for marker: {marker}")
+    return log
+
+
 def wait_for_shell_ready(proc, timeout_s, *, echo=True, extra_markers=None):
-    markers = list(DEFAULT_SHELL_READY_MARKERS)
+    def _wait_group(group):
+        nonlocal total_log
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return None
+        chunk, matched = read_until(proc, list(group), remaining, echo=echo, max_buf=60000)
+        total_log += chunk
+        return matched
+
+    total_log = ""
+    deadline = time.time() + timeout_s
+
+    for group in (STAGE2_READY_MARKERS, BOOT_READY_MARKERS, SCHED_READY_MARKERS):
+        matched = _wait_group(group)
+        if not matched:
+            return total_log, None
+
+    shell_log, seen = _collect_markers(proc, SHELL_READY_MARKERS, deadline, echo=echo, max_buf=60000)
+    total_log += shell_log
+    if not all(marker in seen for marker in SHELL_READY_MARKERS):
+        return total_log, None
+
+    prompt_marker = next((marker for marker in SHELL_PROMPT_MARKERS if marker in total_log), None)
+    if not prompt_marker:
+        remaining = max(0.1, deadline - time.time())
+        prompt_chunk, prompt_marker = read_until(proc, SHELL_PROMPT_MARKERS, remaining, echo=echo, max_buf=60000)
+        total_log += prompt_chunk
+        if not prompt_marker:
+            return total_log, None
+
+    final_marker = prompt_marker
+
     if extra_markers:
-        markers.extend(extra_markers)
-    return read_until(proc, markers, timeout_s, echo=echo, max_buf=60000)
+        matched = _wait_group(extra_markers)
+        if not matched:
+            return total_log, None
+        final_marker = matched
+
+    return total_log, final_marker
+
+
+def _collect_markers(proc, markers, deadline, *, echo=True, max_buf=60000):
+    log = ""
+    found = set()
+
+    while time.time() < deadline and len(found) < len(markers):
+        remaining = deadline - time.time()
+        chunk, _ = read_until(proc, markers, max(0.1, remaining), echo=echo, max_buf=max_buf)
+        log += chunk
+        for marker in markers:
+            if marker in log:
+                found.add(marker)
+        if not chunk:
+            break
+
+    for marker in markers:
+        if marker in log:
+            found.add(marker)
+
+    return log, found
 
 
 def dismiss_default_gui(proc, initial_log, timeout_s, *, echo=True):

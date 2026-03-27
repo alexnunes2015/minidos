@@ -8,6 +8,12 @@ This project is optimized for an AI-agent-first workflow. The human sets directi
 - The agent owns implementation, local validation, and documentation updates.
 - Every non-trivial change must leave the repository in a more observable and more reproducible state than before.
 
+## Contract Sources
+
+- `docs/contracts.md` is the source of truth for subsystem invariants, failure classes, marker IDs, owner buckets, and storage-policy statements.
+- `docs/DEBUGGING.md` and `docs/TEST_SCRIPTS.md` must consume the marker catalog from `docs/contracts.md` instead of inventing parallel names.
+- `docs/ROADMAP.md` must use evidence-linked status labels that reflect the current repository state, not historical optimism.
+
 ## Non-Negotiable Rules
 
 - One task must have one primary subsystem owner: `boot`, `disk image`, `paging/interrupts`, `disk/FAT`, `shell`, `scheduler`, `userland`, `docs/tooling`.
@@ -15,6 +21,12 @@ This project is optimized for an AI-agent-first workflow. The human sets directi
 - Any change that modifies observable behavior must update at least one automated test or one explicit validation command.
 - Any change that modifies architecture, image layout, syscall surface, debug markers, or boot flow must update the corresponding docs in the same task.
 - A task is not done until the agent reports the exact commands run and whether they passed.
+
+## Subsystem Ownership Notes
+
+- Keyboard input stays in the `paging/interrupts` owner bucket, but the authoritative implementation path is `src/kernel/input/keyboard.c` with the canonical interface in `src/kernel/input/keyboard.h`.
+- `src/kernel/keyboard.h` is compatibility-only and must remain a thin shim instead of reintroducing a second keyboard API surface.
+- Shared PS/2 controller helpers for keyboard and mouse live in `src/kernel/input/ps2_controller.h`; do not duplicate those wait/read/write loops inside leaf drivers.
 
 ## Required Workflow Per Task
 
@@ -65,6 +77,8 @@ A task is complete only when all of the following are true:
 
 - Every new critical path must emit stable serial markers.
 - Prefer deterministic markers over prose. Good: `BOOT012`, `DISK021`, `IRQ001`.
+- Treat `SHELL100` as the canonical marker for injected shell readiness; harnesses should wait for it instead of arbitrary delays.
+- Publish or update the marker contract in `docs/contracts.md` whenever IDs are added, reassigned, or promoted from prose to a testable contract.
 - Panics, faults, and exception paths must print enough context to localize failure quickly.
 - If a failure cannot be localized from serial output in under a minute, the debug surface is insufficient.
 
@@ -74,6 +88,7 @@ A task is complete only when all of the following are true:
 - Avoid each script inventing its own shell-ready heuristics.
 - Prefer explicit acceptance markers over timing sleeps.
 - Add at least one negative test for new disk, parsing, or exception behavior.
+- The storage stack is covered by `tests/test_storage_failure.py`, which asserts `DISK021` + `STOP 0x00000004`; new disk regressions should reuse that pattern.
 - If a test is flaky twice, stop feature work and fix the test contract first.
 
 ## Change Boundaries

@@ -1,20 +1,10 @@
 #include "keyboard.h"
 #include "logger.h"
+#include "ps2_controller.h"
 #include "video.h"
 #include "timer.h"
 
 #define KEY_ALT_EVENT 0x14
-
-// I/O Port functions
-static inline unsigned char inb(unsigned short port) {
-    unsigned char val;
-    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
-    return val;
-}
-
-static inline void outb(unsigned short port, unsigned char val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
 
 // Keyboard state
 static int shift_pressed = 0;
@@ -262,37 +252,6 @@ static int keyboard_is_duplicate_make(unsigned char scancode, int extended, int 
     return 0;
 }
 
-static int keyboard_wait_input_empty(void) {
-    for (int i = 0; i < 100000; i++) {
-        if ((inb(0x64) & 0x02) == 0) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int keyboard_wait_output_full(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(0x64) & 0x01) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static unsigned char keyboard_read_controller_command_byte(void) {
-    if (!keyboard_wait_input_empty()) {
-        return 0x40;
-    }
-
-    outb(0x64, 0x20);
-    if (!keyboard_wait_output_full()) {
-        return 0x40;
-    }
-
-    return inb(0x60);
-}
-
 static char keyboard_process_scancode_set1(unsigned char scancode) {
     if (scancode == 0xE0) {
         extended_code = 1;
@@ -495,13 +454,13 @@ static int keyboard_poll_one_char(char* out) {
         return 0;
     }
 
-    status = inb(0x64);
-    if ((status & 0x01) == 0 || (status & 0x20) != 0) {
+    status = ps2_read_status();
+    if ((status & PS2_STATUS_OUTPUT_FULL) == 0 || (status & PS2_STATUS_AUX_DATA) != 0) {
         return 0;
     }
 
     {
-        unsigned char scancode = inb(0x60);
+        unsigned char scancode = ps2_inb(PS2_PORT_DATA);
         int extended = extended_code;
         int break_event = 0;
         int track_scancode = 1;
@@ -534,7 +493,7 @@ static int keyboard_poll_one_char(char* out) {
 }
 
 void keyboard_init(void) {
-    unsigned char command_byte = keyboard_read_controller_command_byte();
+    unsigned char command_byte = ps2_read_controller_command_byte(0x40);
 
     shift_pressed = 0;
     ctrl_pressed = 0;
@@ -554,18 +513,15 @@ void keyboard_init(void) {
     key_tail = 0;
 
     if (scancode_set == 2) {
-        log_serial_raw("[kbd] scan set 2 selected (translation off)\n");
+        log_serial_raw("[kbd] scan set 2\n");
     } else {
-        log_serial_raw("[kbd] scan set 1 selected (translation on)\n");
+        log_serial_raw("[kbd] scan set 1\n");
     }
 }
 
 void keyboard_flush(void) {
-    /* Drain hardware PS/2 output buffer */
-    int safety = 512;
-    while ((inb(0x64) & 0x01) && safety-- > 0) {
-        (void)inb(0x60);
-    }
+    /* Drain hardware PS/2 output buffer. */
+    ps2_drain_output(512);
     /* Clear software key buffer */
     key_head = 0;
     key_tail = 0;
@@ -583,10 +539,10 @@ void keyboard_set_irq_mode(int enabled) {
 }
 
 void keyboard_handle_irq(void) {
-    unsigned char status = inb(0x64);
+    unsigned char status = ps2_read_status();
 
-    if ((status & 0x01) != 0 && (status & 0x20) == 0) {
-        unsigned char scancode = inb(0x60);
+    if ((status & PS2_STATUS_OUTPUT_FULL) != 0 && (status & PS2_STATUS_AUX_DATA) == 0) {
+        unsigned char scancode = ps2_inb(PS2_PORT_DATA);
         int extended = extended_code;
         int break_event = 0;
         int track_scancode = 1;

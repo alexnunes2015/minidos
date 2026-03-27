@@ -352,7 +352,7 @@ static int shell_try_execute_fs_command(const char* command, const char* args) {
 }
 
 void shell_init() {
-    shell_out_both("MiniDOS Shell Ready.\nType 'help' for commands.\n");
+    shell_out_both("SHELL100 MiniDOS Shell Ready.\nType 'help' for commands.\n");
     fat16_set_drive(drive_get_current());
 }
 

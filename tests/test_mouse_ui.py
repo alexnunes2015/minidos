@@ -11,12 +11,15 @@ import tempfile
 import time
 
 from qemu_harness import (
+    MOUSE_READY_MARKERS,
     build_floppy_qemu_cmd,
     read_until,
     repo_root,
     resolve_disk_path,
     spawn_qemu,
     terminate_process,
+    wait_for_marker_sequence,
+    wait_for_shell_ready,
 )
 
 
@@ -57,6 +60,10 @@ def _qmp_exec(qmp_sock, cmd, args=None):
         if "error" in obj:
             raise RuntimeError(f"QMP command failed: {obj['error']}")
     raise RuntimeError(f"QMP timeout for command: {cmd}")
+
+
+def _qmp_socket_root() -> str:
+    return "/tmp"
 
 
 def _qmp_connect(socket_path, timeout_s=10.0):
@@ -315,7 +322,9 @@ def main():
 
     _install_demo_app()
 
-    qmp_socket = os.path.join(tempfile.gettempdir(), f"minidos-mouse-qmp-{os.getpid()}.sock")
+    qmp_dir = os.environ.get("TMPDIR_QMP", _qmp_socket_root())
+    os.makedirs(qmp_dir, exist_ok=True)
+    qmp_socket = os.path.join(qmp_dir, f"minidos-mouse-qmp-{os.getpid()}.sock")
     try:
         os.unlink(qmp_socket)
     except FileNotFoundError:
@@ -331,12 +340,11 @@ def main():
 
     qmp_sock = None
     try:
-        ready_markers = [
-            "Entering main loop",
-            "Failed to bind socket",
-            "Operation not permitted",
-        ]
-        log, matched = read_until(proc, ready_markers, args.ready_timeout, echo=not args.quiet)
+        log, matched = wait_for_shell_ready(
+            proc,
+            args.ready_timeout,
+            echo=not args.quiet,
+        )
         if not matched:
             print("ERROR: timeout waiting for shell readiness", file=sys.stderr)
             return 1
@@ -358,6 +366,15 @@ def main():
         _assert_no_win95ui_debug(log)
         _assert_video_init_marker(log)
         screen_w, screen_h = _extract_video_geometry(log)
+        mouse_log, mouse_matched = wait_for_marker_sequence(
+            proc,
+            [MOUSE_READY_MARKERS],
+            args.ready_timeout,
+            echo=not args.quiet,
+        )
+        if not mouse_matched:
+            raise RuntimeError("timeout waiting for mouse-ready marker")
+        log += mouse_log
         if "APPIN001" not in log:
             if _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is None:
                 _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)

@@ -23,6 +23,8 @@ Sair do prototipo de troca de contexto por `ret` e fechar um runtime com schedul
 - `SCHED120` - self-test da fase iniciado.
 - `SCHED190` - self-test positivo concluido.
 - `SCHED900` - page fault em guard page de stack identificado.
+- `STOP 0x00000006` - bootstrap do runtime do scheduler falhou antes da shell.
+- `STOP 0x00000007` - self-test obrigatorio da fase 5 falhou antes da shell.
 - `APPFLT900` - fault de app em ring3 identificado e contido ao grupo da app.
 
 Os logs humanos continuam presentes:

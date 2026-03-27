@@ -3,12 +3,17 @@
 Este roadmap organiza os próximos passos do S.O. em fases incrementais, com foco em estabilidade, memória, I/O e execução de apps ELF.
 
 Nota sobre status:
-- `concluída` significa que o contrato mínimo da fase foi fechado com validação suficiente para a época.
-- `baseline entregue` significa que existe base técnica ou protótipo validado, mas a fase continua aberta para hardening e cobertura real.
+- `validated`: os comandos listados na própria fase foram executados e ainda representam a melhor evidência rastreável do comportamento atual.
+- `delivered`: a capacidade existe no repositório, mas ainda depende de hardening adicional para fechar contratos, observabilidade ou cobertura.
+- `fragile`: existem fallbacks, drift documental, ou confiança excessiva em self-tests/QEMU relativamente ao contrato final esperado.
+- `uncovered`: a fase ainda não tem evidência automatizada suficiente para a classe de falha indicada.
+
+Política transversal de storage:
+- O contrato atual de `FAT12`/`floppy` é de compatibilidade de boot. O runtime first-class continua centrado em `ATA` + `FAT16`, com o volume de boot exposto por BIOS thunk quando válido.
 
 ## Fase 0 - Baseline Estável (1 semana)
 
-Status: concluída em 14/02/2026.
+Status: validated em 14/02/2026.
 
 Objetivo: garantir que cada mudança parte de um estado reproduzível.
 
@@ -27,7 +32,7 @@ Entregas concluídas:
 
 ## Fase 1 - Memória e Paging Mínimo (1 a 2 semanas)
 
-Status: concluída em 14/02/2026.
+Status: validated em 14/02/2026.
 
 Objetivo: introduzir proteção de memória sem quebrar o boot.
 
@@ -68,7 +73,13 @@ Referência de execução detalhada:
 
 ## Fase 2 - Interrupções e Robustez de Kernel (1 a 2 semanas)
 
-Status: concluída em 15/02/2026.
+Status: delivered em 15/02/2026.
+
+Fragile:
+- O teclado ainda mantém fallback por polling durante a estabilização do caminho por IRQ.
+
+Uncovered:
+- A fase não lista ainda uma matriz dedicada de marcadores de panic/degraded mode por classe de exceção.
 
 Objetivo: reduzir dependência de polling e melhorar resiliência.
 
@@ -84,7 +95,10 @@ Critério de pronto:
 
 Objetivo: evoluir de MVP de disco para base utilizável.
 
-Status: concluída em 28/02/2026.
+Status: validated em 28/02/2026.
+
+Fragile:
+- A validação publicada cobre happy path e negativos funcionais de FAT16, mas o contrato atual de falha de storage e a narrativa FAT12/floppy continuam em hardening transversal.
 
 - Expandir ATA além de `disk_id` 0.
 - Validar leitura/escrita em múltiplos discos/canais suportados.
@@ -115,7 +129,10 @@ Validação de fechamento:
 
 Objetivo: executar apps externas com contrato mínimo estável.
 
-Status: concluída em 15/02/2026.
+Status: validated em 15/02/2026.
+
+Fragile:
+- A runtime ABI está validada, mas o texto de produto e a documentação operacional ainda precisam de auditoria contínua para não regredir para a narrativa antiga da shell thread.
 
 - Fechar ABI de syscalls (conjunto mínimo para I/O, arquivo e saída de processo).
 - Integrar fluxo completo de build e carga ELF usando `external_apps/`.
@@ -136,7 +153,16 @@ Critério de pronto:
 
 Objetivo: fechar a transição de um baseline de kernel threads para um runtime com multitarefa preemptiva, ring3 e isolamento básico kernel/user.
 
-Status: concluida em 19/03/2026.
+Status: delivered em 19/03/2026.
+
+Validated:
+- Ver secção "Validação final" para a evidência rastreável atual.
+
+Fragile:
+- A confiança operacional ainda depende fortemente de markers de self-test no boot e do cenário de referência em QEMU.
+
+Uncovered:
+- Starvation, cleanup adversarial e cenários mais amplos de erro de syscall/scheduler continuam fora da cobertura listada aqui.
 
 Entregas finais:
 - Estrutura de processo (`process_t`) com PID, estado, contexto salvo, stacks de kernel dedicadas e stack de user por app.

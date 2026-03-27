@@ -5,6 +5,7 @@ import sys
 import time
 
 from qemu_harness import (
+    KBD_READY_MARKERS,
     build_floppy_qemu_cmd,
     dismiss_default_gui,
     read_until,
@@ -12,6 +13,7 @@ from qemu_harness import (
     send_line,
     spawn_qemu,
     terminate_process,
+    wait_for_marker_sequence,
     wait_for_shell_ready,
 )
 
@@ -44,12 +46,6 @@ def main():
         help="Seconds to wait for shell readiness (default: 30).",
     )
     parser.add_argument(
-        "--post-pm-delay",
-        type=float,
-        default=2.0,
-        help="Seconds to wait after PM message before sending commands (default: 2).",
-    )
-    parser.add_argument(
         "--cmd-timeout",
         type=float,
         default=8.0,
@@ -80,50 +76,29 @@ def main():
     proc = spawn_qemu(qemu_cmd)
 
     try:
-        pm_marker = "[Stage2] Entering PM..."
-        kernel_ready = [
-            "=== MiniDOS Kernel Starting ===",
-            "System Memory:",
-            "Initializing disk driver...",
-            "Starting shell...",
-            "Entering main loop",
-            "MiniDOS Shell Ready",
-            "MiniDOS v0.1 Kernel Started",
-        ]
-        ready_deadline = time.time() + args.ready_timeout
         ready_log, matched = wait_for_shell_ready(
             proc,
             args.ready_timeout,
             echo=not args.quiet,
-            extra_markers=kernel_ready,
         )
         if not matched:
-            # Fallback: if kernel messages never show, try after PM.
-            ready_log, matched = read_until(
+            print("\nERROR: timeout waiting for shell readiness.", file=sys.stderr)
+            return 1
+
+        if any(marker in ready_log for marker in KBD_READY_MARKERS):
+            kbd_log = ""
+            kbd_matched = True
+        else:
+            kbd_log, kbd_matched = wait_for_marker_sequence(
                 proc,
-                [pm_marker],
+                [KBD_READY_MARKERS],
                 args.ready_timeout,
                 echo=not args.quiet,
             )
-            if not matched:
-                print("\nERROR: timeout waiting for shell readiness.", file=sys.stderr)
-                return 1
-            time.sleep(args.post_pm_delay)
-        elif matched != "Entering main loop":
-            remaining = max(0.1, ready_deadline - time.time())
-            extra_log, matched = read_until(
-                proc,
-                ["Entering main loop"],
-                remaining,
-                echo=not args.quiet,
-            )
-            if not matched:
-                print(
-                    "\nERROR: shell banner appeared before the main loop became ready.",
-                    file=sys.stderr,
-                )
-                return 1
-            ready_log += extra_log
+        if not kbd_matched:
+            print("\nERROR: timeout waiting for keyboard driver readiness.", file=sys.stderr)
+            return 1
+        ready_log += kbd_log
 
         dismiss_default_gui(
             proc,

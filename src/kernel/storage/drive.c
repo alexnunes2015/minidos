@@ -256,14 +256,8 @@ void drive_probe_additional() {
         if (disk_boot_media_is_floppy() && detect_whole_disk_volume(0, &next_letter)) {
             drive_boot_print("  Boot floppy fallback mounted as A:\n");
         } else {
-            drive_boot_print("  No partitions found - creating test drive A:\n");
-            drives[0].valid = 1;
-            drives[0].disk_id = 0;
-            drives[0].partition_num = -1;
-            drives[0].lba_start = 2048;  // 1MB offset
-            drives[0].sector_count = 32768;  // 16MB
-            drives[0].fs_type = 0x06;  // FAT16
-            next_letter = 1;
+            serial_print("DISK021 no-boot-volume\n");
+            drive_boot_print("  No boot volume or partitions found\n");
         }
     }
 

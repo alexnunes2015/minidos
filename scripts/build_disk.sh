@@ -20,6 +20,43 @@ PTTHRD|PTEST|external_apps/apps/ptthrd/ptthrd.c
 EOF
 )
 
+IMAGE_POPULATOR=""
+
+error_exit() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+select_image_populator() {
+    if command -v mcopy >/dev/null 2>&1 && command -v mmd >/dev/null 2>&1; then
+        IMAGE_POPULATOR="mtools"
+        echo "Image population method: mtools"
+        return
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        IMAGE_POPULATOR="sudo"
+        echo "Image population method: sudo"
+        return
+    fi
+    error_exit "Could not populate the floppy image. Install mtools (mcopy/mmd) or configure passwordless sudo."
+}
+
+ensure_mkfs_tool() {
+    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+        error_exit "mkfs.vfat is required to build the floppy image. Install dosfstools."
+    fi
+}
+
+ensure_python3() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        error_exit "python3 is required to generate stage2 metadata."
+    fi
+}
+
+select_image_populator
+ensure_mkfs_tool
+ensure_python3
+
 echo "=== Building MiniDOS floppy image ==="
 
 app_build_dir() {
@@ -181,6 +218,11 @@ KERNEL_BYTES=$(stat -c%s "$ROOT_DIR/build/kernel.bin")
 KERNEL_SECTORS=$(((KERNEL_BYTES + 511) / 512))
 STAGE2_LST="$ROOT_DIR/build/stage2.lst"
 STAGE2_BIN="$ROOT_DIR/build/stage2.bin"
+STAGE2_META="$ROOT_DIR/build/stage2.meta"
+
+generate_stage2_metadata() {
+    python3 "$ROOT_DIR/scripts/stage2_metadata.py" "$STAGE2_LST" "$STAGE2_META"
+}
 
 if [ "$KERNEL_SECTORS" -gt $((RESERVED_SECTORS - KERNEL_LOAD_SECTOR)) ]; then
     echo "ERROR: kernel.bin is too large for the reserved floppy boot area." >&2
@@ -189,7 +231,17 @@ if [ "$KERNEL_SECTORS" -gt $((RESERVED_SECTORS - KERNEL_LOAD_SECTOR)) ]; then
 fi
 
 if [ -f "$STAGE2_LST" ] && [ -f "$STAGE2_BIN" ]; then
-    OFFSET_HEX=$(awk '/kernel_sectors:/ {print $2; exit}' "$STAGE2_LST")
+    if ! generate_stage2_metadata; then
+        error_exit "Failed to generate stage2 metadata; cannot patch kernel sectors."
+    fi
+    OFFSET_HEX=$(
+        python3 - <<'PY' "$STAGE2_META"
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+print(data.get("kernel_sectors_offset", ""))
+PY
+    )
     if [ -n "$OFFSET_HEX" ]; then
         python3 - "$STAGE2_BIN" "$OFFSET_HEX" "$KERNEL_SECTORS" <<'PY'
 import sys
@@ -202,9 +254,9 @@ with open(bin_path, "r+b") as f:
     f.seek(offset)
     f.write(bytes((value & 0xFF, (value >> 8) & 0xFF)))
 PY
-        echo "Patched stage2 kernel_sectors=$KERNEL_SECTORS at 0x$OFFSET_HEX"
+        echo "Patched stage2 kernel_sectors=$KERNEL_SECTORS at $OFFSET_HEX"
     else
-        echo "WARNING: kernel_sectors label not found in stage2.lst" >&2
+        echo "WARNING: stage2 metadata missing kernel_sectors offset" >&2
     fi
 else
     echo "WARNING: stage2.lst or stage2.bin missing; kernel sectors not patched" >&2
@@ -297,15 +349,18 @@ PTCPU  - busy CPU loop for a few scheduler ticks
 PTWAIT - blocking wait/event timeout loop
 PTIO   - directory + file create/read/rename/delete churn
 PTGFX  - simple graphics/present animation
+PTTHRD - app main plus child worker thread in the same ELF group
 
 Usage:
   cd ptest
   elfls
-  ptcpu
+  runbg ptcpu
+  runbg ptthrd
+  top 200 1
 
 Note:
-  top still attributes ELF runtime to the shell thread until
-  ELF apps run as real scheduler processes.
+  background ELFs now show as scheduler tasks; PTTHRD should
+  show both the main task and a child worker with the same EXE.
 EOF
         echo "ERROR: failed to write PTEST/README.TXT via mtools" >&2
         return 1
@@ -341,15 +396,14 @@ EOF
     fi
 }
 
-if command -v mcopy >/dev/null 2>&1 && command -v mmd >/dev/null 2>&1; then
-    copy_with_mtools || exit 1
-elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    copy_with_sudo
-else
-    echo "ERROR: Could not populate the floppy image. Install mtools (mcopy/mmd) or configure passwordless sudo." >&2
-    echo "ERROR: Aborting image build to avoid booting with an empty filesystem." >&2
-    exit 1
-fi
+case "$IMAGE_POPULATOR" in
+    mtools)
+        copy_with_mtools || exit 1
+        ;;
+    sudo)
+        copy_with_sudo || exit 1
+        ;;
+esac
 
 chmod 644 "$DISK_IMG"
 

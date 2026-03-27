@@ -23,6 +23,7 @@ make gdb-kernel
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
 - `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
 - `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers, stale low-memory app VAs, and direct user-mode page faults.
+- `make test-storage-failure`: exercises invalid FAT metadata so the boot reports `DISK021` and stops with `STOP 0x00000004`.
 - `make run-no-reboot`: keeps QEMU from rebooting on panic/triple-fault style failures so the last serial output stays visible.
 - `make run-trace`: writes a QEMU trace to `build/qemu-trace.log` for low-level fault analysis.
 - `make run-gdb`: starts QEMU paused with a GDB stub on `localhost:1234`.
@@ -39,22 +40,27 @@ make gdb-kernel
 - `PTVIDEO100 start workers=... iterations=... started=...` when the `videostress` command launches worker threads
 - `PTVIDEO110 limited by scheduler slots` when the stress test could not start all requested workers
 - `PTVIDEO200 worker=<n> ticks=<t> iterations=<i>` when a stress worker exits with timing info
-- `[kbd] scan set 1 selected (translation on)` or `[kbd] scan set 2 selected (translation off)`
+- `[kbd] scan set 1` or `[kbd] scan set 2`
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled`
+- `DISK021`
 - `APPFLT900`
 - `SCHED100`
 - `SCHED110`
 - `SCHED120`
 - `SCHED190`
 - `SCHED900`
+- `STOP 0x00000006`
+- `STOP 0x00000007`
 - `[sched] phase5 context-switch self-test OK`
 - `BOOT100`
 - `BOOT110`
 - `BOOT190`
+- `BOOT300`
 - `MiniDOS Shell Ready.`
 - `[INFO][kernel] Entering main loop`
+- `SHELL100` (immediately after `Entering main loop`, indicating the interactive command loop is ready for deterministic injection)
 
 ## Failure Playbooks
 
@@ -80,6 +86,7 @@ Check:
 - `BOOT110` appears only if the runtime logo files were loaded successfully
 - before `BOOT110`, the graphics placeholder is now a black screen with a blinking cursor
 - `BOOT190` appears after the 5-second logo window counted from `BOOT110` and immediately before the shell takes over the screen
+- `BOOT300` means the shell entered degraded mode because storage was unavailable for `AUTOEXEC.AUT`; the shell should still continue into `Entering main loop`
 
 ### Paging or exception failure
 
@@ -110,6 +117,7 @@ Check:
 - `SCHED100`, `SCHED110`, and `SCHED120` appear in order
 - `SCHED190` appears in the positive path before `Entering main loop`
 - `SCHED900` appears in the negative path before `[paging] #PF detected`
+- `STOP 0x00000006` / `STOP 0x00000007` appear before the BSOD if scheduler bootstrap or the phase-5 self-test hard-fails
 - `CR2` matches the scheduler stack arena (`0x0060xxxx`) when the guard page trips
 
 ### Shell is up but commands fail
@@ -225,6 +233,7 @@ make test-phase3
 
 Check:
 
+- `DISK021` appears only when no validated boot volume or partitions were detected; in that state the kernel must not invent a valid `A:` entry
 - drive switching `A:`..`C:`
 - negative cases such as invalid cross-drive operations
 - file isolation between volumes
