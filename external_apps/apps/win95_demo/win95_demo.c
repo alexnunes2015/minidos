@@ -492,98 +492,20 @@ static void render_clock_update(const minidos_app_api_t* api, const demo_state_t
     ui_present(api);
 }
 
-static void redraw_desktop_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
-    ui_rect_t desktop;
-    ui_rect_t top_bar;
-
+/* Redraw a dirty region through the layer compositor (desktop + windows + controls) */
+static void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
     if (!api || !state || ui_rect_is_empty(rect)) {
         return;
     }
-
-    desktop = ui_rect_make(0, 0, state->sw, state->sh);
-    rect = ui_rect_intersect(rect, desktop);
-    if (ui_rect_is_empty(rect)) {
-        return;
-    }
-
-    ui_fill_rect(api, rect, state->wm.theme.desktop_bg);
-    if (state->wm.theme.desktop_bg_bitmap) {
-        if (!ui_wallpaper_surface_matches(state->wm.theme.desktop_bg_bitmap)
-            || !ui_wallpaper_surface_blit_scaled(api, 0, 0, state->sw, state->sh, rect.x, rect.y, rect.w, rect.h)) {
-            (void)ui_draw_bitmap_clipped(api,
-                state->wm.theme.desktop_bg_bitmap,
-                0, 0, state->sw, state->sh,
-                rect);
-        }
-    }
-
-    top_bar = ui_rect_intersect(rect, ui_rect_make(0, 0, state->sw, 2));
-    if (!ui_rect_is_empty(top_bar)) {
-        ui_fill_rect(api, top_bar, state->wm.theme.desktop_accent);
-    }
-}
-
-static void redraw_window_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
-    const ui_wm_window_t* win;
-    int c;
-
-    if (!api || !state || ui_rect_is_empty(rect)) {
-        return;
-    }
-
-    win = ui_wm_find_window_const(&state->wm, state->window_id);
-    if (!win || !win->visible) {
-        return;
-    }
-
-    if (ui_rect_is_empty(ui_rect_intersect(rect, win->window.bounds))) {
-        return;
-    }
-
-    /*
-     * The text and bevel primitives redraw beyond the small dirty rect because
-     * they do not clip internally, so repaint the whole window whenever cursor
-     * motion touches it.
-     */
-    ui_draw_window(api, &state->wm.theme, &win->window);
-
-    for (c = 0; c < state->wm.control_count; c++) {
-        const ui_control_t* control = &state->wm.controls[c];
-        ui_rect_t abs_bounds;
-
-        if (!control->visible || control->window_id != state->window_id) {
-            continue;
-        }
-
-        abs_bounds = ui_wm_control_abs_bounds(&state->wm, control);
-
-        if (control->type == UI_CONTROL_LABEL) {
-            ui_draw_label(api, abs_bounds.x, abs_bounds.y, control->text ? control->text : "",
-                &state->wm.theme, state->wm.theme.field_bg);
-        } else if (control->type == UI_CONTROL_BUTTON) {
-            ui_button_t button;
-
-            button.bounds = abs_bounds;
-            button.label = control->text ? control->text : "";
-            button.pressed = control->pressed;
-            button.focused = control->focused;
-            button.enabled = control->enabled;
-            ui_draw_button(api, &state->wm.theme, &button);
-        } else if (control->type == UI_CONTROL_TEXTINPUT) {
-            ui_draw_text_box(api, &state->wm.theme, abs_bounds, control->text ? control->text : "", control->focused);
-        }
-    }
+    ui_wm_redraw_dirty(api, &state->wm, rect, state->sw, state->sh);
 }
 
 static void render_partial_motion(const minidos_app_api_t* api,
     const demo_state_t* state,
     const app_mouse_state_t* previous_mouse) {
-    ui_rect_t old_cursor;
-    ui_rect_t new_cursor;
+    ui_dirty_list_t dirty;
     ui_rect_t bar_rect;
     ui_rect_t menu_rect;
-    ui_rect_t dirty_rects[2];
-    int dirty_count = 0;
     int drew_taskbar_overlay = 0;
     int drew_start_menu = 0;
     int i;
@@ -592,36 +514,26 @@ static void render_partial_motion(const minidos_app_api_t* api,
         return;
     }
 
-    old_cursor = cursor_rect_at(previous_mouse->x, previous_mouse->y);
-    new_cursor = cursor_rect_at(state->mouse.x, state->mouse.y);
-
-    if (!ui_rect_is_empty(old_cursor)) {
-        dirty_rects[dirty_count++] = old_cursor;
-    }
-    if (!ui_rect_is_empty(new_cursor)) {
-        if (dirty_count == 0) {
-            dirty_rects[dirty_count++] = new_cursor;
-        } else if (ui_rects_intersect(dirty_rects[0], new_cursor)) {
-            dirty_rects[0] = ui_rect_union(dirty_rects[0], new_cursor);
-        } else {
-            dirty_rects[dirty_count++] = new_cursor;
-        }
-    }
+    ui_dirty_list_init(&dirty);
+    ui_dirty_list_add(&dirty, cursor_rect_at(previous_mouse->x, previous_mouse->y));
+    ui_dirty_list_add(&dirty, cursor_rect_at(state->mouse.x, state->mouse.y));
 
     bar_rect = taskbar_rect(state);
     menu_rect = start_menu_rect(state);
 
-    for (i = 0; i < dirty_count; i++) {
-        ui_rect_t area = dirty_rects[i];
+    for (i = 0; i < dirty.count; i++) {
+        ui_rect_t area = dirty.rects[i];
 
-        redraw_desktop_region(api, state, area);
-        redraw_window_region(api, state, area);
+        /* Layer compositor: desktop + windows + controls */
+        redraw_region(api, state, area);
 
+        /* Overlay: taskbar */
         if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
             draw_taskbar_overlay(api, state);
             drew_taskbar_overlay = 1;
         }
 
+        /* Overlay: start menu */
         if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
             draw_start_menu(api, state);
             drew_start_menu = 1;
@@ -632,6 +544,7 @@ static void render_partial_motion(const minidos_app_api_t* api,
         draw_start_menu(api, state);
     }
 
+    /* Overlay: cursor (always on top) */
     if (state->mouse.present) {
         ui_draw_cursor(api, state->mouse.x, state->mouse.y,
             state->wm.theme.light, state->wm.theme.dark_shadow);
@@ -644,12 +557,9 @@ static void render_partial_drag(const minidos_app_api_t* api,
     const demo_state_t* state,
     ui_rect_t previous_drag_rect,
     const app_mouse_state_t* previous_mouse) {
-    ui_rect_t old_cursor;
-    ui_rect_t new_cursor;
-    ui_rect_t dirty_rects[4];
+    ui_dirty_list_t dirty;
     ui_rect_t bar_rect;
     ui_rect_t menu_rect;
-    int dirty_count = 0;
     int drew_taskbar_overlay = 0;
     int drew_start_menu = 0;
     int i;
@@ -658,38 +568,28 @@ static void render_partial_drag(const minidos_app_api_t* api,
         return;
     }
 
-    old_cursor = cursor_rect_at(previous_mouse->x, previous_mouse->y);
-    new_cursor = cursor_rect_at(state->mouse.x, state->mouse.y);
-
-    if (!ui_rect_is_empty(previous_drag_rect)) {
-        dirty_rects[dirty_count++] = previous_drag_rect;
-    }
-
-    if (!ui_rect_is_empty(state->drag_preview_bounds) && dirty_count < 4) {
-        dirty_rects[dirty_count++] = state->drag_preview_bounds;
-    }
-
-    if (!ui_rect_is_empty(old_cursor) && dirty_count < 4) {
-        dirty_rects[dirty_count++] = old_cursor;
-    }
-    if (!ui_rect_is_empty(new_cursor) && dirty_count < 4) {
-        dirty_rects[dirty_count++] = new_cursor;
-    }
+    ui_dirty_list_init(&dirty);
+    ui_dirty_list_add(&dirty, previous_drag_rect);
+    ui_dirty_list_add(&dirty, state->drag_preview_bounds);
+    ui_dirty_list_add(&dirty, cursor_rect_at(previous_mouse->x, previous_mouse->y));
+    ui_dirty_list_add(&dirty, cursor_rect_at(state->mouse.x, state->mouse.y));
 
     bar_rect = taskbar_rect(state);
     menu_rect = start_menu_rect(state);
 
-    for (i = 0; i < dirty_count; i++) {
-        ui_rect_t area = dirty_rects[i];
+    for (i = 0; i < dirty.count; i++) {
+        ui_rect_t area = dirty.rects[i];
 
-        redraw_desktop_region(api, state, area);
-        redraw_window_region(api, state, area);
+        /* Layer compositor: desktop + windows + controls */
+        redraw_region(api, state, area);
 
+        /* Overlay: taskbar */
         if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
             draw_taskbar_overlay(api, state);
             drew_taskbar_overlay = 1;
         }
 
+        /* Overlay: start menu */
         if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
             draw_start_menu(api, state);
             drew_start_menu = 1;
@@ -700,8 +600,10 @@ static void render_partial_drag(const minidos_app_api_t* api,
         draw_start_menu(api, state);
     }
 
+    /* Overlay: drag outline */
     draw_drag_outline(api, state);
 
+    /* Overlay: cursor (always on top) */
     if (state->mouse.present) {
         ui_draw_cursor(api, state->mouse.x, state->mouse.y,
             state->wm.theme.light, state->wm.theme.dark_shadow);

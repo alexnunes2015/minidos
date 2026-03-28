@@ -90,7 +90,35 @@ enum {
     UI_CONTROL_LABEL = 1,
     UI_CONTROL_BUTTON = 2,
     UI_CONTROL_TEXTINPUT = 3,
+    UI_CONTROL_LISTVIEW = 4,
 };
+
+#define UI_LISTVIEW_MAX_ITEMS 128
+#define UI_LISTVIEW_ITEM_NAME_MAX 32
+#define UI_LISTVIEW_ROW_H 16
+/* Max line buffer width for batch surface blit (pixels * 4 bytes XRGB8888) */
+#define UI_LISTVIEW_LINE_MAX_W 640
+#define UI_LISTVIEW_LINE_BUF_SIZE (UI_LISTVIEW_LINE_MAX_W * UI_LISTVIEW_ROW_H * 4)
+
+typedef struct {
+    char name[UI_LISTVIEW_ITEM_NAME_MAX];
+    int is_dir;
+    int icon_color;  /* 0 for default */
+} ui_listview_item_t;
+
+typedef struct {
+    ui_listview_item_t items[UI_LISTVIEW_MAX_ITEMS];
+    int item_count;
+    int scroll_offset;   /* first visible item index */
+    int selected_index;  /* currently selected item (-1 for none) */
+    int visible_count;   /* how many items fit in the viewport */
+    int prev_scroll_offset; /* previous scroll for delta optimization */
+} ui_listview_t;
+
+/* Pixel buffer for rendering one row via surface blit */
+typedef struct {
+    unsigned char pixels[UI_LISTVIEW_LINE_BUF_SIZE];
+} ui_listview_line_buf_t;
 
 typedef struct {
     int id;
@@ -105,6 +133,7 @@ typedef struct {
     int enabled;
     int focused;
     int pressed;
+    ui_listview_t* listview;  /* non-NULL for UI_CONTROL_LISTVIEW */
 } ui_control_t;
 
 typedef struct {

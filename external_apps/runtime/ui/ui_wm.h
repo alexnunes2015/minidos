@@ -3,6 +3,9 @@
 
 #include "ui_draw.h"
 
+/* Shared line buffer for listview batch rendering (used by ui_wm_draw and ui_wm_redraw_dirty) */
+static ui_listview_line_buf_t g_ui_listview_line_buf;
+
 static inline ui_rect_t ui_window_client_rect(const ui_window_t* window) {
     ui_rect_t rect = ui_rect_make(0, 0, 0, 0);
     if (!window) {
@@ -340,6 +343,7 @@ static inline ui_control_t* ui_wm_alloc_control(ui_window_manager_t* wm, int typ
     control->enabled = 1;
     control->focused = 0;
     control->pressed = 0;
+    control->listview = 0;
     return control;
 }
 
@@ -383,6 +387,22 @@ static inline int ui_wm_add_textinput(ui_window_manager_t* wm, int window_id, ui
     control->text_buffer = text_buffer;
     control->text_buffer_len = text_buffer_len;
     control->text_len = len;
+    return control->id;
+}
+
+static inline int ui_wm_add_listview(ui_window_manager_t* wm, int window_id, ui_rect_t bounds, ui_listview_t* lv) {
+    ui_control_t* control;
+
+    if (!lv) {
+        return 0;
+    }
+
+    control = ui_wm_alloc_control(wm, UI_CONTROL_LISTVIEW, window_id, bounds);
+    if (!control) {
+        return 0;
+    }
+
+    control->listview = lv;
     return control->id;
 }
 
@@ -738,10 +758,144 @@ static inline void ui_wm_draw(const minidos_app_api_t* api, const ui_window_mana
                     ui_draw_button(api, &wm->theme, &button);
                 } else if (control->type == UI_CONTROL_TEXTINPUT) {
                     ui_draw_text_box(api, &wm->theme, abs_bounds, control->text ? control->text : "", control->focused);
+                } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
+                    ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &wm->theme);
                 }
             }
         }
     }
+}
+
+/*
+ * Layer-aware dirty-rect redraw: repaints only the intersection of each layer
+ * with the given dirty rect, in correct z-order:
+ *   Layer 0: desktop background
+ *   Layer 1..N: windows in z-order (chrome + controls, clipped to dirty)
+ *
+ * Callers are responsible for drawing overlays (menus, cursor) on top after this.
+ */
+static inline void ui_wm_redraw_dirty(const minidos_app_api_t* api,
+    const ui_window_manager_t* wm, ui_rect_t dirty,
+    int screen_w, int screen_h) {
+    int i;
+    int drawn[UI_WM_MAX_WINDOWS];
+    int draw_count;
+    ui_rect_t desktop;
+    ui_rect_t dirty_desktop;
+
+    if (!api || !wm || ui_rect_is_empty(dirty)) { return; }
+
+    /* Layer 0: desktop background (clipped to dirty) */
+    desktop = ui_rect_make(0, 0, screen_w, screen_h);
+    dirty_desktop = ui_rect_intersect(dirty, desktop);
+    if (!ui_rect_is_empty(dirty_desktop)) {
+        ui_fill_rect(api, dirty_desktop, wm->theme.desktop_bg);
+        if (wm->theme.desktop_bg_bitmap) {
+            if (ui_wallpaper_surface_matches(wm->theme.desktop_bg_bitmap)) {
+                (void)ui_wallpaper_surface_blit_scaled(api, 0, 0, screen_w, screen_h,
+                    dirty_desktop.x, dirty_desktop.y, dirty_desktop.w, dirty_desktop.h);
+            } else {
+                (void)ui_draw_bitmap_clipped(api, wm->theme.desktop_bg_bitmap,
+                    0, 0, screen_w, screen_h, dirty_desktop);
+            }
+        }
+        /* Desktop accent bar */
+        {
+            ui_rect_t accent = ui_rect_intersect(dirty_desktop, ui_rect_make(0, 0, screen_w, 2));
+            if (!ui_rect_is_empty(accent)) {
+                ui_fill_rect(api, accent, wm->theme.desktop_accent);
+            }
+        }
+    }
+
+    /* Layer 1..N: windows in z-order */
+    for (i = 0; i < UI_WM_MAX_WINDOWS; i++) { drawn[i] = 0; }
+
+    for (draw_count = 0; draw_count < wm->window_count; draw_count++) {
+        int best_index = -1;
+        int best_z = 2147483647;
+        const ui_wm_window_t* win;
+        ui_rect_t win_dirty;
+        ui_rect_t title_rect;
+        ui_rect_t client_rect;
+        int c;
+
+        for (i = 0; i < wm->window_count; i++) {
+            if (!wm->windows[i].visible || drawn[i]) { continue; }
+            if (best_index >= 0 && wm->windows[i].z_order >= best_z) { continue; }
+            best_index = i;
+            best_z = wm->windows[i].z_order;
+        }
+        if (best_index < 0) { break; }
+        drawn[best_index] = 1;
+
+        win = &wm->windows[best_index];
+        win_dirty = ui_rect_intersect(dirty, win->window.bounds);
+        if (ui_rect_is_empty(win_dirty)) { continue; }
+
+        /* Check if dirty touches chrome (title/border) */
+        title_rect = ui_window_title_bar_rect(&win->window);
+        client_rect = ui_window_client_rect(&win->window);
+
+        if (!ui_rect_is_empty(ui_rect_intersect(dirty, title_rect))
+            || win_dirty.x <= win->window.bounds.x + 4
+            || win_dirty.y <= win->window.bounds.y + 4
+            || win_dirty.x + win_dirty.w >= win->window.bounds.x + win->window.bounds.w - 4
+            || win_dirty.y + win_dirty.h >= win->window.bounds.y + win->window.bounds.h - 4) {
+            /* Dirty touches chrome — repaint full window chrome */
+            ui_draw_window(api, &wm->theme, &win->window);
+        } else {
+            /* Only client area — fill damaged client region */
+            ui_fill_rect(api, ui_rect_intersect(dirty, client_rect), wm->theme.field_bg);
+        }
+
+        /* Controls: only those intersecting dirty rect */
+        for (c = 0; c < wm->control_count; c++) {
+            const ui_control_t* control = &wm->controls[c];
+            ui_rect_t abs_bounds;
+
+            if (!control->visible || control->window_id != win->id) { continue; }
+            abs_bounds = ui_wm_control_abs_bounds(wm, control);
+            if (ui_rect_is_empty(ui_rect_intersect(dirty, abs_bounds))) { continue; }
+
+            if (control->type == UI_CONTROL_LABEL) {
+                ui_draw_text_clipped(api, abs_bounds.x, abs_bounds.y,
+                    control->text ? control->text : "",
+                    wm->theme.text, wm->theme.field_bg, dirty);
+            } else if (control->type == UI_CONTROL_BUTTON) {
+                ui_button_t button;
+                button.bounds = abs_bounds;
+                button.label = control->text ? control->text : "";
+                button.pressed = control->pressed;
+                button.focused = control->focused;
+                button.enabled = control->enabled;
+                ui_draw_button(api, &wm->theme, &button);
+            } else if (control->type == UI_CONTROL_TEXTINPUT) {
+                ui_draw_text_box(api, &wm->theme, abs_bounds,
+                    control->text ? control->text : "", control->focused);
+            } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
+                ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &wm->theme);
+            }
+        }
+    }
+}
+
+/*
+ * Redraw all dirty rects from a dirty list through the layer compositor.
+ * Clears the dirty list after processing.
+ */
+static inline void ui_wm_flush_dirty(const minidos_app_api_t* api,
+    const ui_window_manager_t* wm, ui_dirty_list_t* dirty_list,
+    int screen_w, int screen_h) {
+    int i;
+
+    if (!api || !wm || !dirty_list) { return; }
+
+    for (i = 0; i < dirty_list->count; i++) {
+        ui_wm_redraw_dirty(api, wm, dirty_list->rects[i], screen_w, screen_h);
+    }
+
+    dirty_list->count = 0;
 }
 
 #endif
