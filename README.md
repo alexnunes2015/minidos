@@ -46,6 +46,7 @@ make test-ver
 make test-dir
 make test-drives
 make test-serial
+make test-graphics
 make phase0-check
 make ci
 ```

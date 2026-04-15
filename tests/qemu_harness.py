@@ -54,7 +54,7 @@ def build_floppy_qemu_cmd(
     cmd = [
         qemu,
         "-drive",
-        f"file={disk_path},format=raw,if=floppy,index=0",
+        f"file={disk_path},format=raw,if=ide,index=0",
         "-boot",
         "a",
         "-m",
@@ -205,7 +205,7 @@ def _collect_markers(proc, markers, deadline, *, echo=True, max_buf=60000):
 
 def dismiss_default_gui(proc, initial_log, timeout_s, *, echo=True):
     log = initial_log or ""
-    saw_gui_boot = any(marker in log for marker in ["GUI100", "GUI110", "Executing WIN95UI.ELF..."])
+    saw_gui_boot = any(marker in log for marker in ["GUI100", "GUI110", "Executing STARTUI.ELF..."])
 
     if "APPIN001" not in log:
         deadline = time.time() + (timeout_s if saw_gui_boot else min(timeout_s, 1.0))
@@ -214,7 +214,7 @@ def dismiss_default_gui(proc, initial_log, timeout_s, *, echo=True):
             remaining = max(0.1, deadline - time.time())
             extra, matched = read_until(
                 proc,
-                ["APPIN001", "GUI100", "GUI110", "GUI120", "GUI190", "Executing WIN95UI.ELF..."],
+                ["APPIN001", "GUI100", "GUI110", "GUI120", "GUI190", "Executing STARTUI.ELF..."],
                 remaining,
                 echo=echo,
             )
@@ -222,7 +222,7 @@ def dismiss_default_gui(proc, initial_log, timeout_s, *, echo=True):
 
             if matched == "APPIN001":
                 break
-            if matched in {"GUI100", "GUI110", "Executing WIN95UI.ELF..."}:
+            if matched in {"GUI100", "GUI110", "Executing STARTUI.ELF..."}:
                 if not saw_gui_boot:
                     deadline = time.time() + timeout_s
                 saw_gui_boot = True

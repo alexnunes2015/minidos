@@ -18,7 +18,7 @@ make gdb-kernel
 
 ## What Each Command Is For
 
-- `make verify-image`: validates the floppy image layout, BPB, patched kernel sector count, and expected files inside the FAT volume.
+- `make verify-image`: validates the disk image layout, BPB, patched kernel sector count, and expected files inside the FAT volume.
 - `make phase0-check`: clean rebuild plus serial smoke test.
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
 - `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
@@ -201,8 +201,9 @@ make test-keyboard
 ```
 
 That suite now covers keyboard-only entry into the shell plus keyboard exit paths for `DOSSHELL` and `EDIT`.
-The normal boot now lands directly in the shell. The harness still tolerates a future boot-launched `WIN95UI` by dismissing it with `ESC` before continuing.
+The normal boot now lands directly in the shell. The harness still tolerates a future boot-launched `STARTUI` by dismissing it with `ESC` before continuing.
 It waits for `APPIN001` before sending keys into GUI apps and for `APPRET001` before asserting that the shell resumed, so app-input races are easier to localize from serial logs.
+The manual/demo layout now keeps `STARTUI.ELF` plus its companion resources under `A:\AIOS`, so the normal launch flow is `cd aios`, then `startui`.
 
 ### Mouse / GUI IRQ12 regressions
 
@@ -215,11 +216,11 @@ make test-mouse
 Check:
 
 - `[mouse] PS/2 mouse enabled on IRQ12`
-- `APPIN001` after `WIN95UI` starts
-- `APPRET001` after the click closes `WIN95UI` or after `q` / `ESC` return from the other apps
+- `APPIN001` after `STARTUI` starts
+- `APPRET001` after the click closes `STARTUI` or after `q` / `ESC` return from the other apps
 - `[mouse] first packet received` after QMP moves the pointer
 - the test now derives the click path from the active `[video] init` geometry, so a failure here usually means a real GUI layout/input regression rather than a hardcoded-resolution mismatch
-- no `[win95ui]` serial debug lines while the GUI runs
+- no debug extra da GUI na serial while the GUI runs
 - shell accepts `ver` after the test clicks `Cancel`
 - `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app
 

@@ -249,6 +249,12 @@ void drive_probe_additional() {
             drive_boot_print(": ");
             drive_boot_print_num(found);
             drive_boot_print(" partition(s)\n");
+        } else {
+            if (detect_whole_disk_volume(disk, &next_letter)) {
+                drive_boot_print("  Disk ");
+                drive_boot_print_num(disk);
+                drive_boot_print(": whole disk volume\n");
+            }
         }
     }
     

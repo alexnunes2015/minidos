@@ -1,43 +1,41 @@
--# TODO
+# TODO
 
 ## Execution order
-1. Hard contracts, observability and failure handling (section 1) — ensures every critical subsystem emits deterministic markers and fails safely before anything else.
-2. Architecture and ownership cleanup (section 2) — breaks oversized modules and aligns subsystem ownership so deeper changes remain testable.
-3. Documentation voice and product narrative (section 3) — updates roadmap, strings and floppy/FAT12 narrative so the story matches reality while contracts settle.
-4. Build/tooling reproducibility (section 4) — locks the image pipeline so subsequent tests and docs truly reflect deterministic artifacts.
-5. Test determinism (section 5) — hardens the validation suite once build and docs can supply reliable inputs.
-6. Immediate actions (section 6) — orchestrate the “Rule of Gold” hygiene sweep, cleaning artifacts and saturating the TODO list.
+1. Hard contracts, observability and failure handling (section 1) — finish auditing fatal and degraded paths against `docs/contracts.md`.
+2. Architecture and ownership cleanup (section 2) — break oversized modules and keep subsystem authority unambiguous.
+3. Documentation voice and product narrative (section 3) — keep roadmap/status language and operator-facing strings aligned with the real contract.
+4. Build/tooling reproducibility (section 4) — remove avoidable environment branching and fragile post-link patching from the image pipeline.
+5. Test determinism (section 5) — replace sleep/polling heuristics with marker-driven synchronization and broaden negative coverage.
+6. Immediate actions (section 6) — keep the next tactical steps short, auditable, and tied to the “Rule of Gold”.
 
 ## 1. Hard contracts, observability and failure handling
-- Write a new `docs/contracts.md` or extend `docs/DEVELOPMENT_PROTOCOL.md` with explicit invariants for each critical subsystem (`kernel/core`, `scheduler`, `storage`, `shell`) and describe expected responses for invalid inputs, timeouts, and hardware faults referenced in `docs/HARD_CRITICS.md:1`.
-- Audit `kernel_runtime_thread` (`src/kernel/core/kernel.c`), the scheduler bootstrap (`src/kernel/process/scheduler.c`), `drive.c`, and the boot panic helpers so that every panic path emits deterministic serial markers and the Recovery policy described in `docs/HARD_CRITICS.md:7` is explicitly documented.
-- Replace silent skips (e.g., `run_auto_script` when FAT16 is missing and the artificial volume creation in `src/kernel/storage/drive.c`) by raising auditable errors or a well-defined degraded mode and log the change in `docs/DEBUGGING.md`.
+- Keep `docs/contracts.md` as the source of truth and finish auditing `kernel_runtime_thread`, the scheduler bootstrap, storage init, and panic helpers so every fatal/degraded path maps to a contractual marker and documented recovery policy.
+- Replace remaining implicit degraded paths (notably keyboard polling fallback and device-disable paths such as the PS/2 mouse busy case) with explicit markers plus documented degraded-mode behavior, or promote them to hard-fail when the subsystem contract requires it.
+- Continue aligning `docs/DEBUGGING.md` and `docs/TEST_SCRIPTS.md` with the marker catalog whenever new IDs are added or old prose logs become contractual.
 
 ## 2. Architecture and ownership cleanup
-- Split the largest modules (`src/kernel/shell/shell_apps.c`, `src/kernel/shell/shell_builtin.c`, `src/kernel/storage/fat16_dir.c`, `src/kernel/core/kernel.c`) into smaller, testable units with single responsibility and record the ownership map in `docs/DEVELOPMENT_PROTOCOL.md` (section on subsystem ownership) as prompted by `docs/HARD_CRITICS.md:2`.
-- Remove duplicate keyboard implementations (`src/kernel/keyboard.c` vs `src/kernel/input/keyboard.c`) and decide on one authoritative path; note the chosen owner in `docs/DEVELOPMENT_PROTOCOL.md`.
-- Consolidate low-level helpers (`inb/outb`, physical reads, etc.) into shared infrastructure so multiple files stop re-implementing the same helpers before finishing the refactor.
+- Split the remaining oversized critical modules (`src/kernel/shell/shell_apps.c`, `src/kernel/process/scheduler.c`, `src/kernel/video/video.c`, `src/boot/stage2.asm`) into smaller units with single responsibility and bounded validation impact.
+- Keep `src/kernel/input/keyboard.c` as the authoritative keyboard implementation and prevent compatibility shims/headers from growing back into a second API surface.
+- Consolidate low-level helpers (`inb/outb`, physical reads, shared polling/wait helpers) into shared infrastructure so unrelated files stop re-implementing the same primitives.
 
 ## 3. Documentation voice and product narrative
-- Update `docs/ROADMAP.md` to use binary, verifiable status labels instead of the current “concluída” definition and call out phases that still depend on “self-test markers” as partial (`docs/HARD_CRITICS.md:3` and `:8`).
-- Audit build scripts and shell strings: replace the stale `PTEST/README.TXT` claim that ELFs still run on the shell thread and the `ver` output (“boot floppy FAT12 + FAT16 runtime”) with explanations that reflect the actual FAT16/ATA runtime plus BIOS-backed boot volume.
-- Document the policy for `floppy-first` support—either restore a full FAT12 stack or explain the compatibility-only handshake as described in `docs/HARD_CRITICS.md:4`.
+- Keep `docs/ROADMAP.md` on evidence-linked status labels only; do not reintroduce phase-heading language that implies stronger closure than the documented `validated` / `delivered` / `fragile` / `uncovered` state.
+- Continue auditing build scripts, bundled image text, shell strings, and README/docs text so they do not regress to the old shell-thread or FAT12 parity narrative.
+- Treat the current floppy/FAT12 story as settled only while the repository remains on the compatibility-only contract; if that changes, update `docs/contracts.md`, `docs/DESIGN.md`, and the operator-facing strings in the same task.
 
 ## 4. Build/tooling reproducibility
-- Reduce the branching between `mtools`/`sudo` paths in `scripts/build_disk.sh`, or automatically fail if neither environment is available so that the script never silently chooses a fallback, per `docs/HARD_CRITICS.md:5`.
-- Replace the `awk`/Python patch (lines 80‑120) and move the `kernel_sectors` metadata into the build pipeline itself, eliminating fragile manual binary patching referenced in the same section.
-- Clean generated clutter from `build/`, `.venv/`, and `tests/__pycache__/` by tightening `.gitignore` and confirming `docs/ROADMAP.md`’s `phase0-check` instructions deliver the same status after cleanup.
+- Reduce the branching between `mtools` and `sudo` in `scripts/build_disk.sh`, or fail earlier and more explicitly when the required environment is unavailable.
+- Replace the `stage2` metadata patch flow with a build-time source of truth for `kernel_sectors`, removing the current JSON/Python post-link binary patch step.
+- Clean generated clutter from `build/`, `.venv/`, and `tests/__pycache__/` by tightening ignores and validating that `phase0-check` still proves the same baseline after cleanup.
 
 ## 5. Test determinism
-- Refactor `tests/test_serial.py`, `tests/test_keyboard_irq.py`, `tests/test_mouse_ui.py`, and `tests/qemu_harness.py` to rely on serial markers instead of `time.sleep` and polling loops; codify the new marker list in `docs/TEST_SCRIPTS.md` with deterministic IDs (`docs/HARD_CRITICS.md:6`).
-- Add negative tests for scheduler isolation, syscall errors, and storage failures so the current “self-test-driven” confidence in Phase 5 is backed by real contract coverage (see `docs/HARD_CRITICS.md:8`).
-- Track the new test invariants in `docs/DEVELOPMENT_PROTOCOL.md` under “Observability Rules” so every marker is versioned and documented.
+- Refactor `tests/test_serial.py`, `tests/test_keyboard_irq.py`, `tests/test_mouse_ui.py`, and `tests/qemu_harness.py` to rely on contractual markers instead of `time.sleep` and ad-hoc polling loops.
+- Add broader negative coverage for scheduler isolation, starvation/cleanup behavior, and syscall error handling; storage failure coverage already exists via `tests/test_storage_failure.py`.
+- Keep the test invariants mirrored in `docs/DEVELOPMENT_PROTOCOL.md` and `docs/TEST_SCRIPTS.md` so every marker-driven wait condition is versioned and documented.
 
 ## 6. Immediate actions
-1. Update docs/strings that still advertise a maturity this repo does not have.
-2. Remove synthetic drive creation outside isolated tests (and replace it with explicit failure handling).
-3. Break oversized modules and fix duplicate keyboard paths with owners.
-4. Clarify FAT12/floppy contract and correct drift in `scripts/build_disk.sh`.
-5. Harden the build pipeline and document the deterministic marker protocol.
-6. Clean duplicate/inferred code and artifact noise (`build/`, `.venv/`, `tests/__pycache__`).
-7. Ensure every change obeys the “Rule of Gold” question from `docs/HARD_CRITICS.md`.
+1. Remove the remaining stale “done” language from docs when the same section still declares `fragile` or `uncovered` caveats.
+2. Eliminate IRQ/polling degraded paths or make them fully contractual and testable.
+3. Break the remaining oversized critical modules with clear owner boundaries.
+4. Harden the image-build pipeline by reducing environment branching and removing fragile stage2 patching.
+5. Convert the lingering sleep/poll loops in the harness/tests to marker-driven synchronization and expand the negative scheduler/syscall matrix.

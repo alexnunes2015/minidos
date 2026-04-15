@@ -81,7 +81,7 @@ Valida entrada de teclado real via IRQ1 (sem enviar comando pela serial), injeta
 - `DOSSHELL` recebe teclado e devolve controlo ao shell;
 - `EDIT` recebe `ESC` por teclado e devolve controlo ao shell.
 
-Se algum build voltar a arrancar `WIN95UI` automaticamente, o harness fecha-a com `ESC` antes de continuar.
+Se algum build voltar a arrancar `STARTUI` automaticamente, o harness fecha-a com `ESC` antes de continuar.
 O harness espera pelo marcador serial `APPIN001` antes de enviar teclas para apps gráficas, para não confundir latência de arranque com falha de teclado.
 Depois espera `APPRET001` antes de validar que o shell retomou controlo, eliminando sleeps fixos no caminho de saída das apps.
 
@@ -97,15 +97,15 @@ make test-keyboard
 
 ### 6. `tests/test_mouse_ui.py` - Validação de rato PS/2 / IRQ12
 Valida o caminho completo de rato para GUI:
-- instala `WIN95UI.ELF` na imagem;
+- instala `STARTUI.ELF` e os recursos companion em `A:\AIOS`;
 - arranca o MiniDOS com QMP ativo;
-- valida o marcador serial `[video] init ... fast=...` para garantir que o caminho gráfico inicializou com observabilidade suficiente;
-- lança `WIN95UI` por teclado; se algum build já a tiver aberto, reutiliza a instância existente;
+- valida o marcador serial `[vid] fb=...w=...h=...p=...b=...` para garantir que o caminho gráfico inicializou com observabilidade suficiente;
+- entra em `aios` e lança `startui` por teclado; se algum build já a tiver aberto, reutiliza a instância existente;
 - espera `APPIN001`;
 - espera `APPRET001` depois do clique ou do input de saída;
 - injeta movimento relativo e clique esquerdo por `input-send-event`;
-- deriva a resolução ativa a partir do marcador `[video] init` e calcula o percurso do cursor a partir do centro do ecrã até ao botão `Fechar`, para o mesmo teste funcionar tanto no default `640x480` como nos fallbacks VESA maiores;
-- rejeita qualquer debug `[win95ui]` na serial durante a execução da GUI;
+- deriva a resolução ativa a partir do marcador `[vid] fb=...w=...h=...p=...b=...` e calcula o percurso do cursor a partir do centro do ecrã até ao botão `Fechar`, para o mesmo teste funcionar tanto no default `640x480` como nos fallbacks VESA maiores;
+- rejeita qualquer debug extra da GUI na serial durante a execução;
 - confirma que a app devolve controlo ao shell e que `ver` volta a ser aceite;
 - move o rato dentro de `DOSSHELL` e `EDIT` e confirma que `q` / `ESC` continuam a sair das apps sem injetar teclas espúrias.
 
@@ -273,10 +273,31 @@ python3 tests/test_user_isolation.py
 make test-user-isolation
 ```
 
-### 13. `make verify-image` - Verificação estrutural da imagem
+### 13. `tests/test_graphics_perf.py` - Regressão de performance gráfica
+Valida as optimizações de performance do subsistema de vídeo:
+- **stride-align**: confirma que o kernel arranca e atinge o main loop sem erros de vídeo (o stride cacheline-aligned é um invariante de compilação para as resoluções standard).
+- **stress-render**: envia `videostress 2 60` ao shell e aguarda `PTVIDEO200` — confirma que dois render workers terminam sem deadlock nem starvation.
+- **shell-responsive**: após o videostress, envia `ver` e confirma que o shell ainda responde — valida que o rwlock não ficou preso.
+
+**Uso:**
+```bash
+python3 tests/test_graphics_perf.py
+python3 tests/test_graphics_perf.py --test stride-align
+python3 tests/test_graphics_perf.py --test stress-render
+```
+
+**Atalho via Makefile:**
+```bash
+make test-graphics
+```
+
+**Build flags de debug:**
+- `DIRTY_RECT_DEBUG`: activa log serial de cada chamada a `video_note_dirty_locked` com coordenadas do rect marcado.
+
+### 14. `make verify-image` - Verificação estrutural da imagem
 Valida a imagem `minidos.img` fora do runtime:
-- tamanho da floppy (`1.44MB`);
-- BPB FAT12;
+- tamanho da imagem (`128MB`);
+- BPB FAT16;
 - assinatura de boot;
 - `kernel_sectors` patchado em `stage2.bin`;
 - presença dos ficheiros esperados no volume FAT.

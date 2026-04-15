@@ -10,25 +10,25 @@ nop
 ; FAT BPB (BIOS Parameter Block)
 bdb_oem:                    db 'MSWIN4.1'           ; 8 bytes
 bdb_bytes_per_sector:       dw 512
-bdb_sectors_per_cluster:    db 1
-bdb_reserved_sectors:       dw 192
+bdb_sectors_per_cluster:    db 1                    ; Replaced correctly by mkfs
+bdb_reserved_sectors:       dw 256                  ; Patched by mkfs
 bdb_fat_count:              db 2
-bdb_dir_entries_count:      dw 224
-bdb_total_sectors:          dw 2880                 ; 2880 * 512 = 1.44MB
-bdb_media_descriptor_type:  db 0xF0                 ; F0 = 3.5" floppy
-bdb_sectors_per_fat:        dw 9
-bdb_sectors_per_track:      dw 18
-bdb_heads:                  dw 2
-bdb_hidden_sectors:         dd 0
-bdb_large_sector_count:     dd 0
+bdb_dir_entries_count:      dw 224                  ; Patched by mkfs
+bdb_total_sectors:          dw 2880                 ; Patched by mkfs
+bdb_media_descriptor_type:  db 0xF0                 ; Patched by mkfs
+bdb_sectors_per_fat:        dw 8                    ; Patched by mkfs
+bdb_sectors_per_track:      dw 18                   ; Patched by mkfs
+bdb_heads:                  dw 2                    ; Patched by mkfs
+bdb_hidden_sectors:         dd 0                    ; Patched by mkfs
+bdb_large_sector_count:     dd 0                    ; Patched by mkfs
 
-; Extended Boot Record
-ebr_drive_number:           db 0                    ; 0x00 floppy, 0x80 hdd
+; Extended Boot Record (FAT16)
+ebr_drive_number:           db 0x80                 ; 0x00 floppy, 0x80 hdd
                             db 0                    ; reserved
 ebr_signature:              db 0x29
 ebr_volume_id:              db 0x12, 0x34, 0x56, 0x78
 ebr_volume_label:           db 'MINIDOS    '        ; 11 bytes
-ebr_system_id:              db 'FAT12   '           ; 8 bytes
+ebr_system_id:              db 'FAT16   '           ; 8 bytes
 
 start:
     ; SAVE BOOT DRIVE

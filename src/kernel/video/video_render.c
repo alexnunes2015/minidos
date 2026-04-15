@@ -89,12 +89,24 @@ void fill_frontbuffer_rect_rgb_locked(int x, int y, int w, int h, u32 rgb) {
     fb_bytes = video_fb_bytes_per_pixel();
 
     u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
-    for (py = 0; py < h; py++) {
-        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
-        int px;
 
-        for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
+    if (fb_bytes == 4) {
+        /* Fast path: 32-bit word writes to VESA LFB */
+        for (py = 0; py < h; py++) {
+            volatile u32* row = (volatile u32*)(void*)(fb + ((y + py) * fb_pitch) + (x * 4));
+            int px;
+            for (px = 0; px < w; px++) {
+                row[px] = packed;
+            }
+        }
+    } else {
+        /* Fallback: per-pixel write for 16/24-bit modes */
+        for (py = 0; py < h; py++) {
+            volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
+            int px;
+            for (px = 0; px < w; px++) {
+                write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
+            }
         }
     }
 }
@@ -163,12 +175,23 @@ void fill_rect_rgb_locked(int x, int y, int w, int h, u32 rgb) {
 
     u32 packed = pack_rgb((u8)((rgb >> 16) & 0xFFu), (u8)((rgb >> 8) & 0xFFu), (u8)(rgb & 0xFFu));
     int fb_bytes = video_fb_bytes_per_pixel();
-    for (py = 0; py < h; py++) {
-        volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
-        int px;
 
-        for (px = 0; px < w; px++) {
-            write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
+    if (fb_bytes == 4) {
+        /* Fast path for 32-bit VESA LFB: word-aligned writes */
+        for (py = 0; py < h; py++) {
+            volatile u32* row = (volatile u32*)(void*)(fb + ((y + py) * fb_pitch) + (x * 4));
+            int px;
+            for (px = 0; px < w; px++) {
+                row[px] = packed;
+            }
+        }
+    } else {
+        for (py = 0; py < h; py++) {
+            volatile u8* row = fb + ((y + py) * fb_pitch) + (x * fb_bytes);
+            int px;
+            for (px = 0; px < w; px++) {
+                write_frontbuffer_pixel_packed(row + (px * fb_bytes), fb_bytes, packed);
+            }
         }
     }
 }
@@ -210,14 +233,18 @@ void render_cell(int col, int row, char c) {
     int x0 = text_origin_x + col * FONT_W;
     int y0 = text_origin_y + row * FONT_H;
     const u8* glyph = glyph_for_char(c);
+    int y;
 
-    for (int y = 0; y < FONT_H; y++) {
+    video_lock();
+    for (y = 0; y < FONT_H; y++) {
         u8 bits = glyph[y];
-        for (int x = 0; x < FONT_W; x++) {
+        int x;
+        for (x = 0; x < FONT_W; x++) {
             u32 color = (bits & (1u << (7 - x))) ? COLOR_FG : COLOR_BG;
-            draw_pixel(x0 + x, y0 + y, color);
+            draw_pixel_locked(x0 + x, y0 + y, color);
         }
     }
+    video_unlock();
 }
 
 void redraw_text_buffer(void) {

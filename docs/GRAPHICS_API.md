@@ -164,7 +164,7 @@ The initial reusable widget layer includes:
 
 `ui_draw_bitmap` loads an uncompressed BMP (`BI_RGB`) that is <= `UI_BITMAP_MAX_FILE_SIZE` (256 KiB by default) and paints it at `(x, y)`, scaling to the provided `w x h` rectangle when both dimensions are positive (pass `w` or `h` ≤ 0 to keep the source size). Only 24-bit and 32-bit bitmaps are supported; magenta (`#FF00FF`) pixels in 24-bit images or pixels whose alpha byte is zero are treated as transparent so earlier drawings remain visible.
 
-The `WIN95UI` demo keeps `desktop_bg_bitmap` disabled by default because the current BMP helper still expands images through rectangle draws; this preserves the optional wallpaper API without making the demo's normal interaction path pay that cost every frame.
+The `STARTUI` demo keeps `desktop_bg_bitmap` disabled by default because the current BMP helper still expands images through rectangle draws; this preserves the optional wallpaper API without making the demo's normal interaction path pay that cost every frame.
 
 `ui_draw_cursor` now renders from a generated bitmap header and emits horizontal runs instead of 1x1 rects wherever possible. The default asset pipeline is:
 
@@ -230,13 +230,15 @@ Build and install the demo app into `minidos.img`:
 
 ```bash
 make
-./external_apps/add_app.sh external_apps/apps/win95_demo/win95_demo.c WIN95UI
 ```
 
 Then boot MiniDOS and run:
 
 ```text
-win95ui
+cd user
+cd adm
+cd aios
+startui
 ```
 
 Expected result:
@@ -257,7 +259,7 @@ Automated validation:
 make test-mouse
 ```
 
-The `win95ui` demo also uses `app_wait_event_timeout(api, ..., 1000)` plus `app_get_time(api, ...)` to refresh the taskbar clock once per second without blocking on user input forever.
+The `startui` demo also uses `app_wait_event_timeout(api, ..., 1000)` plus `app_get_time(api, ...)` to refresh the taskbar clock once per second without blocking on user input forever. The runtime now anchors resource lookup to `A:\AIOS`, so companion icons/BMPs/sounds can live beside `STARTUI.ELF` in that folder.
 
 ## BMP Wallpaper and Surface Blit
 
@@ -310,7 +312,7 @@ if (ui_wallpaper_surface_matches("WALLPAPR.BMP")) {
 - Max decoded surface: `UI_WALLPAPER_SURFACE_MAX_BYTES` (340 KB) — covers 24bpp BMPs up to the 256 KB file limit
 - If the BMP cannot be opened, parsed, or exceeds the limit: `ui_wallpaper_surface_load` returns 0, `g_ui_wallpaper_surface.valid` stays 0, and the wallpaper helpers return 0 — the caller can fall back to `ui_fill_rect` (solid colour) or `ui_draw_bitmap_clipped`
 - If the decoded surface size does not match the target desktop size, `ui_wallpaper_surface_blit_scaled` lets the kernel scale it in one blit for both full renders and dirty-rect restores
-- `WIN95UI` looks for `WALLPAPR.BMP` at startup; if absent or invalid it runs with the solid teal desktop unchanged
+- `STARTUI` looks for `BG.BMP` under `A:\AIOS` at startup; if absent or invalid it runs with the solid teal desktop unchanged
 
 **Validation:**
 ```bash
@@ -331,4 +333,4 @@ If the project evolves toward a real desktop shell, keep the next steps in this 
 
 Do not introduce CSS semantics before the widget tree and event model exist.
 
-The current `win95ui` demo still batches its drawing and calls `present` once per frame. The kernel presents those completed frames from the software backbuffer through the ASM fast-present path on standard `24/32 bpp` `R8:G8:B8` framebuffers, and falls back to the generic C copy path when the VBE pixel layout is not directly compatible.
+The current `startui` demo still batches its drawing and calls `present` once per frame. The kernel presents those completed frames from the software backbuffer through the ASM fast-present path on standard `24/32 bpp` `R8:G8:B8` framebuffers, and falls back to the generic C copy path when the VBE pixel layout is not directly compatible.

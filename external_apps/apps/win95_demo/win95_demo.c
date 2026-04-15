@@ -6,14 +6,20 @@
 #define KEY_SPACE 32
 #define TASKBAR_H 28
 /* User-supplied wallpaper BMP (optional; loaded once at startup) */
+#define RESOURCE_HOME_DIR_1 "AIOS"
 #define WALLPAPER_BMP_PATH "BG.BMP"
-#define START_BUTTON_W 74
+#define START_BUTTON_W 86
 #define START_BUTTON_H 20
 #define START_MENU_W 220
 #define START_MENU_H 188
 #define START_MENU_STRIP_W 28
 #define START_MENU_ITEM_NONE (-1)
 #define START_MENU_ITEM_COUNT 4
+#define DESKTOP_MAX_ITEMS 16
+#define DESKTOP_CELL_W 96
+#define DESKTOP_CELL_H 70
+#define DESKTOP_ICON_W 36
+#define DESKTOP_ICON_H 28
 #define CLOCK_TEXT_LEN 9
 #define CLOCK_REFRESH_MS 1000
 
@@ -25,12 +31,25 @@ enum {
     START_MENU_ITEM_BACK_TO_DOS = 4,
 };
 
-static const char* g_start_menu_items[START_MENU_ITEM_COUNT] = {
-    "Programas",
-    "Documentos",
-    "Definicoes",
-    "Ajuda",
+typedef struct {
+    const char* label;
+    const char* detail;
+    const char* glyph;
+    unsigned int accent;
+} start_menu_entry_t;
+
+static const start_menu_entry_t g_start_menu_items[START_MENU_ITEM_COUNT] = {
+    {"Programas", "Apps e demos", "P", 0xC04040u},
+    {"Documentos", "Ficheiros e notas", "D", 0xD0A020u},
+    {"Definicoes", "Tema e video", "C", 0x2C76D2u},
+    {"Ajuda", "Dicas rapidas", "?", 0x2C9A58u},
 };
+
+typedef struct {
+    char name[13];
+    int is_dir;
+    ui_rect_t bounds;
+} desktop_item_t;
 
 typedef struct {
     ui_window_manager_t wm;
@@ -52,6 +71,8 @@ typedef struct {
     int start_button_pressed;
     int start_menu_pressed_item;
     int start_menu_hot_item;
+    int desktop_item_count;
+    desktop_item_t desktop_items[DESKTOP_MAX_ITEMS];
     char mouse_text[48];
     char status_text[96];
     char input_text[64];
@@ -92,6 +113,20 @@ static int rect_equal(ui_rect_t a, ui_rect_t b) {
         && a.y == b.y
         && a.w == b.w
         && a.h == b.h;
+}
+
+static void enter_resource_home(const minidos_app_api_t* api) {
+    if (!api) {
+        return;
+    }
+
+    /* Anchor resource lookup to A:\AIOS regardless of the shell's cwd. */
+    if (!app_chdir(api, "\\")) {
+        return;
+    }
+    if (!app_chdir(api, RESOURCE_HOME_DIR_1)) {
+        return;
+    }
 }
 
 static void update_mouse_label_text(demo_state_t* state) {
@@ -150,6 +185,442 @@ static void update_clock_text(demo_state_t* state, const minidos_app_api_t* api)
     state->clock_text[8] = '\0';
 }
 
+static void enter_desktop_home(const minidos_app_api_t* api) {
+    if (!api) {
+        return;
+    }
+
+    if (!app_chdir(api, "\\")) {
+        return;
+    }
+    if (!app_chdir(api, "USER")) {
+        return;
+    }
+    if (!app_chdir(api, "ADM")) {
+        return;
+    }
+    (void)app_chdir(api, "Desktop");
+}
+
+static void desktop_item_icon_tag(const desktop_item_t* item, char out[4]) {
+    const char* ext = 0;
+    int i;
+
+    if (!out) {
+        return;
+    }
+
+    if (!item) {
+        out[0] = 'F';
+        out[1] = 'I';
+        out[2] = 'L';
+        out[3] = '\0';
+        return;
+    }
+
+    if (item->is_dir) {
+        out[0] = 'D';
+        out[1] = 'I';
+        out[2] = 'R';
+        out[3] = '\0';
+        return;
+    }
+
+    for (i = 0; item->name[i] != '\0'; i++) {
+        if (item->name[i] == '.') {
+            ext = &item->name[i + 1];
+        }
+    }
+
+    if (!ext || ext[0] == '\0') {
+        out[0] = 'F';
+        out[1] = 'I';
+        out[2] = 'L';
+        out[3] = '\0';
+        return;
+    }
+
+    if (ext[0] == 'E' && ext[1] == 'L' && ext[2] == 'F' && ext[3] == '\0') {
+        out[0] = 'E';
+        out[1] = 'X';
+        out[2] = 'E';
+        out[3] = '\0';
+        return;
+    }
+    if ((ext[0] == 'T' && ext[1] == 'X' && ext[2] == 'T' && ext[3] == '\0')
+        || (ext[0] == 'M' && ext[1] == 'D' && ext[2] == '\0')) {
+        out[0] = 'T';
+        out[1] = 'X';
+        out[2] = 'T';
+        out[3] = '\0';
+        return;
+    }
+    if ((ext[0] == 'B' && ext[1] == 'I' && ext[2] == 'N' && ext[3] == '\0')
+        || (ext[0] == 'D' && ext[1] == 'A' && ext[2] == 'T' && ext[3] == '\0')) {
+        out[0] = 'B';
+        out[1] = 'I';
+        out[2] = 'N';
+        out[3] = '\0';
+        return;
+    }
+    if ((ext[0] == 'B' && ext[1] == 'M' && ext[2] == 'P' && ext[3] == '\0')
+        || (ext[0] == 'P' && ext[1] == 'N' && ext[2] == 'G' && ext[3] == '\0')) {
+        out[0] = 'I';
+        out[1] = 'M';
+        out[2] = 'G';
+        out[3] = '\0';
+        return;
+    }
+
+    out[0] = ext[0];
+    out[1] = ext[1] ? ext[1] : ' ';
+    out[2] = ext[2] ? ext[2] : ' ';
+    out[3] = '\0';
+}
+
+static unsigned int desktop_item_color(const desktop_item_t* item) {
+    const char* ext = 0;
+    int i;
+
+    if (!item) {
+        return ui_rgb(192, 192, 192);
+    }
+    if (item->is_dir) {
+        return ui_rgb(224, 192, 64);
+    }
+
+    for (i = 0; item->name[i] != '\0'; i++) {
+        if (item->name[i] == '.') {
+            ext = &item->name[i + 1];
+        }
+    }
+
+    if (!ext) {
+        return ui_rgb(160, 160, 160);
+    }
+    if (ext[0] == 'E' && ext[1] == 'L' && ext[2] == 'F' && ext[3] == '\0') {
+        return ui_rgb(64, 128, 255);
+    }
+    if ((ext[0] == 'T' && ext[1] == 'X' && ext[2] == 'T' && ext[3] == '\0')
+        || (ext[0] == 'M' && ext[1] == 'D' && ext[2] == '\0')) {
+        return ui_rgb(128, 224, 128);
+    }
+    if ((ext[0] == 'B' && ext[1] == 'I' && ext[2] == 'N' && ext[3] == '\0')
+        || (ext[0] == 'D' && ext[1] == 'A' && ext[2] == 'T' && ext[3] == '\0')) {
+        return ui_rgb(192, 192, 192);
+    }
+    if ((ext[0] == 'B' && ext[1] == 'M' && ext[2] == 'P' && ext[3] == '\0')
+        || (ext[0] == 'P' && ext[1] == 'N' && ext[2] == 'G' && ext[3] == '\0')) {
+        return ui_rgb(224, 96, 192);
+    }
+    return ui_rgb(160, 160, 160);
+}
+
+static void desktop_item_display_name(const desktop_item_t* item, char out[13]) {
+    int i;
+    int j = 0;
+
+    if (!out) {
+        return;
+    }
+
+    out[0] = '\0';
+    if (!item) {
+        return;
+    }
+
+    for (i = 0; item->name[i] != '\0' && j < 12; i++) {
+        if (item->name[i] == '.') {
+            break;
+        }
+        out[j++] = item->name[i];
+    }
+    out[j] = '\0';
+}
+
+static void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
+    unsigned int fg, ui_rect_t clip) {
+    int i;
+    int row;
+    int col;
+
+    if (!api || !text) {
+        return;
+    }
+
+    for (i = 0; text[i] != '\0'; i++) {
+        ui_rect_t char_rect = ui_rect_make(x + (i * UI_CHAR_W), y, UI_CHAR_W, UI_CHAR_H);
+        const unsigned char* glyph;
+
+        if (text[i] < 32 || text[i] > 126) {
+            continue;
+        }
+        if (ui_rect_is_empty(ui_rect_intersect(char_rect, clip))) {
+            continue;
+        }
+
+        glyph = ui_font_8x8[text[i] - 32];
+        for (row = 0; row < UI_CHAR_H; row++) {
+            unsigned char bits = glyph[row];
+            for (col = 0; col < UI_CHAR_W; col++) {
+                if (!(bits & (0x80u >> col))) {
+                    continue;
+                }
+
+                {
+                    app_gfx_rect_t pixel_rect;
+                    pixel_rect.x = char_rect.x + col;
+                    pixel_rect.y = char_rect.y + row;
+                    pixel_rect.w = 1;
+                    pixel_rect.h = 1;
+                    pixel_rect.color = fg;
+                    if (!ui_rect_contains(&clip, pixel_rect.x, pixel_rect.y)) {
+                        continue;
+                    }
+                    (void)app_gfx_rect(api, &pixel_rect);
+                }
+            }
+        }
+    }
+}
+
+static void layout_desktop_items(demo_state_t* state) {
+    int i;
+    int columns;
+    int left;
+    int top;
+
+    if (!state) {
+        return;
+    }
+
+    columns = (state->sw - 24) / DESKTOP_CELL_W;
+    if (columns < 1) {
+        columns = 1;
+    }
+    if (columns > 6) {
+        columns = 6;
+    }
+
+    left = 16;
+    top = 18;
+
+    for (i = 0; i < state->desktop_item_count; i++) {
+        int col = i % columns;
+        int row = i / columns;
+
+        state->desktop_items[i].bounds = ui_rect_make(
+            left + (col * DESKTOP_CELL_W),
+            top + (row * DESKTOP_CELL_H),
+            DESKTOP_CELL_W - 6,
+            DESKTOP_CELL_H - 6);
+    }
+}
+
+static void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state) {
+    int i;
+    int count = 0;
+
+    if (!api || !state) {
+        return;
+    }
+
+    enter_desktop_home(api);
+    for (i = 0; i < DESKTOP_MAX_ITEMS; i++) {
+        char name[13];
+        int is_dir = 0;
+
+        name[0] = '\0';
+        if (!app_list_entry(api, (unsigned int)i, name, &is_dir)) {
+            break;
+        }
+        if (name[0] == '\0'
+            || (name[0] == '.' && name[1] == '\0')
+            || (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
+            continue;
+        }
+        str_copy(state->desktop_items[count].name, name, (int)sizeof(state->desktop_items[count].name));
+        state->desktop_items[count].is_dir = is_dir;
+        state->desktop_items[count].bounds = ui_rect_make(0, 0, 0, 0);
+        count++;
+    }
+    state->desktop_item_count = count;
+    layout_desktop_items(state);
+}
+
+static void draw_desktop_item(const minidos_app_api_t* api, const demo_state_t* state,
+    const desktop_item_t* item, ui_rect_t clip) {
+    ui_rect_t icon_rect;
+    ui_rect_t label_rect;
+    ui_rect_t body_rect;
+    char display_name[13];
+    char tag[4];
+    unsigned int icon_color;
+
+    if (!api || !state || !item) {
+        return;
+    }
+
+    body_rect = item->bounds;
+    if (ui_rect_is_empty(ui_rect_intersect(body_rect, clip))) {
+        return;
+    }
+
+    icon_color = desktop_item_color(item);
+    desktop_item_icon_tag(item, tag);
+    desktop_item_display_name(item, display_name);
+
+    icon_rect = ui_rect_make(body_rect.x + 6, body_rect.y + 4, DESKTOP_ICON_W, DESKTOP_ICON_H);
+    label_rect = ui_rect_make(body_rect.x, body_rect.y + DESKTOP_ICON_H + 10, body_rect.w, UI_CHAR_H);
+
+    ui_frame_rect_clipped(api, icon_rect, icon_color, clip);
+    ui_fill_rect_clipped(api, ui_rect_make(icon_rect.x + 1, icon_rect.y + 1, icon_rect.w - 2, 4), state->wm.theme.light, clip);
+    draw_text_transparent_clipped(api, icon_rect.x + 8, icon_rect.y + 9, tag,
+        state->wm.theme.dark_shadow, clip);
+
+    draw_text_transparent_clipped(api, label_rect.x, label_rect.y, display_name,
+        state->wm.theme.text, clip);
+}
+
+static void draw_desktop_items(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t clip) {
+    int i;
+
+    if (!api || !state) {
+        return;
+    }
+
+    for (i = 0; i < state->desktop_item_count; i++) {
+        draw_desktop_item(api, state, &state->desktop_items[i], clip);
+    }
+}
+
+static void dismiss_start_menu(demo_state_t* state);
+
+static void close_main_window(demo_state_t* state) {
+    if (!state) {
+        return;
+    }
+
+    dismiss_start_menu(state);
+    ui_wm_close_window(&state->wm, state->window_id);
+}
+
+static void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
+    int i;
+    int draw_count;
+    int drawn[UI_WM_MAX_WINDOWS];
+    ui_rect_t desktop;
+    ui_rect_t dirty_desktop;
+
+    if (!api || !state || ui_rect_is_empty(rect)) {
+        return;
+    }
+
+    desktop = ui_rect_make(0, 0, state->sw, state->sh);
+    dirty_desktop = ui_rect_intersect(rect, desktop);
+    if (!ui_rect_is_empty(dirty_desktop)) {
+        ui_fill_rect(api, dirty_desktop, state->wm.theme.desktop_bg);
+        if (state->wm.theme.desktop_bg_bitmap) {
+            if (ui_wallpaper_surface_matches(state->wm.theme.desktop_bg_bitmap)) {
+                (void)ui_wallpaper_surface_blit_scaled(api, 0, 0, state->sw, state->sh,
+                    dirty_desktop.x, dirty_desktop.y, dirty_desktop.w, dirty_desktop.h);
+            } else {
+                (void)ui_draw_bitmap_clipped(api, state->wm.theme.desktop_bg_bitmap,
+                    0, 0, state->sw, state->sh, dirty_desktop);
+            }
+        }
+
+        {
+            ui_rect_t accent = ui_rect_intersect(dirty_desktop, ui_rect_make(0, 0, state->sw, 2));
+            if (!ui_rect_is_empty(accent)) {
+                ui_fill_rect(api, accent, state->wm.theme.desktop_accent);
+            }
+        }
+
+        draw_desktop_items(api, state, dirty_desktop);
+    }
+
+    for (i = 0; i < UI_WM_MAX_WINDOWS; i++) {
+        drawn[i] = 0;
+    }
+
+    for (draw_count = 0; draw_count < state->wm.window_count; draw_count++) {
+        int best_index = -1;
+        int best_z = 2147483647;
+        const ui_wm_window_t* win;
+        ui_rect_t win_dirty;
+        ui_rect_t title_rect;
+        ui_rect_t client_rect;
+        int c;
+
+        for (i = 0; i < state->wm.window_count; i++) {
+            if (!state->wm.windows[i].visible || drawn[i]) {
+                continue;
+            }
+            if (best_index >= 0 && state->wm.windows[i].z_order >= best_z) {
+                continue;
+            }
+            best_index = i;
+            best_z = state->wm.windows[i].z_order;
+        }
+        if (best_index < 0) {
+            break;
+        }
+        drawn[best_index] = 1;
+
+        win = &state->wm.windows[best_index];
+        win_dirty = ui_rect_intersect(rect, win->window.bounds);
+        if (ui_rect_is_empty(win_dirty)) {
+            continue;
+        }
+
+        title_rect = ui_window_title_bar_rect(&win->window);
+        client_rect = ui_window_client_rect(&win->window);
+
+        if (!ui_rect_is_empty(ui_rect_intersect(rect, title_rect))
+            || win_dirty.x <= win->window.bounds.x + 4
+            || win_dirty.y <= win->window.bounds.y + 4
+            || win_dirty.x + win_dirty.w >= win->window.bounds.x + win->window.bounds.w - 4
+            || win_dirty.y + win_dirty.h >= win->window.bounds.y + win->window.bounds.h - 4) {
+            ui_draw_window(api, &state->wm.theme, &win->window);
+        } else {
+            ui_fill_rect(api, ui_rect_intersect(rect, client_rect), state->wm.theme.field_bg);
+        }
+
+        for (c = 0; c < state->wm.control_count; c++) {
+            const ui_control_t* control = &state->wm.controls[c];
+            ui_rect_t abs_bounds;
+
+            if (!control->visible || control->window_id != win->id) {
+                continue;
+            }
+            abs_bounds = ui_wm_control_abs_bounds(&state->wm, control);
+            if (ui_rect_is_empty(ui_rect_intersect(rect, abs_bounds))) {
+                continue;
+            }
+
+            if (control->type == UI_CONTROL_LABEL) {
+                ui_draw_text_clipped(api, abs_bounds.x, abs_bounds.y,
+                    control->text ? control->text : "",
+                    state->wm.theme.text, state->wm.theme.field_bg, rect);
+            } else if (control->type == UI_CONTROL_BUTTON) {
+                ui_button_t button;
+                button.bounds = abs_bounds;
+                button.label = control->text ? control->text : "";
+                button.pressed = control->pressed;
+                button.focused = control->focused;
+                button.enabled = control->enabled;
+                ui_draw_button(api, &state->wm.theme, &button);
+            } else if (control->type == UI_CONTROL_TEXTINPUT) {
+                ui_draw_text_box(api, &state->wm.theme, abs_bounds,
+                    control->text ? control->text : "", control->focused);
+            } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
+                ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &state->wm.theme);
+            }
+        }
+    }
+}
+
 static ui_rect_t taskbar_rect(const demo_state_t* state) {
     if (!state) {
         return ui_rect_make(0, 0, 0, 0);
@@ -175,6 +646,17 @@ static ui_rect_t taskbar_clock_rect(const demo_state_t* state) {
     return ui_rect_make(state->sw - 88, taskbar.y + 4, 80, 20);
 }
 
+static int main_window_is_visible(const demo_state_t* state) {
+    const ui_wm_window_t* win;
+
+    if (!state) {
+        return 0;
+    }
+
+    win = ui_wm_find_window_const(&state->wm, state->window_id);
+    return win && win->visible;
+}
+
 static ui_rect_t cursor_rect_at(int x, int y) {
     return ui_rect_make(x - UI_CURSOR_HOTSPOT_X,
         y - UI_CURSOR_HOTSPOT_Y,
@@ -197,11 +679,65 @@ static ui_rect_t current_window_rect(const demo_state_t* state) {
     return win->window.bounds;
 }
 
+static ui_rect_t current_title_bar_rect(const demo_state_t* state) {
+    const ui_wm_window_t* win;
+
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    win = ui_wm_find_window_const(&state->wm, state->window_id);
+    if (!win || !win->visible) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    return ui_window_title_bar_rect(&win->window);
+}
+
+static int cursor_touches_title_bar(const demo_state_t* state,
+    ui_rect_t previous_cursor_rect,
+    ui_rect_t current_cursor_rect) {
+    ui_rect_t title_bar_rect;
+
+    if (!state) {
+        return 0;
+    }
+
+    title_bar_rect = current_title_bar_rect(state);
+    if (ui_rect_is_empty(title_bar_rect)) {
+        return 0;
+    }
+
+    return !ui_rect_is_empty(ui_rect_intersect(previous_cursor_rect, title_bar_rect))
+        || !ui_rect_is_empty(ui_rect_intersect(current_cursor_rect, title_bar_rect));
+}
+
 static ui_rect_t current_drag_preview_rect(const demo_state_t* state) {
     if (!state || !state->dragging) {
         return ui_rect_make(0, 0, 0, 0);
     }
     return state->drag_preview_bounds;
+}
+
+static void add_window_damage_for_cursor(ui_dirty_list_t* dirty,
+    const demo_state_t* state,
+    ui_rect_t previous_cursor_rect,
+    ui_rect_t current_cursor_rect) {
+    ui_rect_t window_rect;
+
+    if (!dirty || !state) {
+        return;
+    }
+
+    window_rect = current_window_rect(state);
+    if (ui_rect_is_empty(window_rect)) {
+        return;
+    }
+
+    if (!ui_rect_is_empty(ui_rect_intersect(previous_cursor_rect, window_rect))
+        || !ui_rect_is_empty(ui_rect_intersect(current_cursor_rect, window_rect))) {
+        ui_dirty_list_add(dirty, window_rect);
+    }
 }
 
 static ui_rect_t start_menu_rect(const demo_state_t* state) {
@@ -367,40 +903,284 @@ static void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* 
 
 static void draw_start_menu_item(const minidos_app_api_t* api, const demo_state_t* state,
     int item_id, const char* label, unsigned int icon_color) {
+    const start_menu_entry_t* entry;
     ui_rect_t item_rect;
     ui_rect_t icon_rect;
+    ui_rect_t icon_inner;
+    ui_rect_t arrow_rect;
     const ui_theme_t* theme;
     unsigned int bg;
     unsigned int fg;
+    unsigned int detail_fg;
+    int pressed;
+    int hot;
+
+    if (!api || !state || !label) {
+        return;
+    }
+    if (item_id < 0 || item_id >= START_MENU_ITEM_COUNT) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    entry = &g_start_menu_items[item_id];
+    item_rect = start_menu_item_rect(state, item_id);
+    pressed = (state->start_menu_pressed_item == item_id);
+    hot = (state->start_menu_hot_item == item_id);
+    bg = theme->face;
+    fg = theme->text;
+    detail_fg = theme->shadow;
+
+    if (hot) {
+        bg = theme->selection_bg;
+        fg = theme->selection_text;
+        detail_fg = ui_rgb(216, 224, 255);
+    }
+    ui_fill_rect(api, item_rect, bg);
+    ui_bevel_rect(api, item_rect,
+        pressed ? theme->shadow : theme->light,
+        pressed ? theme->light : theme->dark_shadow);
+
+    icon_rect = ui_rect_make(item_rect.x + 4, item_rect.y + 2, 18, 18);
+    ui_draw_panel(api, theme, icon_rect, !pressed);
+    icon_inner = ui_rect_inset(icon_rect, 2);
+    ui_fill_rect(api, icon_inner, icon_color);
+    ui_fill_rect(api, ui_rect_make(icon_inner.x, icon_inner.y, icon_inner.w, 3), theme->light);
+    draw_text_transparent_clipped(api, icon_inner.x + ((icon_inner.w - UI_CHAR_W) / 2),
+        icon_inner.y + ((icon_inner.h - UI_CHAR_H) / 2) + 1, entry->glyph,
+        theme->dark_shadow, icon_inner);
+
+    ui_draw_text(api, item_rect.x + 28, item_rect.y + 2, label, fg, bg);
+    ui_draw_text(api, item_rect.x + 28, item_rect.y + 12, entry->detail, detail_fg, bg);
+
+    arrow_rect = ui_rect_make(item_rect.x + item_rect.w - 16, item_rect.y + 5, 10, 10);
+    if (hot) {
+        ui_fill_rect(api, arrow_rect, ui_rgb(32, 64, 160));
+        ui_frame_rect(api, arrow_rect, theme->title_active_text);
+    }
+    draw_text_transparent_clipped(api, arrow_rect.x + 1, arrow_rect.y + 1, ">",
+        hot ? theme->title_active_text : theme->shadow, item_rect);
+}
+
+static unsigned int blend_rgb(unsigned int start_color, unsigned int end_color, int step, int steps) {
+    unsigned int sr;
+    unsigned int sg;
+    unsigned int sb;
+    unsigned int er;
+    unsigned int eg;
+    unsigned int eb;
+    unsigned int r;
+    unsigned int g;
+    unsigned int b;
+
+    if (steps <= 1) {
+        return end_color;
+    }
+
+    sr = (start_color >> 16) & 0xFFu;
+    sg = (start_color >> 8) & 0xFFu;
+    sb = start_color & 0xFFu;
+    er = (end_color >> 16) & 0xFFu;
+    eg = (end_color >> 8) & 0xFFu;
+    eb = end_color & 0xFFu;
+
+    r = (unsigned int)(sr + ((int)(er - sr) * step) / (steps - 1));
+    g = (unsigned int)(sg + ((int)(eg - sg) * step) / (steps - 1));
+    b = (unsigned int)(sb + ((int)(eb - sb) * step) / (steps - 1));
+    return ui_rgb(r, g, b);
+}
+
+static void fill_vertical_gradient(const minidos_app_api_t* api, ui_rect_t rect,
+    unsigned int top_color, unsigned int bottom_color) {
+    int y;
+    int steps;
+
+    if (!api || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    steps = rect.h;
+    for (y = 0; y < rect.h; y++) {
+        ui_fill_rect(api, ui_rect_make(rect.x, rect.y + y, rect.w, 1),
+            blend_rgb(top_color, bottom_color, y, steps));
+    }
+}
+
+static void draw_vertical_text(const minidos_app_api_t* api, ui_rect_t rect, const char* text,
+    unsigned int fg, unsigned int top_color, unsigned int bottom_color) {
+    int i;
+    int len;
+    int scale;
+    int char_extent;
+    int char_gap;
+    int text_h;
+    int draw_y;
+
+    if (!api || !text || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    len = ui_strlen(text);
+    if (len <= 0) {
+        return;
+    }
+
+    (void)top_color;
+    (void)bottom_color;
+
+    scale = 2;
+    char_extent = UI_CHAR_W * scale;
+    char_gap = scale;
+    text_h = (len * char_extent) + ((len - 1) * char_gap);
+    draw_y = rect.y;
+    if (rect.h > text_h) {
+        draw_y += (rect.h - text_h) / 2;
+    }
+
+    for (i = len - 1; i >= 0; i--) {
+        int glyph_index;
+        const unsigned char* glyph;
+        int row;
+        int col;
+        int char_x;
+        int char_y;
+        int dest_x;
+        int dest_y;
+
+        if (text[i] == ' ') {
+            draw_y += char_extent + char_gap;
+            continue;
+        }
+        if (text[i] < 32 || text[i] > 126) {
+            draw_y += char_extent + char_gap;
+            continue;
+        }
+
+        glyph_index = text[i] - 32;
+        glyph = ui_font_8x8[glyph_index];
+        char_x = rect.x + (rect.w - char_extent) / 2;
+        char_y = draw_y;
+
+        /* Rotate each glyph 90 degrees and scale it so the banner reads vertically. */
+        for (row = 0; row < UI_CHAR_H; row++) {
+            unsigned char bits = glyph[row];
+            for (col = 0; col < UI_CHAR_W; col++) {
+                if (!(bits & (0x80u >> col))) {
+                    continue;
+                }
+                dest_x = char_x + row * scale;
+                dest_y = char_y + (UI_CHAR_W - 1 - col) * scale;
+                ui_fill_rect(api, ui_rect_make(dest_x, dest_y, scale, scale), fg);
+            }
+        }
+        draw_y += char_extent + char_gap;
+    }
+}
+
+static void draw_logo_mark(const minidos_app_api_t* api, int x, int y, int scale, int pressed) {
+    int offset;
+    int cell;
+    int gap;
+
+    if (!api || scale <= 0) {
+        return;
+    }
+
+    offset = pressed ? 1 : 0;
+    cell = scale;
+    gap = scale > 2 ? 1 : 0;
+
+    ui_frame_rect(api, ui_rect_make(x + offset - 1, y + offset - 1,
+        (cell * 2) + gap + 2, (cell * 2) + gap + 2), 0x000000u);
+    ui_fill_rect(api, ui_rect_make(x + offset, y + offset, cell, cell), ui_rgb(214, 64, 64));
+    ui_fill_rect(api, ui_rect_make(x + offset + cell + gap, y + offset, cell, cell), ui_rgb(40, 104, 214));
+    ui_fill_rect(api, ui_rect_make(x + offset, y + offset + cell + gap, cell, cell), ui_rgb(48, 164, 92));
+    ui_fill_rect(api, ui_rect_make(x + offset + cell + gap, y + offset + cell + gap, cell, cell), ui_rgb(236, 196, 52));
+}
+
+static void draw_start_button(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
+    const ui_theme_t* theme;
+    ui_rect_t inner;
+    unsigned int button_bg;
+    int pressed;
+
+    if (!api || !state) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    pressed = state->start_button_pressed || state->start_menu_open;
+
+    ui_fill_rect(api, rect, theme->face);
+    if (pressed) {
+        ui_bevel_rect(api, rect, theme->shadow, theme->light);
+        if (rect.w > 2 && rect.h > 2) {
+            ui_bevel_rect(api, ui_rect_inset(rect, 1), theme->dark_shadow, theme->face_alt);
+        }
+    } else {
+        ui_bevel_rect(api, rect, theme->light, theme->dark_shadow);
+        if (rect.w > 2 && rect.h > 2) {
+            ui_bevel_rect(api, ui_rect_inset(rect, 1), theme->face_alt, theme->shadow);
+        }
+    }
+
+    inner = ui_rect_inset(rect, 3);
+    button_bg = pressed ? theme->face_alt : theme->face;
+    ui_fill_rect(api, inner, button_bg);
+    ui_fill_rect(api, ui_rect_make(inner.x, inner.y, inner.w, 2),
+        pressed ? theme->face : theme->light);
+    draw_logo_mark(api, inner.x + 4, inner.y + 4, 3, pressed);
+    ui_draw_text(api, inner.x + 16 + (pressed ? 1 : 0), inner.y + 4 + (pressed ? 1 : 0),
+        "Iniciar", theme->text, button_bg);
+}
+
+static void draw_task_button(const minidos_app_api_t* api, const demo_state_t* state,
+    ui_rect_t rect, const char* label) {
+    const ui_theme_t* theme;
+    ui_rect_t inner;
+    unsigned int button_bg;
 
     if (!api || !state || !label) {
         return;
     }
 
     theme = &state->wm.theme;
-    item_rect = start_menu_item_rect(state, item_id);
-    bg = theme->field_bg;
-    fg = theme->text;
+    ui_draw_panel(api, theme, rect, 0);
+    inner = ui_rect_inset(rect, 2);
+    button_bg = ui_rgb(214, 219, 233);
+    ui_fill_rect(api, inner, button_bg);
+    ui_fill_rect(api, ui_rect_make(inner.x, inner.y, 5, inner.h), theme->title_active_bg);
+    draw_logo_mark(api, inner.x + 8, inner.y + 5, 3, 0);
+    ui_draw_text(api, inner.x + 24, inner.y + 5, label, theme->text, button_bg);
+}
 
-    if (state->start_menu_hot_item == item_id) {
-        bg = theme->selection_bg;
-        fg = theme->selection_text;
-        ui_fill_rect(api, item_rect, bg);
-    } else {
-        ui_fill_rect(api, item_rect, bg);
+static void draw_menu_info_panel(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
+    const ui_theme_t* theme;
+    ui_rect_t inner;
+    ui_rect_t badge_rect;
+
+    if (!api || !state) {
+        return;
     }
 
-    icon_rect = ui_rect_make(item_rect.x + 4, item_rect.y + 3, 16, 16);
-    ui_fill_rect(api, icon_rect, icon_color);
-    ui_frame_rect(api, icon_rect, theme->dark_shadow);
-    ui_draw_text(api, item_rect.x + 28, item_rect.y + 7, label, fg, bg);
-    ui_draw_text(api, item_rect.x + item_rect.w - 12, item_rect.y + 7, ">", fg, bg);
+    theme = &state->wm.theme;
+    ui_draw_panel(api, theme, rect, 0);
+    inner = ui_rect_inset(rect, 2);
+    ui_fill_rect(api, inner, theme->face);
+    ui_fill_rect(api, ui_rect_make(inner.x, inner.y, 5, inner.h), theme->title_active_bg);
+    ui_draw_text(api, inner.x + 10, inner.y + 2, "Atalho", theme->shadow, theme->face);
+    ui_draw_text(api, inner.x + 10, inner.y + 12, "ESC fecha", theme->text, theme->face);
+
+    badge_rect = ui_rect_make(inner.x + inner.w - 72, inner.y + 3, 68, inner.h - 6);
+    ui_draw_panel(api, theme, badge_rect, 1);
+    ui_draw_label_centered(api, ui_rect_inset(badge_rect, 2), state->clock_text, theme->text, theme->face);
 }
 
 static void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_rect_t menu;
     ui_rect_t strip;
     ui_rect_t divider;
+    ui_rect_t info_rect;
     ui_rect_t exit_rect;
     ui_button_t exit_button;
     const ui_theme_t* theme;
@@ -412,18 +1192,23 @@ static void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* st
     theme = &state->wm.theme;
     menu = start_menu_rect(state);
     strip = ui_rect_make(menu.x + 4, menu.y + 4, START_MENU_STRIP_W, menu.h - 8);
+    info_rect = ui_rect_make(menu.x + START_MENU_STRIP_W + 14, menu.y + 114,
+        menu.w - START_MENU_STRIP_W - 28, 26);
     divider = ui_rect_make(menu.x + START_MENU_STRIP_W + 12, menu.y + menu.h - 48, menu.w - START_MENU_STRIP_W - 24, 2);
     exit_rect = start_menu_exit_rect(state);
 
+    ui_fill_rect(api, ui_rect_make(menu.x + 2, menu.y + 2, menu.w, menu.h), ui_rgb(48, 48, 48));
     ui_draw_panel(api, theme, menu, 1);
-    ui_fill_rect(api, strip, theme->title_active_bg);
-    ui_draw_text(api, strip.x + 4, strip.y + 12, "MiniDOS", theme->title_active_text, theme->title_active_bg);
-    ui_draw_text(api, strip.x + 9, strip.y + 28, "95", theme->title_active_text, theme->title_active_bg);
+    fill_vertical_gradient(api, strip, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
+    draw_vertical_text(api, strip, "AIOS 95", theme->title_active_text, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
+    draw_logo_mark(api, strip.x + 5, strip.y + strip.h - 20, 5, 0);
 
-    draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS], ui_rgb(255, 0, 0));
-    draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS], ui_rgb(255, 255, 0));
-    draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES], ui_rgb(0, 128, 255));
-    draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA], ui_rgb(0, 180, 0));
+    draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].label, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].accent);
+    draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].label, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].accent);
+    draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES].label, g_start_menu_items[START_MENU_ITEM_DEFINICOES].accent);
+    draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA].label, g_start_menu_items[START_MENU_ITEM_AJUDA].accent);
+
+    draw_menu_info_panel(api, state, info_rect);
 
     ui_fill_rect(api, ui_rect_make(divider.x, divider.y, divider.w, 1), theme->shadow);
     ui_fill_rect(api, ui_rect_make(divider.x, divider.y + 1, divider.w, 1), theme->light);
@@ -441,7 +1226,6 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
     ui_rect_t start_rect;
     ui_rect_t task_rect;
     ui_rect_t clock_rect;
-    ui_button_t start_button;
     const ui_theme_t* theme;
 
     if (!api || !state) {
@@ -454,19 +1238,18 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
     task_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, 170, 20);
     clock_rect = taskbar_clock_rect(state);
     ui_draw_panel(api, theme, taskbar, 1);
+    ui_fill_rect(api, ui_rect_make(taskbar.x + 2, taskbar.y + 2, taskbar.w - 4, 1), theme->light);
+    ui_fill_rect(api, ui_rect_make(taskbar.x + 2, taskbar.y + taskbar.h - 3, taskbar.w - 4, 1), theme->shadow);
 
-    start_button.bounds = start_rect;
-    start_button.label = "Iniciar";
-    start_button.pressed = state->start_button_pressed || state->start_menu_open;
-    start_button.focused = 0;
-    start_button.enabled = 1;
-    ui_draw_button(api, theme, &start_button);
+    draw_start_button(api, state, start_rect);
 
-    ui_draw_panel(api, theme, task_rect, 0);
-    ui_draw_text(api, task_rect.x + 8, task_rect.y + 6, "MiniDOS 95 Demo", theme->text, theme->face);
+    if (main_window_is_visible(state)) {
+        draw_task_button(api, state, task_rect, "MiniDOS 95 Demo");
+    }
 
     ui_draw_panel(api, theme, clock_rect, 0);
-    ui_draw_label_centered(api, clock_rect, state->clock_text, theme->text, theme->face);
+    ui_fill_rect(api, ui_rect_inset(clock_rect, 2), ui_rgb(224, 224, 224));
+    ui_draw_label_centered(api, ui_rect_inset(clock_rect, 2), state->clock_text, theme->text, ui_rgb(224, 224, 224));
 }
 
 static void render_clock_update(const minidos_app_api_t* api, const demo_state_t* state) {
@@ -479,7 +1262,9 @@ static void render_clock_update(const minidos_app_api_t* api, const demo_state_t
 
     clock_rect = taskbar_clock_rect(state);
     ui_draw_panel(api, &state->wm.theme, clock_rect, 0);
-    ui_draw_label_centered(api, clock_rect, state->clock_text, state->wm.theme.text, state->wm.theme.face);
+    ui_fill_rect(api, ui_rect_inset(clock_rect, 2), ui_rgb(224, 224, 224));
+    ui_draw_label_centered(api, ui_rect_inset(clock_rect, 2), state->clock_text,
+        state->wm.theme.text, ui_rgb(224, 224, 224));
 
     if (state->mouse.present) {
         cursor_rect = cursor_rect_at(state->mouse.x, state->mouse.y);
@@ -492,22 +1277,14 @@ static void render_clock_update(const minidos_app_api_t* api, const demo_state_t
     ui_present(api);
 }
 
-/* Redraw a dirty region through the layer compositor (desktop + windows + controls) */
-static void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
-    if (!api || !state || ui_rect_is_empty(rect)) {
-        return;
-    }
-    ui_wm_redraw_dirty(api, &state->wm, rect, state->sw, state->sh);
-}
-
 static void render_partial_motion(const minidos_app_api_t* api,
     const demo_state_t* state,
     const app_mouse_state_t* previous_mouse) {
     ui_dirty_list_t dirty;
+    ui_rect_t previous_cursor_rect;
+    ui_rect_t current_cursor_rect;
     ui_rect_t bar_rect;
     ui_rect_t menu_rect;
-    int drew_taskbar_overlay = 0;
-    int drew_start_menu = 0;
     int i;
 
     if (!api || !state || !previous_mouse) {
@@ -515,33 +1292,36 @@ static void render_partial_motion(const minidos_app_api_t* api,
     }
 
     ui_dirty_list_init(&dirty);
-    ui_dirty_list_add(&dirty, cursor_rect_at(previous_mouse->x, previous_mouse->y));
-    ui_dirty_list_add(&dirty, cursor_rect_at(state->mouse.x, state->mouse.y));
+    previous_cursor_rect = cursor_rect_at(previous_mouse->x, previous_mouse->y);
+    current_cursor_rect = cursor_rect_at(state->mouse.x, state->mouse.y);
+    ui_dirty_list_add(&dirty, previous_cursor_rect);
+    ui_dirty_list_add(&dirty, current_cursor_rect);
+    add_window_damage_for_cursor(&dirty, state, previous_cursor_rect, current_cursor_rect);
 
     bar_rect = taskbar_rect(state);
     menu_rect = start_menu_rect(state);
 
+    /* Layer compositor: all dirty regions first */
     for (i = 0; i < dirty.count; i++) {
-        ui_rect_t area = dirty.rects[i];
+        redraw_region(api, state, dirty.rects[i]);
+    }
 
-        /* Layer compositor: desktop + windows + controls */
-        redraw_region(api, state, area);
-
-        /* Overlay: taskbar */
-        if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
+    /* Overlays: drawn once after all compositor passes to avoid
+     * a later redraw_region call painting over an already-drawn overlay */
+    for (i = 0; i < dirty.count; i++) {
+        if (!ui_rect_is_empty(ui_rect_intersect(dirty.rects[i], bar_rect))) {
             draw_taskbar_overlay(api, state);
-            drew_taskbar_overlay = 1;
-        }
-
-        /* Overlay: start menu */
-        if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
-            draw_start_menu(api, state);
-            drew_start_menu = 1;
+            break;
         }
     }
 
-    if (state->start_menu_open && !drew_start_menu) {
-        draw_start_menu(api, state);
+    if (state->start_menu_open) {
+        for (i = 0; i < dirty.count; i++) {
+            if (!ui_rect_is_empty(ui_rect_intersect(dirty.rects[i], menu_rect))) {
+                draw_start_menu(api, state);
+                break;
+            }
+        }
     }
 
     /* Overlay: cursor (always on top) */
@@ -558,10 +1338,10 @@ static void render_partial_drag(const minidos_app_api_t* api,
     ui_rect_t previous_drag_rect,
     const app_mouse_state_t* previous_mouse) {
     ui_dirty_list_t dirty;
+    ui_rect_t previous_cursor_rect;
+    ui_rect_t current_cursor_rect;
     ui_rect_t bar_rect;
     ui_rect_t menu_rect;
-    int drew_taskbar_overlay = 0;
-    int drew_start_menu = 0;
     int i;
 
     if (!api || !state || !previous_mouse) {
@@ -571,33 +1351,35 @@ static void render_partial_drag(const minidos_app_api_t* api,
     ui_dirty_list_init(&dirty);
     ui_dirty_list_add(&dirty, previous_drag_rect);
     ui_dirty_list_add(&dirty, state->drag_preview_bounds);
-    ui_dirty_list_add(&dirty, cursor_rect_at(previous_mouse->x, previous_mouse->y));
-    ui_dirty_list_add(&dirty, cursor_rect_at(state->mouse.x, state->mouse.y));
+    previous_cursor_rect = cursor_rect_at(previous_mouse->x, previous_mouse->y);
+    current_cursor_rect = cursor_rect_at(state->mouse.x, state->mouse.y);
+    ui_dirty_list_add(&dirty, previous_cursor_rect);
+    ui_dirty_list_add(&dirty, current_cursor_rect);
+    add_window_damage_for_cursor(&dirty, state, previous_cursor_rect, current_cursor_rect);
 
     bar_rect = taskbar_rect(state);
     menu_rect = start_menu_rect(state);
 
+    /* Layer compositor: all dirty regions first */
     for (i = 0; i < dirty.count; i++) {
-        ui_rect_t area = dirty.rects[i];
+        redraw_region(api, state, dirty.rects[i]);
+    }
 
-        /* Layer compositor: desktop + windows + controls */
-        redraw_region(api, state, area);
-
-        /* Overlay: taskbar */
-        if (!drew_taskbar_overlay && !ui_rect_is_empty(ui_rect_intersect(area, bar_rect))) {
+    /* Overlays: drawn once after all compositor passes */
+    for (i = 0; i < dirty.count; i++) {
+        if (!ui_rect_is_empty(ui_rect_intersect(dirty.rects[i], bar_rect))) {
             draw_taskbar_overlay(api, state);
-            drew_taskbar_overlay = 1;
-        }
-
-        /* Overlay: start menu */
-        if (state->start_menu_open && !drew_start_menu && !ui_rect_is_empty(ui_rect_intersect(area, menu_rect))) {
-            draw_start_menu(api, state);
-            drew_start_menu = 1;
+            break;
         }
     }
 
-    if (state->start_menu_open && !drew_start_menu) {
-        draw_start_menu(api, state);
+    if (state->start_menu_open) {
+        for (i = 0; i < dirty.count; i++) {
+            if (!ui_rect_is_empty(ui_rect_intersect(dirty.rects[i], menu_rect))) {
+                draw_start_menu(api, state);
+                break;
+            }
+        }
     }
 
     /* Overlay: drag outline */
@@ -617,8 +1399,7 @@ static void render(const minidos_app_api_t* api, const demo_state_t* state) {
         return;
     }
 
-    ui_wm_draw(api, &state->wm, state->sw, state->sh,
-        "MiniDOS 95");
+    redraw_region(api, state, ui_rect_make(0, 0, state->sw, state->sh));
 
     draw_taskbar_overlay(api, state);
     draw_start_menu(api, state);
@@ -634,13 +1415,12 @@ static void render(const minidos_app_api_t* api, const demo_state_t* state) {
 
 static int handle_activated_control(demo_state_t* state, int control_id) {
     if (control_id == state->button_ok_id) {
-        dismiss_start_menu(state);
-        update_status_text(state, "OK clicado. Fluxo grafico pronto.");
+        close_main_window(state);
         return 0;
     }
     if (control_id == state->button_cancel_id) {
-        dismiss_start_menu(state);
-        return 1;
+        close_main_window(state);
+        return 0;
     }
     return 0;
 }
@@ -823,7 +1603,8 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     }
 
     if (out_hit_close && activated) {
-        return 1;
+        close_main_window(state);
+        return 0;
     }
 
     if (activated && out_control_id != 0) {
@@ -850,6 +1631,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
     state->start_menu_hot_item = START_MENU_ITEM_NONE;
+    state->desktop_item_count = 0;
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
@@ -858,6 +1640,8 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     if (ui_wallpaper_surface_load(api, WALLPAPER_BMP_PATH)) {
         state->wm.theme.desktop_bg_bitmap = WALLPAPER_BMP_PATH;
     }
+
+    load_desktop_items(api, state);
 
     x = (state->sw - window_w) / 2;
     y = (state->sh - window_h) / 2;
@@ -917,6 +1701,7 @@ int app_main(const minidos_app_api_t* api) {
         return 1;
     }
 
+    enter_resource_home(api);
     init_demo(&state, api);
     render(api, &state);
 
@@ -940,6 +1725,8 @@ int app_main(const minidos_app_api_t* api) {
                 return 0;
             }
             if (state.mouse.x != previous_mouse.x || state.mouse.y != previous_mouse.y) {
+                ui_rect_t previous_cursor_rect = cursor_rect_at(previous_mouse.x, previous_mouse.y);
+                ui_rect_t current_cursor_rect = cursor_rect_at(state.mouse.x, state.mouse.y);
                 ui_rect_t next_window_rect = current_window_rect(&state);
                 ui_rect_t next_drag_rect = current_drag_preview_rect(&state);
                 int motion_changed_layout = !rect_equal(previous_window_rect, next_window_rect)
@@ -949,7 +1736,8 @@ int app_main(const minidos_app_api_t* api) {
                     || previous_start_menu_pressed_item != state.start_menu_pressed_item
                     || previous_start_menu_hot_item != state.start_menu_hot_item;
 
-                if (!motion_changed_layout) {
+                if (!motion_changed_layout
+                    && !cursor_touches_title_bar(&state, previous_cursor_rect, current_cursor_rect)) {
                     render_partial_motion(api, &state, &previous_mouse);
                     continue;
                 }

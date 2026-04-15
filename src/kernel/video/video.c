@@ -108,6 +108,9 @@ static volatile int g_video_lock_flag = 0;
 static volatile int g_video_lock_owner = VIDEO_LOCK_OWNER_NONE;
 static volatile int g_video_lock_depth = 0;
 
+/* Reader-writer lock instance */
+video_rwlock_t g_video_rwlock = {0, 0};
+
 static int video_lock_owner_id(void) {
     int pid = scheduler_get_current_pid();
     return (pid < 0) ? -1 : pid;
@@ -136,6 +139,46 @@ void video_unlock(void) {
         g_video_lock_owner = VIDEO_LOCK_OWNER_NONE;
         __sync_lock_release(&g_video_lock_flag);
     }
+}
+
+/* video_read_lock: acquire shared read access.
+ * Spins while a writer is active, then increments the reader count. */
+void video_read_lock(void) {
+    while (1) {
+        while (g_video_rwlock.writer) {
+            __asm__ volatile ("pause");
+        }
+        __sync_fetch_and_add(&g_video_rwlock.readers, 1);
+        /* Re-check: if a writer grabbed the lock between our check and
+         * the increment, back off and retry. */
+        if (!g_video_rwlock.writer) {
+            break;
+        }
+        __sync_fetch_and_sub(&g_video_rwlock.readers, 1);
+    }
+}
+
+/* video_read_unlock: release shared read access. */
+void video_read_unlock(void) {
+    __sync_fetch_and_sub(&g_video_rwlock.readers, 1);
+}
+
+/* video_write_lock: acquire exclusive write access.
+ * Non-reentrant. Waits for any active writer, then waits for all readers. */
+void video_write_lock(void) {
+    while (!__sync_bool_compare_and_swap(&g_video_rwlock.writer, 0, 1)) {
+        __asm__ volatile ("pause");
+    }
+    while (g_video_rwlock.readers > 0) {
+        __asm__ volatile ("pause");
+    }
+    __sync_synchronize();
+}
+
+/* video_write_unlock: release exclusive write access. */
+void video_write_unlock(void) {
+    __sync_synchronize();
+    __sync_bool_compare_and_swap(&g_video_rwlock.writer, 1, 0);
 }
 
 static inline u8 mem8(u32 addr) {
@@ -201,7 +244,7 @@ static void video_restore_boot_state(void) {
     backbuffer_pitch = 0;
     if (fb_width <= VIDEO_BACKBUFFER_MAX_WIDTH
         && fb_height <= VIDEO_BACKBUFFER_MAX_HEIGHT) {
-        unsigned int required_pitch = (unsigned int)fb_width * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
+        unsigned int required_pitch = VIDEO_BACKBUFFER_ALIGNED_PITCH(fb_width);
         unsigned int required_bytes = required_pitch * (unsigned int)fb_height;
 
         if (required_pitch > 0 && required_bytes <= VIDEO_BACKBUFFER_MAX_BYTES) {
@@ -398,6 +441,18 @@ void video_note_dirty_locked(int x, int y, int w, int h) {
     h = y1 - y0;
     video_update_dirty_union(x, y, w, h);
     video_record_dirty_rect(x, y, w, h);
+
+#ifdef DIRTY_RECT_DEBUG
+    log_serial_raw("[dirty] x=");
+    serial_print_hex((u32)x);
+    log_serial_raw("y=");
+    serial_print_hex((u32)y);
+    log_serial_raw("w=");
+    serial_print_hex((u32)w);
+    log_serial_raw("h=");
+    serial_print_hex((u32)h);
+    log_serial_raw("\n");
+#endif
 }
 
 void video_note_dirty(int x, int y, int w, int h) {
@@ -472,7 +527,7 @@ void init_video_once(void) {
             backbuffer_pitch = 0;
             if (fb_width <= VIDEO_BACKBUFFER_MAX_WIDTH
                 && fb_height <= VIDEO_BACKBUFFER_MAX_HEIGHT) {
-                unsigned int required_pitch = (unsigned int)fb_width * (unsigned int)VIDEO_BACKBUFFER_BYTES_PER_PIXEL;
+                unsigned int required_pitch = VIDEO_BACKBUFFER_ALIGNED_PITCH(fb_width);
                 unsigned int required_bytes = required_pitch * (unsigned int)fb_height;
 
                 if (required_pitch > 0 && required_bytes <= VIDEO_BACKBUFFER_MAX_BYTES) {

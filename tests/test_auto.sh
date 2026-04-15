@@ -38,8 +38,8 @@ run_test() {
         # Keep connection alive
         sleep 1
     ) | timeout 15 $QEMU \
-        -drive "file=$DISK,format=raw,if=floppy,index=0" \
-        -boot a \
+        -drive "file=$DISK,format=raw,if=ide,index=0" \
+        -boot c \
         -m 16M \
         -serial stdio \
         -monitor none \

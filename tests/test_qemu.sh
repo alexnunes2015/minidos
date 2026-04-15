@@ -17,4 +17,4 @@ echo ""
 echo "Iniciando em 2 segundos..."
 sleep 2
 
-qemu-system-i386 -drive file="$ROOT_DIR/minidos.img",format=raw,if=floppy,index=0 -boot a
+qemu-system-i386 -drive file="$ROOT_DIR/minidos.img",format=raw,if=ide,index=0 -boot c

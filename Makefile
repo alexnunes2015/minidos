@@ -49,12 +49,12 @@ QEMU_CPUS ?= 2
 QEMU_ACCEL_FLAGS := $(if $(wildcard /dev/kvm),-accel kvm -cpu host,-accel tcg -cpu qemu32)
 QEMU_DISPLAY ?= none
 QEMU_DISPLAY_FLAGS = -display $(QEMU_DISPLAY)
-QEMU_BASE_FLAGS = $(QEMU_ACCEL_FLAGS) $(QEMU_DISPLAY_FLAGS) -boot a -m $(QEMU_RAM) -smp $(QEMU_CPUS) -vga std -serial stdio
+QEMU_BASE_FLAGS = $(QEMU_ACCEL_FLAGS) $(QEMU_DISPLAY_FLAGS) -boot c -m $(QEMU_RAM) -smp $(QEMU_CPUS) -vga std -serial stdio
 
 define run_qemu
 	TMPDIR=$$(mktemp -d); \
 	cp minidos.img $$TMPDIR/minidos.img; \
-	$(QEMU) $(QEMU_BASE_FLAGS) -drive file=$$TMPDIR/minidos.img,format=raw,if=floppy,index=0 $(1); \
+	$(QEMU) $(QEMU_BASE_FLAGS) -drive file=$$TMPDIR/minidos.img,format=raw,if=ide,index=0 $(1); \
 	RC=$$?; \
 	rm -rf $$TMPDIR; \
 	exit $$RC
@@ -253,4 +253,11 @@ test-phase5:
 test-ui-runtime:
 	python3 tests/test_ui_runtime.py
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial
+test-graphics:
+	$(MAKE) clean
+	$(MAKE) all
+	python3 tests/test_graphics_perf.py
+	$(MAKE) clean
+	$(MAKE) all
+
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial test-graphics

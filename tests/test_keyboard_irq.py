@@ -288,7 +288,7 @@ def main():
                 echo=not args.quiet,
             )
             if not matched:
-                raise RuntimeError("timeout waiting for WIN95UI app return")
+                raise RuntimeError("timeout waiting for STARTUI app return")
 
         _send_text_as_keys(qmp_sock, "top 200 1\n", args.key_delay)
         log_after, matched = read_until(

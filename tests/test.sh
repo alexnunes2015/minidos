@@ -36,7 +36,6 @@ run_test() {
     # Run via serial, waiting for shell readiness before sending commands
     $PYTHON "$ROOT_DIR/tests/test_serial.py" \
         --ready-timeout "$READY_TIMEOUT" \
-        --post-pm-delay "$POST_PM_DELAY" \
         --cmd-timeout "$CMD_TIMEOUT" \
         "${commands[@]}" \
         2>&1 | tee "$OUTPUT"

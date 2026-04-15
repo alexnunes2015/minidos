@@ -56,8 +56,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
     # Keep shell alive
     sleep 2
 ) | timeout 15 $QEMU \
-    -drive "file=$DISK,format=raw,if=floppy,index=0" \
-    -boot a \
+    -drive "file=$DISK,format=raw,if=ide,index=0" \
+    -boot c \
     -m 16M \
     -serial stdio \
     -monitor none \

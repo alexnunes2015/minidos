@@ -11,7 +11,7 @@ set disk [file join $root_dir "minidos.img"]
 set commands $argv
 
 # Start QEMU
-spawn qemu-system-i386 -drive "file=$disk,format=raw,if=floppy,index=0" -boot a -m 16M -nographic -serial stdio
+spawn qemu-system-i386 -drive "file=$disk,format=raw,if=ide,index=0" -boot c -m 16M -nographic -serial stdio
 
 # Wait for initial boot
 expect {

@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from qemu_harness import (
+    KBD_READY_MARKERS,
     MOUSE_READY_MARKERS,
     build_floppy_qemu_cmd,
     read_until,
@@ -179,9 +180,9 @@ def _send_mouse_button(qmp_sock, button="left", *, down):
 
 
 def _extract_video_geometry(log_text):
-    matches = re.findall(r"\[video\] init .* w=0x([0-9A-Fa-f]+) h=0x([0-9A-Fa-f]+)", log_text)
+    matches = re.findall(r"\[vid\] fb=0x[0-9A-Fa-f]+w=0x([0-9A-Fa-f]+)h=0x([0-9A-Fa-f]+)p=0x[0-9A-Fa-f]+b=0x[0-9A-Fa-f]+", log_text)
     if not matches:
-        raise RuntimeError("could not parse video geometry from [video] init marker")
+        raise RuntimeError("could not parse video geometry from [vid] marker")
     width_hex, height_hex = matches[-1]
     return int(width_hex, 16), int(height_hex, 16)
 
@@ -245,24 +246,16 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
     return log
 
 
-def _install_demo_app():
-    subprocess.run(
-        ["./external_apps/add_app.sh", "external_apps/apps/win95_demo/win95_demo.c", "WIN95UI"],
-        cwd=repo_root(),
-        check=True,
-    )
-
-
 def _assert_no_win95ui_debug(log_text):
     if "[win95ui]" in log_text:
         raise RuntimeError("unexpected WIN95UI debug output on serial")
 
 
 def _assert_video_init_marker(log_text):
-    if "[video] init" not in log_text:
-        raise RuntimeError("missing [video] init marker on serial")
-    if " fast=" not in log_text:
-        raise RuntimeError("missing fast-present marker on serial")
+    if "[vid] fb=" not in log_text:
+        raise RuntimeError("missing [vid] fb marker on serial")
+    if "w=" not in log_text or "h=" not in log_text or "p=" not in log_text or "b=" not in log_text:
+        raise RuntimeError("missing video geometry fields on serial")
 
 
 def _wait_for_app_ready(proc, name, timeout_s, *, echo):
@@ -284,6 +277,28 @@ def _wait_for_app_ready(proc, name, timeout_s, *, echo):
     _assert_no_win95ui_debug(log_after)
     return log_after
 
+
+def _enter_startui_dir(proc, timeout_s, *, echo):
+    for cmd in ("cd aios",):
+        _wait_for_command_result(
+            proc,
+            cmd,
+            [f"Command: {cmd}"],
+            timeout_s,
+            echo=echo,
+        )
+
+
+def _return_to_root(proc, timeout_s, *, echo):
+    for _ in range(1):
+        _wait_for_command_result(
+            proc,
+            "cd ..",
+            ["Command: cd .."],
+            timeout_s,
+            echo=echo,
+        )
+
 def _wait_for_default_gui(proc, timeout_s, *, echo):
     log_after, matched = read_until(
         proc,
@@ -299,7 +314,7 @@ def _wait_for_default_gui(proc, timeout_s, *, echo):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate PS/2 mouse path by clicking WIN95UI through QMP."
+        description="Validate PS/2 mouse path by clicking STARTUI through QMP."
     )
     parser.add_argument("--disk", default="minidos.img")
     parser.add_argument("--qemu", default="qemu-system-i386")
@@ -319,8 +334,6 @@ def main():
     if not os.path.exists(disk_path):
         print(f"ERROR: disk image not found: {disk_path}", file=sys.stderr)
         return 2
-
-    _install_demo_app()
 
     qmp_dir = os.environ.get("TMPDIR_QMP", _qmp_socket_root())
     os.makedirs(qmp_dir, exist_ok=True)
@@ -366,21 +379,38 @@ def main():
         _assert_no_win95ui_debug(log)
         _assert_video_init_marker(log)
         screen_w, screen_h = _extract_video_geometry(log)
-        mouse_log, mouse_matched = wait_for_marker_sequence(
-            proc,
-            [MOUSE_READY_MARKERS],
-            args.ready_timeout,
-            echo=not args.quiet,
-        )
-        if not mouse_matched:
-            raise RuntimeError("timeout waiting for mouse-ready marker")
-        log += mouse_log
+        if any(marker in log for marker in MOUSE_READY_MARKERS):
+            mouse_log = ""
+        else:
+            mouse_log, mouse_matched = wait_for_marker_sequence(
+                proc,
+                [MOUSE_READY_MARKERS],
+                args.ready_timeout,
+                echo=not args.quiet,
+            )
+            if not mouse_matched:
+                raise RuntimeError("timeout waiting for mouse-ready marker")
+            log += mouse_log
+        if any(marker in log for marker in KBD_READY_MARKERS):
+            kbd_log = ""
+        else:
+            kbd_log, kbd_matched = wait_for_marker_sequence(
+                proc,
+                [KBD_READY_MARKERS],
+                args.ready_timeout,
+                echo=not args.quiet,
+            )
+            if not kbd_matched:
+                raise RuntimeError("timeout waiting for keyboard-ready marker")
+            log += kbd_log
+        time.sleep(0.5)
         if "APPIN001" not in log:
             if _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is None:
-                _send_text_as_keys(qmp_sock, "win95ui\n", args.key_delay)
-                _wait_for_app_ready(proc, "win95ui", args.cmd_timeout, echo=not args.quiet)
+                _enter_startui_dir(proc, args.cmd_timeout, echo=not args.quiet)
+                _send_text_as_keys(qmp_sock, "startui\n", args.key_delay)
+                _wait_for_app_ready(proc, "startui", args.cmd_timeout, echo=not args.quiet)
 
-        # Exercise repeated hover redraws over title bar/client before closing the app.
+        # Exercise repeated hover redraws over title bar/client before closing the window.
         mouse_pos = (screen_w // 2, screen_h // 2)
         for target in _plan_win95ui_path(screen_w, screen_h):
             mouse_pos = _move_mouse_to(qmp_sock, mouse_pos, target)
@@ -389,12 +419,25 @@ def main():
         log_after, matched = read_until(
             proc,
             ["APPRET001"],
+            min(args.cmd_timeout, 2.0),
+            echo=not args.quiet,
+        )
+        if matched:
+            raise RuntimeError("STARTUI returned to shell after closing the window")
+        _assert_no_win95ui_debug(log_after)
+
+        _send_key(qmp_sock, "esc")
+        log_after, matched = read_until(
+            proc,
+            ["APPRET001"],
             max(args.cmd_timeout, 20.0),
             echo=not args.quiet,
         )
         if not matched:
-            raise RuntimeError("timeout waiting for WIN95UI app return")
+            raise RuntimeError("timeout waiting for STARTUI app return")
         _assert_no_win95ui_debug(log_after)
+
+        _return_to_root(proc, args.cmd_timeout, echo=not args.quiet)
 
         _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
         _wait_for_command_result(

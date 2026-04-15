@@ -7,8 +7,9 @@ BUILD_DIR="$ROOT_DIR/build/external_apps"
 IMG_PATH="${IMG_PATH:-$ROOT_DIR/minidos.img}"
 
 usage() {
-    echo "Usage: $0 [--format elf|com] <path/to/app.c> [APPNAME]"
+    echo "Usage: $0 [--format elf|com] [--dir DIRNAME] <path/to/app.c> [APPNAME]"
     echo "  APPNAME must be 1-8 chars: A-Z, 0-9, underscore"
+    echo "  DIRNAME must be 1-8 chars: A-Z, 0-9, underscore"
 }
 
 need_cmd() {
@@ -48,6 +49,7 @@ prepare_cursor_bitmap() {
 }
 
 APP_FORMAT="elf"
+APP_DIR=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --format)
@@ -58,8 +60,20 @@ while [[ $# -gt 0 ]]; do
             APP_FORMAT="$2"
             shift 2
             ;;
+        --dir)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: Missing value for --dir" >&2
+                exit 1
+            fi
+            APP_DIR="$2"
+            shift 2
+            ;;
         --format=*)
             APP_FORMAT="${1#*=}"
+            shift
+            ;;
+        --dir=*)
+            APP_DIR="${1#*=}"
             shift
             ;;
         -h|--help)
@@ -85,6 +99,13 @@ APP_FORMAT="$(echo "$APP_FORMAT" | tr '[:upper:]' '[:lower:]')"
 if [[ "$APP_FORMAT" != "elf" && "$APP_FORMAT" != "com" ]]; then
     echo "ERROR: Unsupported format '$APP_FORMAT'." >&2
     echo "Allowed values: elf, com" >&2
+    exit 1
+fi
+
+APP_DIR="$(echo "$APP_DIR" | tr '[:lower:]' '[:upper:]')"
+if [[ -n "$APP_DIR" && ! "$APP_DIR" =~ ^[A-Z0-9_]{1,8}$ ]]; then
+    echo "ERROR: Invalid DIRNAME '$APP_DIR'." >&2
+    echo "Allowed pattern: ^[A-Z0-9_]{1,8}$" >&2
     exit 1
 fi
 
@@ -139,6 +160,50 @@ if ! mdir -i "$IMG_PATH" :: >/dev/null 2>&1; then
     exit 1
 fi
 
+ensure_image_dir() {
+    local dir_name="$1"
+
+    if [[ -z "$dir_name" ]]; then
+        return
+    fi
+    if mdir -i "$IMG_PATH" "::/$dir_name" >/dev/null 2>&1; then
+        return
+    fi
+    mmd -i "$IMG_PATH" "::/$dir_name"
+}
+
+copy_companion_resources() {
+    local dir_name="$1"
+    local src_dir
+    local src_base
+    local disk_dir
+    local resource
+    local base
+
+    if [[ -z "$dir_name" ]]; then
+        return
+    fi
+
+    src_dir="$(dirname "$SRC_PATH")"
+    src_base="$(basename "$SRC_PATH")"
+    disk_dir="::/$dir_name"
+
+    for resource in "$src_dir"/*; do
+        [[ -f "$resource" ]] || continue
+        base="$(basename "$resource")"
+        if [[ "$base" == "$src_base" ]]; then
+            continue
+        fi
+        case "$base" in
+            *.c|*.h|*.asm|*.ld|*.md)
+                continue
+                ;;
+        esac
+        echo "Copying companion resource $base to A:\\$dir_name\\..."
+        mcopy -o -i "$IMG_PATH" "$resource" "$disk_dir/$base"
+    done
+}
+
 mkdir -p "$BUILD_DIR/$APP_BASE"
 APP_BUILD_DIR="$BUILD_DIR/$APP_BASE"
 
@@ -187,9 +252,24 @@ else
     cp "$APP_ELF" "$APP_DST"
 fi
 
+ensure_image_dir "$APP_DIR"
+
+APP_DISK_PATH="::/$APP_BASE.$APP_EXT"
+if [[ -n "$APP_DIR" ]]; then
+    APP_DISK_PATH="::/$APP_DIR/$APP_BASE.$APP_EXT"
+fi
+
 echo "Copying $(basename "$APP_DST") to A: in minidos.img..."
-mcopy -o -i "$IMG_PATH" "$APP_DST" "::/$APP_BASE.$APP_EXT"
+mcopy -o -i "$IMG_PATH" "$APP_DST" "$APP_DISK_PATH"
+copy_companion_resources "$APP_DIR"
 
 echo "Done."
-echo "App installed as A:\\$APP_BASE.$APP_EXT"
-echo "In MiniDOS, execute by typing: ${APP_BASE,,} or run ${APP_BASE,,}"
+if [[ -n "$APP_DIR" ]]; then
+    echo "App installed as A:\\$APP_DIR\\$APP_BASE.$APP_EXT"
+    echo "In MiniDOS, execute by typing:"
+    echo "  cd ${APP_DIR,,}"
+    echo "  ${APP_BASE,,}"
+else
+    echo "App installed as A:\\$APP_BASE.$APP_EXT"
+    echo "In MiniDOS, execute by typing: ${APP_BASE,,} or run ${APP_BASE,,}"
+fi

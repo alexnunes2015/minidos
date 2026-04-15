@@ -35,6 +35,18 @@ typedef unsigned int u32;
 #define VIDEO_BACKBUFFER_MAX_BYTES (VIDEO_BACKBUFFER_MAX_WIDTH * VIDEO_BACKBUFFER_MAX_HEIGHT * 4)
 #define VIDEO_BACKBUFFER_BASE ((u8*)0x00B00000u)
 
+/* Cacheline alignment for backbuffer scanline stride.
+ * Rounding each row to 64 bytes avoids false-sharing across scanlines
+ * in multi-threaded render scenarios. For most standard resolutions
+ * (640, 800, 1024, 1280) at 32bpp the stride is already 64-byte aligned,
+ * so this macro is a no-op in practice but documents the invariant. */
+#define VIDEO_BACKBUFFER_CACHELINE_SIZE 64
+#define VIDEO_BACKBUFFER_ALIGNED_PITCH(w) \
+    (((unsigned int)(w) * VIDEO_BACKBUFFER_BYTES_PER_PIXEL \
+      + (VIDEO_BACKBUFFER_CACHELINE_SIZE - 1u)) \
+     / VIDEO_BACKBUFFER_CACHELINE_SIZE \
+     * VIDEO_BACKBUFFER_CACHELINE_SIZE)
+
 #define COLOR_BG 0x000000u
 #define COLOR_FG 0xD8DEE9u
 
@@ -124,8 +136,24 @@ static inline int video_fb_bytes_per_pixel(void) {
 
 void init_video_once(void);
 
+/* Exclusive reentrant lock — used internally and for write-side operations */
 void video_lock(void);
 void video_unlock(void);
+
+/* Reader-writer lock.
+ * video_read_lock/unlock: concurrent read access (non-reentrant).
+ * video_write_lock/unlock: exclusive write access (non-reentrant). */
+typedef struct {
+    volatile int readers;  /* number of active readers        */
+    volatile int writer;   /* 1 while a writer holds the lock */
+} video_rwlock_t;
+
+extern video_rwlock_t g_video_rwlock;
+
+void video_read_lock(void);
+void video_read_unlock(void);
+void video_write_lock(void);
+void video_write_unlock(void);
 
 void video_clear_dirty(void);
 void video_clear_dirty_locked(void);

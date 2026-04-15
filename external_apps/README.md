@@ -31,7 +31,7 @@ Important:
 Use:
 
 ```bash
-./external_apps/add_app.sh [--format elf|com] <path/to/app.c> [APPNAME]
+./external_apps/add_app.sh [--format elf|com] [--dir DIRNAME] <path/to/app.c> [APPNAME]
 ```
 
 Examples:
@@ -39,6 +39,7 @@ Examples:
 ```bash
 ./external_apps/add_app.sh external_apps/apps/hello/hello.c
 ./external_apps/add_app.sh external_apps/apps/stress/stress.c STRESS
+./external_apps/add_app.sh --dir PTEST external_apps/apps/ptio/ptio.c PTIO
 ./external_apps/add_app.sh --format com external_apps/apps/hello/hello.c HELLOCOM
 ./external_apps/add_app.sh /tmp/my_app.c TESTAPP
 ```
@@ -47,7 +48,9 @@ Each bundled example lives under `external_apps/apps/<name>/<name>.c`, so point 
 
 The utility will:
 1. Build a 32-bit app in the selected format (`.ELF` by default, `.COM` with `--format com`).
-2. Copy it to `A:` inside `minidos.img` with the matching extension.
+2. Copy it to `A:` inside `minidos.img` with the matching extension, or into `A:\DIRNAME` when `--dir` is used.
+
+When `--dir` is used, the helper also copies non-code companion files that sit next to the source file (for example `.BMP`, `.ICO`, `.WAV`, `.TXT`) into the same target directory. The bundled `STARTUI` desktop resources are installed by `make` under `A:\AIOS`.
 
 If `assets/cursor/cursor.png` exists, the app build also regenerates
 `external_apps/runtime/minidos_cursor_bitmap.h` automatically before compilation.

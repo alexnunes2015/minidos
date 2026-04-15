@@ -149,7 +149,7 @@ Entregas concluídas:
 Critério de pronto:
 - `hello_elf` e `stat_elf` executam pelo shell com retorno controlado ao kernel.
 
-## Fase 5 - Preparação para Multitarefa (concluida)
+## Fase 5 - Preparação para Multitarefa
 
 Objetivo: fechar a transição de um baseline de kernel threads para um runtime com multitarefa preemptiva, ring3 e isolamento básico kernel/user.
 

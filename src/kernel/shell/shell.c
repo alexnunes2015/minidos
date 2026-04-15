@@ -2,6 +2,7 @@
 #include "shell_apps.h"
 #include "shell_builtin.h"
 #include "shell_fs.h"
+#include "keyboard.h"
 #include "video.h"
 #include "fat16.h"
 #include "drive.h"
@@ -367,6 +368,7 @@ static int ensure_fat16_ready() {
 }
 
 void shell_prompt() {
+    keyboard_flush();
     int drive = drive_get_current();
     print_char('A' + drive);
     print_string(":");
