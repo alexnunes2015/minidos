@@ -8,6 +8,7 @@ This guide is for fast diagnosis in an AI-agent-first workflow. Use the shortest
 make verify-image
 make phase0-check
 make test-phase5
+make test-large-elf
 make test-multitask-com
 make test-user-isolation
 make run-no-reboot
@@ -21,6 +22,7 @@ make gdb-kernel
 - `make verify-image`: validates the disk image layout, BPB, patched kernel sector count, and expected files inside the FAT volume.
 - `make phase0-check`: clean rebuild plus serial smoke test.
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
+- `make test-large-elf`: validates the dynamic userland slot path with an ELF whose mapped memory exceeds the old 1 MiB limit.
 - `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
 - `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers, stale low-memory app VAs, and direct user-mode page faults.
 - `make test-storage-failure`: exercises invalid FAT metadata so the boot reports `DISK021` and stops with `STOP 0x00000004`.
@@ -40,6 +42,7 @@ make gdb-kernel
 - `PTVIDEO100 start workers=... iterations=... started=...` when the `videostress` command launches worker threads
 - `PTVIDEO110 limited by scheduler slots` when the stress test could not start all requested workers
 - `PTVIDEO200 worker=<n> ticks=<t> iterations=<i>` when a stress worker exits with timing info
+- `PTBIG100` / `PTBIG190` / `PTBIG900` / `PTBIG901` when validating the large-ELF dynamic slot path
 - `[kbd] scan set 1` or `[kbd] scan set 2`
 - `[mouse] PS/2 mouse enabled on IRQ12`
 - `[mouse] first packet received`
@@ -138,7 +141,24 @@ Check:
 - current drive enumeration
 - FAT init logs
 - `ps` and `top` print a plain task table with `PID`, `NAME`, `STATE`, `MEM`, `CPU`, and `EXE`
-- `MEM` is still scheduler kernel-stack reserve only; it does not include the user slot mapped for ring3 apps
+- `MEM` is still scheduler kernel-stack reserve only; it does not include the dynamic user span mapped for ring3 apps
+
+### Large ELF or app memory regressions
+
+Run:
+
+```sh
+make test-large-elf
+make run-no-reboot
+```
+
+Check:
+
+- `PTBIG100` appears after `ptbig` is launched from `A:\PTEST`
+- `APPBG100 ... bytes=...` shows a dynamic slot larger than the old 1 MiB ceiling for large apps
+- `PTBIG190` appears before `APPRET001`
+- `Invalid ELF or load error` usually means the ELF preflight rejected the segment range, file size, or arena capacity
+- `No app memory slot available` means the contiguous physical arena below `0x00B00000` is fragmented or already consumed by background app groups
 
 ### Background ELF multitask regressions
 

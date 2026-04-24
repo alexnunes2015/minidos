@@ -17,6 +17,7 @@ PTWAIT|PTEST|external_apps/apps/ptwait/ptwait.c
 PTIO|PTEST|external_apps/apps/ptio/ptio.c
 PTGFX|PTEST|external_apps/apps/ptgfx/ptgfx.c
 PTTHRD|PTEST|external_apps/apps/ptthrd/ptthrd.c
+PTBIG|PTEST|external_apps/apps/ptbig/ptbig.c
 EOF
 )
 
@@ -205,10 +206,12 @@ PTWAIT - blocking wait/event timeout loop
 PTIO   - directory + file create/read/rename/delete churn
 PTGFX  - simple graphics/present animation
 PTTHRD - app main plus child worker thread in the same ELF group
+PTBIG  - ELF with >1 MiB mapped image memory
 
 Usage:
   cd ptest
   elfls
+  ptbig
   runbg ptcpu
   runbg ptthrd
   top 200 1
@@ -476,10 +479,12 @@ PTWAIT - blocking wait/event timeout loop
 PTIO   - directory + file create/read/rename/delete churn
 PTGFX  - simple graphics/present animation
 PTTHRD - app main plus child worker thread in the same ELF group
+PTBIG  - ELF with >1 MiB mapped image memory
 
 Usage:
   cd ptest
   elfls
+  ptbig
   runbg ptcpu
   runbg ptthrd
   top 200 1

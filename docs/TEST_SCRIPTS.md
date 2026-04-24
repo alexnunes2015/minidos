@@ -217,7 +217,24 @@ python3 tests/test_phase5.py --expect-guard
 make test-phase5
 ```
 
-### 10. `tests/test_multitask_elf.py` - Regressão de multitasking ELF
+### 10. `tests/test_large_elf.py` - Regressão de ELF grande / slots dinâmicos
+Valida que o loader já não está preso ao antigo slot user de 1 MiB:
+- arranca a shell e entra em `A:\PTEST`;
+- executa `PTBIG.ELF`, cuja `.bss` força um `PT_LOAD memsz` acima de 1 MiB;
+- espera `PTBIG100` e `PTBIG190`, rejeitando `PTBIG900` / `PTBIG901`;
+- exige `APPRET001` e confirma que o shell ainda aceita `ver` depois do retorno.
+
+**Uso:**
+```bash
+python3 tests/test_large_elf.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-large-elf
+```
+
+### 11. `tests/test_multitask_elf.py` - Regressão de multitasking ELF
 Valida o runtime de ELFs em background com threads-filho e kill por grupo:
 - arranca a shell e entra em `A:\PTEST`;
 - lança `PTCPU`, `PTWAIT` e `PTTHRD` com `runbg`;
@@ -236,7 +253,7 @@ python3 tests/test_multitask_elf.py
 make test-multitask
 ```
 
-### 11. `tests/test_multitask_com.py` - Regressão de multitasking COM
+### 12. `tests/test_multitask_com.py` - Regressão de multitasking COM
 Valida o runtime de `.COM` em background com threads-filho e kill por grupo:
 - instala `CMCPU.COM`, `CMWAIT.COM` e `CMTHRD.COM` na imagem de teste;
 - lança as três apps com `runbg` a partir da raiz de `A:`;
@@ -255,7 +272,7 @@ python3 tests/test_multitask_com.py
 make test-multitask-com
 ```
 
-### 12. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
+### 13. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
 Valida o contrato mínimo de isolamento para apps ELF e `.COM` em ring3:
 - instala `BADPTR.ELF`, `OLDMAP.ELF`, `USRFAULT.ELF`, `BADCOM.COM`, `OLDCOM.COM` e `USRFCOM.COM` na imagem;
 - força `A:` e confirma listagem via `elfls`;
@@ -274,7 +291,7 @@ python3 tests/test_user_isolation.py
 make test-user-isolation
 ```
 
-### 13. `tests/test_graphics_perf.py` - Regressão de performance gráfica
+### 14. `tests/test_graphics_perf.py` - Regressão de performance gráfica
 Valida as optimizações de performance do subsistema de vídeo:
 - **stride-align**: confirma que o kernel arranca e atinge o main loop sem erros de vídeo (o stride cacheline-aligned é um invariante de compilação para as resoluções standard).
 - **stress-render**: envia `videostress 2 60` ao shell e aguarda `PTVIDEO200` — confirma que dois render workers terminam sem deadlock nem starvation.
@@ -295,7 +312,7 @@ make test-graphics
 **Build flags de debug:**
 - `DIRTY_RECT_DEBUG`: activa log serial de cada chamada a `video_note_dirty_locked` com coordenadas do rect marcado.
 
-### 14. `make verify-image` - Verificação estrutural da imagem
+### 15. `make verify-image` - Verificação estrutural da imagem
 Valida a imagem `minidos.img` fora do runtime:
 - tamanho da imagem (`128MB`);
 - BPB FAT16;
@@ -318,6 +335,7 @@ make verify-image
 ✅ **Phase 3 Stress** - Cobertura de multi-disco/multi-volume com validações negativas
 ✅ **Phase 5 Guard Pages** - Cobertura positiva e negativa do runtime de scheduler com `#PF` controlado na guard page
 ✅ **User Isolation** - Cobertura de ring3 para ponteiros inválidos em syscall e faults de user mode com retorno ao shell
+✅ **Large ELF Runtime** - Cobertura de slot user dinâmico para imagens ELF com `PT_LOAD memsz` acima de 1 MiB
 ✅ **Legacy COM Runtime** - Cobertura de `.COM` no mesmo runtime preemptivo de foreground/background usado por ELFs
 ✅ **Shared Harness** - Arranque/QEMU/timeouts centralizados em `tests/qemu_harness.py`
 
@@ -380,6 +398,7 @@ Todos os testes mostram a saída serial que inclui:
 - `APPIN001` / `APPRET001` - Contrato serial de entrada e retorno de apps interativas
 - `DISK021` - Nenhum volume de boot/partição válido foi detetado; o shell continua sem inventar `A:`
 - `APPFLT900` - Fault de userland contido à app/grupo atual
+- `PTBIG100` / `PTBIG190` / `PTBIG900` / `PTBIG901` - Regressão do loader ELF grande com slot user dinâmico
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled` - Caminho de interrupções ativo
 - `SCHED100` / `SCHED110` / `SCHED120` / `SCHED190` - Bootstrap e self-test positivo do scheduler/runtime
 - `SCHED150` / `SCHED900` - Armamento do teste negativo e fault de guard page identificado
@@ -396,7 +415,7 @@ Todos os testes mostram a saída serial que inclui:
 
 **Nota:** Entre `BOOT100` e `BOOT110`, o placeholder visual é um ecrã preto com cursor a piscar. Depois de `BOOT110`, o logo passa a ocupar o ecrã e o shell só toma controlo após 5 segundos dessa janela visual. Compare `BOOT100`, `BOOT110`, `Initializing disk driver...`, `Detecting drives and partitions...`, `BOOT190` e `BOOT300` para separar tempo real de I/O da espera visual final e distinguir um boot normal de um arranque em modo degradado sem `AUTOEXEC.AUT`.
 
-**Nota:** `ps` e `top` reportam tarefas visíveis ao scheduler. O campo `mem` ainda significa apenas reserva de stack do kernel mais guard page; não é RSS real e também não inclui o slot user de 1 MiB mapeado para apps em ring3.
+**Nota:** `ps` e `top` reportam tarefas visíveis ao scheduler. O campo `mem` ainda significa apenas reserva de stack do kernel mais guard page; não é RSS real e ainda não inclui o span user dinâmico mapeado para apps em ring3.
 
 **Nota:** O kernel está executando após a transição para Protected Mode nos testes seriais atuais. Se houver regressão, use os checkpoints PM no serial (`CLI`, `LGDT`, `CR0.PE`, `Before far jump`) para localizar onde o boot para.
 

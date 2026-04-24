@@ -64,7 +64,7 @@ endef
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-user-isolation full-test
 
 -include $(KERNEL_DEPS)
 
@@ -179,6 +179,9 @@ test-phase3: minidos.img
 test-phase4: minidos.img
 	python3 tests/test_phase4.py
 
+test-large-elf: minidos.img
+	python3 tests/test_large_elf.py
+
 test-multitask: minidos.img
 	python3 tests/test_multitask_elf.py
 
@@ -201,6 +204,7 @@ full-test:
 	$(MAKE) test-ui-runtime
 	$(MAKE) test-paging
 	$(MAKE) test-phase5
+	$(MAKE) test-large-elf
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
@@ -217,6 +221,7 @@ ci:
 	$(MAKE) test-ui-runtime
 	$(MAKE) test-paging
 	$(MAKE) test-phase5
+	$(MAKE) test-large-elf
 	$(MAKE) test-phase3
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
@@ -262,4 +267,4 @@ test-graphics:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial test-graphics
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial test-graphics

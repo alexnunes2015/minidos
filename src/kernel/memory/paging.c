@@ -30,7 +30,7 @@
 #define PIC_EOI      0x20
 #define KERNEL_DATA_SELECTOR 0x10
 #define TSS_SELECTOR         0x38
-#define APP_SLOT_BYTES       0x00100000U
+#define APP_SLOT_BYTES       0x00400000U
 
 struct idt_entry {
     unsigned short offset_low;
@@ -756,7 +756,8 @@ int paging_build_app_directory(
         || !out_user_pt
         || app_bytes == 0
         || app_bytes > APP_SLOT_BYTES
-        || page_count > 256U
+        || page_count > 1024U
+        || (app_phys_base & 0xFFFU) != 0U
         || (app_virt_base & 0xFFFU) != 0U
         || pde_index >= 1024U
         || (first_index + page_count) > 1024U

@@ -41,24 +41,27 @@ typedef struct {
     unsigned int align;
 } __attribute__((packed)) elf32_program_header_t;
 
+#define APP_PAGE_SIZE 0x00001000U
 #define APP_LOAD_VIRT_BASE 0x01000000U
 #define APP_SLOT_FIRST_PID 3
-#define APP_SLOT_SIZE 0x00100000U
-#define APP_LOAD_VIRT_LIMIT (APP_LOAD_VIRT_BASE + APP_SLOT_SIZE)
-#define APP_BACKGROUND_SLOT_COUNT 4
+#define APP_SLOT_MAX_SIZE 0x00400000U
+#define APP_LOAD_VIRT_LIMIT (APP_LOAD_VIRT_BASE + APP_SLOT_MAX_SIZE)
+#define APP_ARENA_PHYS_BASE 0x00700000U
+#define APP_ARENA_SIZE APP_SLOT_MAX_SIZE
+#define APP_ARENA_PAGE_COUNT (APP_ARENA_SIZE / APP_PAGE_SIZE)
 #define APP_THREAD_SLOT_COUNT (SCHEDULER_MAX_PROCESSES - APP_SLOT_FIRST_PID)
 #define APP_THREAD_STACK_BYTES 0x00004000U
-#define APP_RUNTIME_BLOCK_VIRT (APP_LOAD_VIRT_LIMIT - 0x00001000U)
-#define APP_USER_IMAGE_LIMIT (APP_RUNTIME_BLOCK_VIRT - (APP_THREAD_STACK_BYTES * APP_THREAD_SLOT_COUNT))
-#define APP_SYSCALL_STUB_VIRT (APP_RUNTIME_BLOCK_VIRT + 0x00000020U)
-#define APP_EXIT_STUB_VIRT    (APP_RUNTIME_BLOCK_VIRT + 0x00000040U)
-#define APP_THREAD_STUB_VIRT  (APP_RUNTIME_BLOCK_VIRT + 0x00000060U)
-#define APP_MAX_ELF_SIZE 262144
+#define APP_RUNTIME_BLOCK_BYTES APP_PAGE_SIZE
+#define APP_RUNTIME_RESERVED_BYTES (APP_RUNTIME_BLOCK_BYTES + (APP_THREAD_STACK_BYTES * APP_THREAD_SLOT_COUNT))
+#define APP_SYSCALL_STUB_OFFSET 0x00000020U
+#define APP_EXIT_STUB_OFFSET    0x00000040U
+#define APP_THREAD_STUB_OFFSET  0x00000060U
+#define APP_MAX_ELF_SIZE 0x00100000U
 #define APP_MAX_COM_SIZE 65536
 #define APP_PATH_MAX 64
 #define APP_CLIP_NAME_MAX 64
 #define APP_USER_TEXT_MAX 256
-#define APP_ELF_BUFFER_PHYS 0x00300000U
+#define APP_ELF_BUFFER_PHYS 0x00400000U
 #define APP_TASK_TABLE_PHYS 0x00340000U
 
 typedef enum {
@@ -81,8 +84,10 @@ typedef struct {
     unsigned int current_dir_cluster;
     unsigned int app_clip_src_cluster;
     unsigned int app_phys_base;
+    unsigned int app_slot_bytes;
     unsigned int entry_virtual;
     unsigned int thread_arg;
+    int owns_app_memory;
     char current_path[APP_PATH_MAX];
     char app_clip_name[APP_CLIP_NAME_MAX];
     char task_name[24];
@@ -98,12 +103,7 @@ typedef struct {
 
 static shell_app_task_t* const g_app_tasks = (shell_app_task_t*)APP_TASK_TABLE_PHYS;
 static unsigned char* const g_elf_buffer = (unsigned char*)APP_ELF_BUFFER_PHYS;
-static const unsigned int g_app_phys_slots[APP_BACKGROUND_SLOT_COUNT] = {
-    0x00700000U,
-    0x00800000U,
-    0x00900000U,
-    0x00A00000U,
-};
+static unsigned char g_app_phys_page_used[APP_ARENA_PAGE_COUNT];
 static const unsigned int EFLAGS_IF = 0x00000200U;
 static unsigned int app_rng_state = 0xA5F21C3Du;
 static const unsigned char g_app_syscall_stub[] = {
@@ -137,6 +137,8 @@ static void shell_apps_background_thread(void* arg);
 static void shell_apps_mem_copy(unsigned char* dst, const unsigned char* src, unsigned int size);
 static int shell_apps_group_leader_pid(const shell_app_task_t* task);
 static void shell_apps_release_task(shell_app_task_t* task);
+static unsigned int shell_apps_enter_critical(void);
+static void shell_apps_leave_critical(unsigned int flags);
 
 static void shell_apps_flush_graphics(void) {
     video_present_pending();
@@ -178,25 +180,112 @@ static void shell_apps_log_task_marker(const char* marker, const shell_app_task_
     serial_print_hex(task->entry_virtual);
     log_serial_raw(" base=");
     serial_print_hex(task->app_phys_base);
+    log_serial_raw(" bytes=");
+    serial_print_hex(task->app_slot_bytes);
     log_serial_raw("\n");
 }
 
-static unsigned int shell_apps_user_stack_top_for_pid(int pid) {
+static unsigned int shell_apps_align_up(unsigned int value, unsigned int align) {
+    unsigned int mask;
+
+    if (align == 0U || (align & (align - 1U)) != 0U) {
+        return 0;
+    }
+
+    mask = align - 1U;
+    if (value > (0xFFFFFFFFU - mask)) {
+        return 0;
+    }
+    return (value + mask) & ~mask;
+}
+
+static unsigned int shell_apps_runtime_block_virt_for_slot(unsigned int slot_bytes) {
+    if (slot_bytes < APP_RUNTIME_RESERVED_BYTES || slot_bytes > APP_SLOT_MAX_SIZE) {
+        return 0;
+    }
+    return APP_LOAD_VIRT_BASE + slot_bytes - APP_RUNTIME_BLOCK_BYTES;
+}
+
+static unsigned int shell_apps_runtime_block_virt(const shell_app_task_t* task) {
+    if (!task) {
+        return 0;
+    }
+    return shell_apps_runtime_block_virt_for_slot(task->app_slot_bytes);
+}
+
+static unsigned int shell_apps_user_image_limit_for_slot(unsigned int slot_bytes) {
+    if (slot_bytes < APP_RUNTIME_RESERVED_BYTES || slot_bytes > APP_SLOT_MAX_SIZE) {
+        return 0;
+    }
+    return APP_LOAD_VIRT_BASE + slot_bytes - APP_RUNTIME_RESERVED_BYTES;
+}
+
+static unsigned int shell_apps_user_image_limit(const shell_app_task_t* task) {
+    if (!task) {
+        return 0;
+    }
+    return shell_apps_user_image_limit_for_slot(task->app_slot_bytes);
+}
+
+static unsigned int shell_apps_required_slot_bytes(unsigned int image_bytes) {
+    unsigned int rounded_image;
+
+    if (image_bytes == 0U || image_bytes > (APP_SLOT_MAX_SIZE - APP_RUNTIME_RESERVED_BYTES)) {
+        return 0;
+    }
+
+    rounded_image = shell_apps_align_up(image_bytes, APP_PAGE_SIZE);
+    if (rounded_image == 0U || rounded_image > (APP_SLOT_MAX_SIZE - APP_RUNTIME_RESERVED_BYTES)) {
+        return 0;
+    }
+
+    return shell_apps_align_up(rounded_image + APP_RUNTIME_RESERVED_BYTES, APP_PAGE_SIZE);
+}
+
+static unsigned int shell_apps_user_stack_top_for_pid(const shell_app_task_t* task, int pid) {
+    unsigned int runtime_block;
     unsigned int index;
 
     if (pid < APP_SLOT_FIRST_PID || pid >= SCHEDULER_MAX_PROCESSES) {
         return 0;
     }
 
+    runtime_block = shell_apps_runtime_block_virt(task);
+    if (runtime_block == 0U) {
+        return 0;
+    }
+
     index = (unsigned int)(pid - APP_SLOT_FIRST_PID);
-    return APP_RUNTIME_BLOCK_VIRT - (index * APP_THREAD_STACK_BYTES);
+    return runtime_block - (index * APP_THREAD_STACK_BYTES);
+}
+
+static unsigned int shell_apps_syscall_stub_virt(const shell_app_task_t* task) {
+    unsigned int runtime_block = shell_apps_runtime_block_virt(task);
+    return runtime_block ? (runtime_block + APP_SYSCALL_STUB_OFFSET) : 0U;
+}
+
+static unsigned int shell_apps_exit_stub_virt(const shell_app_task_t* task) {
+    unsigned int runtime_block = shell_apps_runtime_block_virt(task);
+    return runtime_block ? (runtime_block + APP_EXIT_STUB_OFFSET) : 0U;
+}
+
+static unsigned int shell_apps_thread_stub_virt(const shell_app_task_t* task) {
+    unsigned int runtime_block = shell_apps_runtime_block_virt(task);
+    return runtime_block ? (runtime_block + APP_THREAD_STUB_OFFSET) : 0U;
 }
 
 static unsigned int shell_apps_phys_addr_for_virtual(const shell_app_task_t* task, unsigned int virt) {
+    unsigned int limit;
+
     if (!task || task->app_phys_base == 0U) {
         return 0;
     }
-    if (virt < APP_LOAD_VIRT_BASE || virt >= APP_LOAD_VIRT_LIMIT) {
+    if (task->app_slot_bytes == 0U || task->app_slot_bytes > APP_SLOT_MAX_SIZE) {
+        return 0;
+    }
+
+    limit = APP_LOAD_VIRT_BASE + task->app_slot_bytes;
+    if (virt < APP_LOAD_VIRT_BASE || virt >= limit) {
         return 0;
     }
 
@@ -205,6 +294,7 @@ static unsigned int shell_apps_phys_addr_for_virtual(const shell_app_task_t* tas
 
 static int shell_apps_user_range_valid(const shell_app_task_t* task, unsigned int addr, unsigned int size) {
     unsigned int end;
+    unsigned int limit;
 
     if (!task || !task->in_use) {
         return 0;
@@ -212,12 +302,17 @@ static int shell_apps_user_range_valid(const shell_app_task_t* task, unsigned in
     if (size == 0U) {
         return 1;
     }
-    if (addr < APP_LOAD_VIRT_BASE || addr >= APP_LOAD_VIRT_LIMIT) {
+    if (task->app_slot_bytes == 0U || task->app_slot_bytes > APP_SLOT_MAX_SIZE) {
+        return 0;
+    }
+
+    limit = APP_LOAD_VIRT_BASE + task->app_slot_bytes;
+    if (addr < APP_LOAD_VIRT_BASE || addr >= limit) {
         return 0;
     }
 
     end = addr + size;
-    if (end < addr || end > APP_LOAD_VIRT_LIMIT) {
+    if (end < addr || end > limit) {
         return 0;
     }
     return 1;
@@ -240,6 +335,7 @@ static int shell_apps_copy_user_bytes(const shell_app_task_t* task, const void* 
 
 static int shell_apps_copy_user_string(const shell_app_task_t* task, const char* input, char* out, int out_size) {
     unsigned int addr;
+    unsigned int limit;
     int i = 0;
 
     if (!task || !input || !out || out_size <= 0) {
@@ -247,11 +343,16 @@ static int shell_apps_copy_user_string(const shell_app_task_t* task, const char*
     }
 
     addr = (unsigned int)input;
-    if (addr < APP_LOAD_VIRT_BASE || addr >= APP_LOAD_VIRT_LIMIT) {
+    if (task->app_slot_bytes == 0U || task->app_slot_bytes > APP_SLOT_MAX_SIZE) {
         return 0;
     }
 
-    while (i < out_size - 1 && addr < APP_LOAD_VIRT_LIMIT) {
+    limit = APP_LOAD_VIRT_BASE + task->app_slot_bytes;
+    if (addr < APP_LOAD_VIRT_BASE || addr >= limit) {
+        return 0;
+    }
+
+    while (i < out_size - 1 && addr < limit) {
         char c = *(const char*)addr;
 
         out[i++] = c;
@@ -273,8 +374,9 @@ static int shell_apps_copy_user_upper(const shell_app_task_t* task, const char* 
     return 1;
 }
 
-static int shell_apps_user_exec_ptr_valid(unsigned int addr) {
-    return addr >= APP_LOAD_VIRT_BASE && addr < APP_USER_IMAGE_LIMIT;
+static int shell_apps_user_exec_ptr_valid(const shell_app_task_t* task, unsigned int addr) {
+    unsigned int image_limit = shell_apps_user_image_limit(task);
+    return image_limit != 0U && addr >= APP_LOAD_VIRT_BASE && addr < image_limit;
 }
 
 static void shell_apps_mem_zero(unsigned char* dst, unsigned int size) {
@@ -722,28 +824,6 @@ static int shell_apps_find_free_pid(void) {
     return -1;
 }
 
-static int shell_apps_phys_base_in_use(unsigned int phys_base) {
-    shell_apps_reap_terminated_tasks();
-
-    for (int pid = APP_SLOT_FIRST_PID; pid < SCHEDULER_MAX_PROCESSES; pid++) {
-        if (g_app_tasks[pid].in_use && g_app_tasks[pid].app_phys_base == phys_base) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-static unsigned int shell_apps_allocate_phys_base(void) {
-    for (unsigned int i = 0; i < APP_BACKGROUND_SLOT_COUNT; i++) {
-        if (!shell_apps_phys_base_in_use(g_app_phys_slots[i])) {
-            return g_app_phys_slots[i];
-        }
-    }
-
-    return 0;
-}
-
 static void shell_apps_set_task_label(char* dst, int dst_size, const char* text, const char* fallback) {
     if (!dst || dst_size <= 0) {
         return;
@@ -796,12 +876,93 @@ static void shell_apps_sync_host_state(const shell_app_task_t* task, const shell
     (void)shell_apps_copy_string(task->app_clip_name, host->app_clip_name, host->app_clip_name_size);
 }
 
+static void shell_apps_release_phys_range(unsigned int phys_base, unsigned int slot_bytes) {
+    unsigned int first_page;
+    unsigned int page_count;
+    unsigned int flags;
+
+    if (phys_base < APP_ARENA_PHYS_BASE
+        || phys_base >= APP_ARENA_PHYS_BASE + APP_ARENA_SIZE
+        || slot_bytes == 0U) {
+        return;
+    }
+
+    slot_bytes = shell_apps_align_up(slot_bytes, APP_PAGE_SIZE);
+    if (slot_bytes == 0U || (phys_base & (APP_PAGE_SIZE - 1U)) != 0U) {
+        return;
+    }
+
+    first_page = (phys_base - APP_ARENA_PHYS_BASE) / APP_PAGE_SIZE;
+    page_count = slot_bytes / APP_PAGE_SIZE;
+    if (first_page >= APP_ARENA_PAGE_COUNT || page_count > (APP_ARENA_PAGE_COUNT - first_page)) {
+        return;
+    }
+
+    flags = shell_apps_enter_critical();
+    for (unsigned int i = 0; i < page_count; i++) {
+        g_app_phys_page_used[first_page + i] = 0;
+    }
+    shell_apps_leave_critical(flags);
+}
+
+static unsigned int shell_apps_allocate_phys_base(unsigned int slot_bytes) {
+    unsigned int page_count;
+    unsigned int flags;
+
+    shell_apps_reap_terminated_tasks();
+
+    slot_bytes = shell_apps_align_up(slot_bytes, APP_PAGE_SIZE);
+    if (slot_bytes == 0U || slot_bytes > APP_ARENA_SIZE) {
+        return 0;
+    }
+
+    page_count = slot_bytes / APP_PAGE_SIZE;
+    if (page_count == 0U || page_count > APP_ARENA_PAGE_COUNT) {
+        return 0;
+    }
+
+    flags = shell_apps_enter_critical();
+    for (unsigned int start = 0; start + page_count <= APP_ARENA_PAGE_COUNT; start++) {
+        int free_run = 1;
+
+        for (unsigned int i = 0; i < page_count; i++) {
+            if (g_app_phys_page_used[start + i]) {
+                free_run = 0;
+                start += i;
+                break;
+            }
+        }
+        if (!free_run) {
+            continue;
+        }
+
+        for (unsigned int i = 0; i < page_count; i++) {
+            g_app_phys_page_used[start + i] = 1;
+        }
+        shell_apps_leave_critical(flags);
+        return APP_ARENA_PHYS_BASE + (start * APP_PAGE_SIZE);
+    }
+    shell_apps_leave_critical(flags);
+
+    return 0;
+}
+
 static void shell_apps_release_task(shell_app_task_t* task) {
+    unsigned int phys_base;
+    unsigned int slot_bytes;
+    int owns_app_memory;
+
     if (!task) {
         return;
     }
 
+    phys_base = task->app_phys_base;
+    slot_bytes = task->app_slot_bytes;
+    owns_app_memory = task->owns_app_memory;
     shell_apps_mem_zero((unsigned char*)task, (unsigned int)sizeof(*task));
+    if (owns_app_memory) {
+        shell_apps_release_phys_range(phys_base, slot_bytes);
+    }
 }
 
 static int shell_apps_prepare_app_task(
@@ -809,11 +970,23 @@ static int shell_apps_prepare_app_task(
     const shell_app_host_t* host,
     int pid,
     unsigned int phys_base,
+    unsigned int slot_bytes,
     int background,
     int serial_only,
     int join_on_exit
 ) {
-    if (!task || !host || pid < APP_SLOT_FIRST_PID || pid >= SCHEDULER_MAX_PROCESSES || phys_base == 0U) {
+    if (!task
+        || !host
+        || pid < APP_SLOT_FIRST_PID
+        || pid >= SCHEDULER_MAX_PROCESSES
+        || phys_base == 0U
+        || slot_bytes == 0U
+        || slot_bytes > APP_SLOT_MAX_SIZE) {
+        return 0;
+    }
+
+    slot_bytes = shell_apps_align_up(slot_bytes, APP_PAGE_SIZE);
+    if (slot_bytes == 0U || slot_bytes > APP_SLOT_MAX_SIZE) {
         return 0;
     }
 
@@ -823,9 +996,11 @@ static int shell_apps_prepare_app_task(
     task->pid = pid;
     task->leader_pid = pid;
     task->app_phys_base = phys_base;
+    task->app_slot_bytes = slot_bytes;
+    task->owns_app_memory = 1;
     task->join_on_exit = join_on_exit ? 1 : 0;
-    shell_apps_mem_zero((unsigned char*)phys_base, APP_SLOT_SIZE);
-    if (!paging_build_app_directory(task->page_directory, task->user_pt, task->app_phys_base, APP_LOAD_VIRT_BASE, APP_SLOT_SIZE)) {
+    shell_apps_mem_zero((unsigned char*)phys_base, slot_bytes);
+    if (!paging_build_app_directory(task->page_directory, task->user_pt, task->app_phys_base, APP_LOAD_VIRT_BASE, task->app_slot_bytes)) {
         return 0;
     }
     log_serial_raw("APPBG053\n");
@@ -850,16 +1025,18 @@ static int shell_apps_clone_background_task(
     dst->leader_pid = shell_apps_group_leader_pid(src);
     dst->entry_virtual = entry_virtual;
     dst->thread_arg = thread_arg;
+    dst->owns_app_memory = 0;
     dst->join_on_exit = 0;
     dst->input_ready_logged = 0;
     shell_apps_set_task_label(dst->task_name, (int)sizeof(dst->task_name), task_name, "thread");
-    if (!paging_build_app_directory(dst->page_directory, dst->user_pt, dst->app_phys_base, APP_LOAD_VIRT_BASE, APP_SLOT_SIZE)) {
+    if (!paging_build_app_directory(dst->page_directory, dst->user_pt, dst->app_phys_base, APP_LOAD_VIRT_BASE, dst->app_slot_bytes)) {
         return 0;
     }
     return 1;
 }
 
 static int shell_apps_prepare_runtime_block(shell_app_task_t* task) {
+    unsigned int runtime_block;
     unsigned int base_phys;
     unsigned int* api_words;
 
@@ -867,23 +1044,31 @@ static int shell_apps_prepare_runtime_block(shell_app_task_t* task) {
         return 0;
     }
 
-    base_phys = shell_apps_phys_addr_for_virtual(task, APP_RUNTIME_BLOCK_VIRT);
+    runtime_block = shell_apps_runtime_block_virt(task);
+    if (runtime_block == 0U) {
+        return 0;
+    }
+
+    base_phys = shell_apps_phys_addr_for_virtual(task, runtime_block);
     if (base_phys == 0U) {
         return 0;
     }
 
     api_words = (unsigned int*)base_phys;
-    api_words[0] = APP_SYSCALL_STUB_VIRT;
-    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_SYSCALL_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+    api_words[0] = shell_apps_syscall_stub_virt(task);
+    shell_apps_mem_copy((unsigned char*)(base_phys + APP_SYSCALL_STUB_OFFSET),
         g_app_syscall_stub, (unsigned int)sizeof(g_app_syscall_stub));
-    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_EXIT_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+    shell_apps_mem_copy((unsigned char*)(base_phys + APP_EXIT_STUB_OFFSET),
         g_app_exit_stub, (unsigned int)sizeof(g_app_exit_stub));
-    shell_apps_mem_copy((unsigned char*)(base_phys + (APP_THREAD_STUB_VIRT - APP_RUNTIME_BLOCK_VIRT)),
+    shell_apps_mem_copy((unsigned char*)(base_phys + APP_THREAD_STUB_OFFSET),
         g_app_thread_stub, (unsigned int)sizeof(g_app_thread_stub));
     return 1;
 }
 
 static int shell_apps_prepare_user_launch(shell_app_task_t* task, unsigned int* entry_out, unsigned int* user_esp_out) {
+    unsigned int runtime_block;
+    unsigned int exit_stub;
+    unsigned int thread_stub;
     unsigned int stack_top;
     unsigned int stack_base_phys;
     unsigned int* stack_words;
@@ -895,7 +1080,14 @@ static int shell_apps_prepare_user_launch(shell_app_task_t* task, unsigned int* 
         return 0;
     }
 
-    stack_top = shell_apps_user_stack_top_for_pid(task->pid);
+    runtime_block = shell_apps_runtime_block_virt(task);
+    exit_stub = shell_apps_exit_stub_virt(task);
+    thread_stub = shell_apps_thread_stub_virt(task);
+    if (runtime_block == 0U || exit_stub == 0U || thread_stub == 0U) {
+        return 0;
+    }
+
+    stack_top = shell_apps_user_stack_top_for_pid(task, task->pid);
     stack_base_phys = shell_apps_phys_addr_for_virtual(task, stack_top - APP_THREAD_STACK_BYTES);
     if (stack_top == 0U || stack_base_phys == 0U) {
         return 0;
@@ -905,17 +1097,17 @@ static int shell_apps_prepare_user_launch(shell_app_task_t* task, unsigned int* 
 
     if (task->pid == shell_apps_group_leader_pid(task)) {
         stack_words = (unsigned int*)(shell_apps_phys_addr_for_virtual(task, stack_top) - (2U * sizeof(unsigned int)));
-        stack_words[0] = APP_EXIT_STUB_VIRT;
-        stack_words[1] = APP_RUNTIME_BLOCK_VIRT;
+        stack_words[0] = exit_stub;
+        stack_words[1] = runtime_block;
         *entry_out = task->entry_virtual;
         *user_esp_out = stack_top - (2U * sizeof(unsigned int));
     } else {
         stack_words = (unsigned int*)(shell_apps_phys_addr_for_virtual(task, stack_top) - (4U * sizeof(unsigned int)));
-        stack_words[0] = APP_EXIT_STUB_VIRT;
+        stack_words[0] = exit_stub;
         stack_words[1] = task->entry_virtual;
-        stack_words[2] = APP_RUNTIME_BLOCK_VIRT;
+        stack_words[2] = runtime_block;
         stack_words[3] = task->thread_arg;
-        *entry_out = APP_THREAD_STUB_VIRT;
+        *entry_out = thread_stub;
         *user_esp_out = stack_top - (4U * sizeof(unsigned int));
     }
 
@@ -995,7 +1187,7 @@ static int shell_apps_spawn_app_thread(shell_app_task_t* parent, const app_threa
     if (!shell_apps_copy_user_bytes(parent, spec, &spec_copy, (unsigned int)sizeof(spec_copy))) {
         return -1;
     }
-    if (!spec_copy.entry || !shell_apps_user_exec_ptr_valid((unsigned int)spec_copy.entry)) {
+    if (!spec_copy.entry || !shell_apps_user_exec_ptr_valid(parent, (unsigned int)spec_copy.entry)) {
         return -1;
     }
     if (spec_copy.name) {

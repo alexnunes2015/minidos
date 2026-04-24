@@ -15,7 +15,9 @@ Sair do prototipo de troca de contexto por `ret` e fechar um runtime com schedul
 - GDT/TSS com seletores user, `esp0` por task e handoff `iret` para ring3.
 - `int 0x80` como gate de syscall para apps foreground/background, incluindo ELFs e `.COM`.
 - Page directories por app com janela user dedicada fora da identity map de low memory, stacks de user por PID e fault containment para user mode.
+- Arena fisica dinamica de userland em paginas (`0x00700000..0x00B00000`) com preflight de ELF/COM, substituindo os slots fixos de 1 MiB.
 - Regressao de isolamento (`tests/test_user_isolation.py`) cobrindo ponteiro invalido em syscall e page fault de user mode em ELFs e `.COM`, com retorno ao shell.
+- Regressao de ELF grande (`tests/test_large_elf.py`) cobrindo uma imagem mapeada acima de 1 MiB com marcadores `PTBIG100` / `PTBIG190`.
 
 ## Marcadores seriais
 - `SCHED100` - runtime do scheduler inicializado.
@@ -26,6 +28,7 @@ Sair do prototipo de troca de contexto por `ret` e fechar um runtime com schedul
 - `STOP 0x00000006` - bootstrap do runtime do scheduler falhou antes da shell.
 - `STOP 0x00000007` - self-test obrigatorio da fase 5 falhou antes da shell.
 - `APPFLT900` - fault de app em ring3 identificado e contido ao grupo da app.
+- `PTBIG100` / `PTBIG190` / `PTBIG900` / `PTBIG901` - regressao de ELF grande iniciado, concluido, ou falhado.
 
 Os logs humanos continuam presentes:
 - `[sched] phase5 context-switch self-test start`
@@ -35,6 +38,5 @@ Os logs humanos continuam presentes:
 - `[paging] #PF detected` + `mode=user` quando uma app viola o isolamento
 
 ## Proximos passos
-- Evoluir de slots fixos de 1 MiB para gestao de memoria por processo mais flexivel.
 - Decidir como migrar o shell/bootstrap para uma stack tambem protegida por guard page sem depender da thread bootstrap legacy.
-- Evoluir da janela user fixa de 1 MiB para um layout virtual por processo mais flexivel.
+- Evoluir da janela user contigua por grupo para mapeamento por segmento e accounting real de memoria por processo.

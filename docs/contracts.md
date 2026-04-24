@@ -36,6 +36,9 @@ Only deterministic IDs in this section are contractual. Human-readable prose log
 - `APPIN001`: app input surface is ready to accept keyboard or mouse injection.
 - `APPRET001`: app returned control to the shell.
 - `APPFLT900`: a user-mode fault was contained to the offending app or app group.
+- `PTBIG100`: large-ELF regression app started after being mapped into userland.
+- `PTBIG190`: large-ELF regression app touched memory beyond the old 1 MiB slot and returned successfully.
+- `PTBIG900` / `PTBIG901`: large-ELF regression app detected an internal mapped-memory failure.
 - `SHELL100`: emitted immediately after `Entering main loop` to signal that the interactive command loop is ready for deterministic injection.
 
 ### Storage markers

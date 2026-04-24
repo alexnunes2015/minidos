@@ -72,7 +72,7 @@ def main():
         ready_log, matched = wait_for_shell_ready(proc, 30.0)
         if not matched:
             raise RuntimeError("timeout waiting for shell readiness")
-        if matched != "Entering main loop":
+        if matched != "Entering main loop" and "Entering main loop" not in ready_log:
             remaining = max(0.1, ready_deadline - time.time())
             extra_log, matched = read_until(proc, ["Entering main loop"], timeout_s=remaining)
             ready_log += extra_log

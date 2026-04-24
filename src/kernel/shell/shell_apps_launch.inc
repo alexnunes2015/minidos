@@ -1,7 +1,13 @@
-static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size, unsigned int load_phys_base, unsigned int* entry_virtual_out) {
+static int shell_apps_probe_elf_image(const unsigned char* elf_data, int elf_size, unsigned int* entry_virtual_out, unsigned int* slot_bytes_out) {
     const elf32_header_t* ehdr;
+    unsigned int ph_table_bytes;
+    unsigned int highest_end = APP_LOAD_VIRT_BASE;
+    unsigned int max_user_image_limit = shell_apps_user_image_limit_for_slot(APP_SLOT_MAX_SIZE);
+    unsigned int slot_bytes;
+    unsigned int image_limit;
+    int saw_load = 0;
 
-    if (!elf_data || !entry_virtual_out || elf_size < (int)sizeof(elf32_header_t)) {
+    if (!elf_data || !entry_virtual_out || !slot_bytes_out || elf_size < (int)sizeof(elf32_header_t)) {
         return -1;
     }
 
@@ -21,14 +27,17 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
     if (ehdr->phnum == 0 || ehdr->phnum > 16) {
         return -1;
     }
-    if ((int)ehdr->phoff + (int)(ehdr->phnum * ehdr->phentsize) > elf_size) {
+    if (ehdr->phoff > (unsigned int)elf_size) {
+        return -1;
+    }
+    ph_table_bytes = (unsigned int)ehdr->phnum * (unsigned int)ehdr->phentsize;
+    if (ph_table_bytes > ((unsigned int)elf_size - ehdr->phoff)) {
         return -1;
     }
 
     for (unsigned int i = 0; i < ehdr->phnum; i++) {
         const elf32_program_header_t* phdr = (const elf32_program_header_t*)(elf_data + ehdr->phoff + i * ehdr->phentsize);
-        unsigned char* dst;
-        const unsigned char* src;
+        unsigned int segment_end;
 
         if (phdr->type != 1) {
             continue;
@@ -39,13 +48,78 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
         if (phdr->memsz < phdr->filesz) {
             return -1;
         }
-        if ((int)phdr->offset + (int)phdr->filesz > elf_size) {
+        if (phdr->offset > (unsigned int)elf_size || phdr->filesz > ((unsigned int)elf_size - phdr->offset)) {
             return -1;
         }
-        if (phdr->vaddr < APP_LOAD_VIRT_BASE || (phdr->vaddr + phdr->memsz) > APP_USER_IMAGE_LIMIT) {
+        if (phdr->vaddr < APP_LOAD_VIRT_BASE || phdr->memsz > (0xFFFFFFFFU - phdr->vaddr)) {
             return -1;
         }
 
+        segment_end = phdr->vaddr + phdr->memsz;
+        if (segment_end > max_user_image_limit) {
+            return -1;
+        }
+        if (segment_end > highest_end) {
+            highest_end = segment_end;
+        }
+        saw_load = 1;
+    }
+
+    if (!saw_load) {
+        return -1;
+    }
+
+    slot_bytes = shell_apps_required_slot_bytes(highest_end - APP_LOAD_VIRT_BASE);
+    image_limit = shell_apps_user_image_limit_for_slot(slot_bytes);
+    if (slot_bytes == 0U || image_limit == 0U || highest_end > image_limit) {
+        return -1;
+    }
+    if (ehdr->entry < APP_LOAD_VIRT_BASE || ehdr->entry >= image_limit) {
+        return -1;
+    }
+
+    *entry_virtual_out = ehdr->entry;
+    *slot_bytes_out = slot_bytes;
+    return 0;
+}
+
+static int shell_apps_load_elf_image(
+    const unsigned char* elf_data,
+    int elf_size,
+    unsigned int load_phys_base,
+    unsigned int slot_bytes,
+    unsigned int* entry_virtual_out
+) {
+    const elf32_header_t* ehdr;
+    unsigned int image_limit;
+    unsigned int required_slot_bytes;
+
+    if (!elf_data || !entry_virtual_out || elf_size < (int)sizeof(elf32_header_t)) {
+        return -1;
+    }
+
+    ehdr = (const elf32_header_t*)elf_data;
+    image_limit = shell_apps_user_image_limit_for_slot(slot_bytes);
+    if (image_limit == 0U
+        || shell_apps_probe_elf_image(elf_data, elf_size, entry_virtual_out, &required_slot_bytes) != 0
+        || required_slot_bytes > slot_bytes) {
+        return -1;
+    }
+
+    for (unsigned int i = 0; i < ehdr->phnum; i++) {
+        const elf32_program_header_t* phdr = (const elf32_program_header_t*)(elf_data + ehdr->phoff + i * ehdr->phentsize);
+        unsigned char* dst;
+        const unsigned char* src;
+        unsigned int segment_end;
+
+        if (phdr->type != 1 || phdr->memsz == 0) {
+            continue;
+        }
+
+        segment_end = phdr->vaddr + phdr->memsz;
+        if (phdr->vaddr < APP_LOAD_VIRT_BASE || segment_end > image_limit) {
+            return -1;
+        }
         dst = (unsigned char*)(load_phys_base + (phdr->vaddr - APP_LOAD_VIRT_BASE));
         src = elf_data + phdr->offset;
         shell_apps_mem_copy(dst, src, phdr->filesz);
@@ -54,7 +128,7 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
         }
     }
 
-    if (ehdr->entry < APP_LOAD_VIRT_BASE || ehdr->entry >= APP_USER_IMAGE_LIMIT) {
+    if (ehdr->entry < APP_LOAD_VIRT_BASE || ehdr->entry >= image_limit) {
         return -1;
     }
 
@@ -62,11 +136,41 @@ static int shell_apps_load_elf_image(const unsigned char* elf_data, int elf_size
     return 0;
 }
 
-static int shell_apps_load_com_image(const unsigned char* com_data, int com_size, unsigned int load_phys_base, unsigned int* entry_virtual_out) {
-    if (!com_data || !entry_virtual_out || com_size <= 0 || com_size > APP_MAX_COM_SIZE) {
+static int shell_apps_plan_com_image(int com_size, unsigned int* slot_bytes_out) {
+    unsigned int slot_bytes;
+
+    if (!slot_bytes_out || com_size <= 0 || com_size > APP_MAX_COM_SIZE) {
         return -1;
     }
-    if ((APP_LOAD_VIRT_BASE + (unsigned int)com_size) > APP_USER_IMAGE_LIMIT) {
+
+    slot_bytes = shell_apps_required_slot_bytes((unsigned int)com_size);
+    if (slot_bytes == 0U) {
+        return -1;
+    }
+
+    *slot_bytes_out = slot_bytes;
+    return 0;
+}
+
+static int shell_apps_load_com_image(
+    const unsigned char* com_data,
+    int com_size,
+    unsigned int load_phys_base,
+    unsigned int slot_bytes,
+    unsigned int* entry_virtual_out
+) {
+    unsigned int image_limit;
+    unsigned int required_slot_bytes;
+
+    if (!com_data
+        || !entry_virtual_out
+        || shell_apps_plan_com_image(com_size, &required_slot_bytes) != 0
+        || required_slot_bytes > slot_bytes) {
+        return -1;
+    }
+
+    image_limit = shell_apps_user_image_limit_for_slot(slot_bytes);
+    if (image_limit == 0U || (APP_LOAD_VIRT_BASE + (unsigned int)com_size) > image_limit) {
         return -1;
     }
 
@@ -108,6 +212,7 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     int bytes_read;
     unsigned int entry_virtual = 0;
     unsigned int phys_base = 0;
+    unsigned int slot_bytes = 0;
 
     if (!shell_apps_host_valid(host)) {
         return 0;
@@ -126,6 +231,11 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
+    if (shell_apps_plan_com_image(bytes_read, &slot_bytes) != 0) {
+        shell_apps_out_both(host, "Invalid COM or load error\n");
+        return 1;
+    }
+
     shell_apps_reap_terminated_tasks();
     pid = shell_apps_find_free_pid();
     if (pid < 0) {
@@ -133,20 +243,20 @@ static int shell_apps_try_execute_com(const shell_app_host_t* host, const char* 
         return 1;
     }
 
-    phys_base = shell_apps_allocate_phys_base();
+    phys_base = shell_apps_allocate_phys_base(slot_bytes);
     if (phys_base == 0U) {
         shell_apps_out_both(host, "No app memory slot available\n");
         return 1;
     }
 
     task = &g_app_tasks[pid];
-    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 0, 0, 1)) {
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, slot_bytes, 0, 0, 1)) {
         shell_apps_release_task(task);
         shell_apps_out_both(host, "Unable to prepare app task\n");
         return 1;
     }
 
-    if (shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0) {
+    if (shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, task->app_slot_bytes, &entry_virtual) != 0) {
         shell_apps_release_task(task);
         shell_apps_out_both(host, "Invalid COM or load error\n");
         return 1;
@@ -188,6 +298,7 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     int bytes_read;
     unsigned int entry_virtual = 0;
     unsigned int phys_base = 0;
+    unsigned int slot_bytes = 0;
 
     if (!shell_apps_host_valid(host)) {
         return 0;
@@ -223,6 +334,11 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
     shell_apps_out_both(host, filename);
     shell_apps_out_both(host, "...\n");
 
+    if (shell_apps_probe_elf_image(g_elf_buffer, bytes_read, &entry_virtual, &slot_bytes) != 0) {
+        shell_apps_out_both(host, "Invalid ELF or load error\n");
+        return 1;
+    }
+
     shell_apps_reap_terminated_tasks();
     pid = shell_apps_find_free_pid();
     if (pid < 0) {
@@ -230,20 +346,20 @@ int shell_apps_try_execute_elf(const shell_app_host_t* host, const char* command
         return 1;
     }
 
-    phys_base = shell_apps_allocate_phys_base();
+    phys_base = shell_apps_allocate_phys_base(slot_bytes);
     if (phys_base == 0U) {
         shell_apps_out_both(host, "No app memory slot available\n");
         return 1;
     }
 
     task = &g_app_tasks[pid];
-    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 0, 0, 1)) {
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, slot_bytes, 0, 0, 1)) {
         shell_apps_release_task(task);
         shell_apps_out_both(host, "Unable to prepare app task\n");
         return 1;
     }
 
-    if (shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0) {
+    if (shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, task->app_slot_bytes, &entry_virtual) != 0) {
         shell_apps_release_task(task);
         shell_apps_out_both(host, "Invalid ELF or load error\n");
         return 1;
@@ -302,6 +418,7 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
     shell_app_format_t format = APP_FORMAT_NONE;
     unsigned int entry_virtual = 0;
     unsigned int phys_base = 0;
+    unsigned int slot_bytes = 0;
 
     if (!shell_apps_host_valid(host) || !command || command[0] == '\0') {
         return 0;
@@ -330,29 +447,39 @@ int shell_apps_run_background(const shell_app_host_t* host, const char* command,
         return 0;
     }
 
+    if (format == APP_FORMAT_ELF) {
+        if (shell_apps_probe_elf_image(g_elf_buffer, bytes_read, &entry_virtual, &slot_bytes) != 0) {
+            return 0;
+        }
+    } else {
+        if (shell_apps_plan_com_image(bytes_read, &slot_bytes) != 0) {
+            return 0;
+        }
+    }
+
     pid = shell_apps_find_free_pid();
     if (pid < 0) {
         return 0;
     }
     log_serial_raw("APPBG004\n");
 
-    phys_base = shell_apps_allocate_phys_base();
+    phys_base = shell_apps_allocate_phys_base(slot_bytes);
     if (phys_base == 0U) {
         return 0;
     }
     log_serial_raw("APPBG005\n");
 
     task = &g_app_tasks[pid];
-    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, 1, 1, 0)) {
+    if (!shell_apps_prepare_app_task(task, host, pid, phys_base, slot_bytes, 1, 1, 0)) {
         shell_apps_release_task(task);
         return 0;
     }
     log_serial_raw("APPBG006\n");
     log_serial_raw("APPBG007\n");
     if ((format == APP_FORMAT_ELF
-            && shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0)
+            && shell_apps_load_elf_image(g_elf_buffer, bytes_read, task->app_phys_base, task->app_slot_bytes, &entry_virtual) != 0)
         || (format == APP_FORMAT_COM
-            && shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, &entry_virtual) != 0)) {
+            && shell_apps_load_com_image(g_elf_buffer, bytes_read, task->app_phys_base, task->app_slot_bytes, &entry_virtual) != 0)) {
         shell_apps_release_task(task);
         return 0;
     }

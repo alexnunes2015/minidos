@@ -7,6 +7,7 @@ Important:
 - These `.ELF` files are 32-bit executables loaded by the MiniDOS ELF loader.
 - Legacy `.COM` files are flat 32-bit binaries loaded at the same user-mode base address.
 - Both formats are executed by the MiniDOS kernel in protected mode on the same ring3 runtime.
+- ELF/COM programs are mapped at `0x01000000` into a dynamic per-app span; the current maximum mapped user span is 4 MiB.
 
 ## Requirements
 
@@ -76,6 +77,10 @@ The repository also includes `external_apps/apps/stress/stress.c`, a shell-launc
 stress app that churns repeated directory scans, ELF reads, graphics presents,
 and return-to-shell flow while emitting stable serial markers (`STRS100`,
 `STRS110`, `STRS190`, `STRS900`) for regression scripts.
+
+`external_apps/apps/ptbig/ptbig.c` is the large-ELF regression app. Its `.bss`
+pushes the mapped image beyond the old 1 MiB slot and emits `PTBIG100` /
+`PTBIG190` when the dynamic userland span is working.
 
 ## Manual flow (reference)
 

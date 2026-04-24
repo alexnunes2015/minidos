@@ -50,6 +50,8 @@ def send_cmd(proc, cmd, patterns, timeout_s=8.0):
 
 def run_foreground_app(proc, cmd, patterns, timeout_s=10.0):
     out = send_cmd(proc, cmd, patterns, timeout_s=timeout_s)
+    if "APPRET001" in out:
+        return out
     extra, matched = read_until(proc, ["APPRET001"], timeout_s=timeout_s)
     out += extra
     if matched != "APPRET001":
@@ -83,7 +85,7 @@ def main():
         ready_log, matched = wait_for_shell_ready(proc, 30.0)
         if not matched:
             raise RuntimeError("timeout waiting for shell readiness")
-        if matched != "Entering main loop":
+        if matched != "Entering main loop" and "Entering main loop" not in ready_log:
             remaining = max(0.1, ready_deadline - time.time())
             extra_log, matched = read_until(proc, ["Entering main loop"], timeout_s=remaining)
             ready_log += extra_log

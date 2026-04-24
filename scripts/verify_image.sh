@@ -128,6 +128,7 @@ require_entry "::/PTEST/PTCPU.ELF"
 require_entry "::/PTEST/PTWAIT.ELF"
 require_entry "::/PTEST/PTIO.ELF"
 require_entry "::/PTEST/PTTHRD.ELF"
+require_entry "::/PTEST/PTBIG.ELF"
 
 if [ -f "$ROOT_DIR/external_apps/apps/win95_demo/bg.bmp" ]; then
     require_entry "::/AIOS/BG.BMP"
