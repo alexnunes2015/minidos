@@ -21,6 +21,7 @@
 #define ATA_CMD_READ_PIO    0x20
 #define ATA_CMD_WRITE_PIO   0x30
 #define ATA_CMD_CACHE_FLUSH 0xE7
+#define ATA_CMD_IDENTIFY    0xEC
 
 #define ATA_SR_BSY      0x80
 #define ATA_SR_DRDY     0x40
@@ -106,6 +107,7 @@ typedef struct {
 
 static boot_media_t boot_media;
 static unsigned char ata_presence_mask;
+static unsigned short ata_identify_buffer[256];
 
 static int ata_decode_physical_target(unsigned char ata_id, ata_target_t* target) {
     if (!target || ata_id > 3) {
@@ -207,7 +209,43 @@ static int ata_probe_physical_target(unsigned char ata_id) {
     io_wait();
 
     status = inb(target.io_base + ATA_STATUS);
-    return status != 0x00 && status != 0xFF;
+    if (status == 0x00 || status == 0xFF) {
+        return 0;
+    }
+
+    if (ata_wait_bsy(&target) != 0) {
+        return 0;
+    }
+
+    outb(target.io_base + ATA_SECCOUNT, 0);
+    outb(target.io_base + ATA_LBALO, 0);
+    outb(target.io_base + ATA_LBAMID, 0);
+    outb(target.io_base + ATA_LBAHI, 0);
+    outb(target.io_base + ATA_COMMAND, ATA_CMD_IDENTIFY);
+    io_wait();
+    io_wait();
+    io_wait();
+    io_wait();
+
+    status = inb(target.io_base + ATA_STATUS);
+    if (status == 0x00 || status == 0xFF) {
+        return 0;
+    }
+
+    if (ata_wait_bsy(&target) != 0) {
+        return 0;
+    }
+
+    if (inb(target.io_base + ATA_LBAMID) != 0 || inb(target.io_base + ATA_LBAHI) != 0) {
+        return 0;
+    }
+
+    if (ata_wait_drq(&target) != 0 || ata_has_error(&target)) {
+        return 0;
+    }
+
+    insw(target.io_base + ATA_DATA, ata_identify_buffer, 256);
+    return 1;
 }
 
 static void ata_soft_reset(const ata_target_t* target) {

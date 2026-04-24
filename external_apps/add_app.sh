@@ -10,6 +10,7 @@ usage() {
     echo "Usage: $0 [--format elf|com] [--dir DIRNAME] <path/to/app.c> [APPNAME]"
     echo "  APPNAME must be 1-8 chars: A-Z, 0-9, underscore"
     echo "  DIRNAME must be 1-8 chars: A-Z, 0-9, underscore"
+    echo "  All sibling .c files in the app directory are compiled together"
 }
 
 need_cmd() {
@@ -206,13 +207,14 @@ copy_companion_resources() {
 
 mkdir -p "$BUILD_DIR/$APP_BASE"
 APP_BUILD_DIR="$BUILD_DIR/$APP_BASE"
+SRC_DIR="$(dirname "$SRC_PATH")"
 
 ENTRY_OBJ="$APP_BUILD_DIR/entry.o"
-APP_OBJ="$APP_BUILD_DIR/app.o"
 APP_ELF="$APP_BUILD_DIR/$APP_BASE.$APP_FORMAT.elf"
 APP_LINKER_SCRIPT="$TOOLS_DIR/app.ld"
 APP_DST="$APP_BUILD_DIR/$APP_BASE.ELF"
 APP_EXT="ELF"
+APP_OBJS=()
 
 if [[ "$APP_FORMAT" == "com" ]]; then
     APP_LINKER_SCRIPT="$TOOLS_DIR/app_com.ld"
@@ -226,13 +228,23 @@ prepare_cursor_bitmap
 
 nasm -f elf32 "$TOOLS_DIR/entry.asm" -o "$ENTRY_OBJ"
 
-gcc -m32 -ffreestanding -O2 -Wall -Wextra \
-    -fno-stack-protector -fno-pic -fno-pie -fno-common \
-    -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
-    -I"$TOOLS_DIR" \
-    -c "$SRC_PATH" -o "$APP_OBJ"
+while IFS= read -r -d '' src; do
+    obj="$APP_BUILD_DIR/$(basename "${src%.c}").o"
+    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
+        -fno-stack-protector -fno-pic -fno-pie -fno-common \
+        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
+        -I"$TOOLS_DIR" \
+        -I"$SRC_DIR" \
+        -c "$src" -o "$obj"
+    APP_OBJS+=("$obj")
+done < <(find "$SRC_DIR" -maxdepth 1 -type f -name '*.c' -print0 | sort -z)
 
-ld -m elf_i386 -T "$APP_LINKER_SCRIPT" -o "$APP_ELF" "$ENTRY_OBJ" "$APP_OBJ"
+if [[ ${#APP_OBJS[@]} -eq 0 ]]; then
+    echo "ERROR: No C sources found in $SRC_DIR" >&2
+    exit 1
+fi
+
+ld -m elf_i386 -T "$APP_LINKER_SCRIPT" -o "$APP_ELF" "$ENTRY_OBJ" "${APP_OBJS[@]}"
 if [[ ! -s "$APP_ELF" ]]; then
     echo "ERROR: Generated file is empty: $APP_ELF" >&2
     exit 1

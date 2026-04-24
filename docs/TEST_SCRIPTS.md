@@ -5,6 +5,7 @@ Permite enviar comandos automaticamente para o shell do MiniDOS e testar suas fu
 Os testes Python partilham o mesmo contrato de arranque e I/O através de `tests/qemu_harness.py`. Isso evita drift entre scripts e torna o comportamento mais previsível para agentes.
 O boot normal entra diretamente na shell. Os harnesses ainda toleram uma GUI inicial se esse fluxo voltar a ser ativado, para evitar sleeps frágeis nos testes.
 O `Makefile` agora gera dependências de headers (`.d`), por isso um `make` normal recompila automaticamente os objetos afetados quando a ABI interna do kernel muda.
+As apps externas também podem ser divididas em vários `*.c` por diretório; o build de `STARTUI` compila todos os módulos irmãos em `external_apps/apps/win95_demo/`.
 
 ## Scripts Disponíveis
 

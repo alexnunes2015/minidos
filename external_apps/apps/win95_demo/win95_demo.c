@@ -1,27 +1,5 @@
-#include "minidos_ui.h"
-
-#define KEY_TAB   9
-#define KEY_ENTER 13
-#define KEY_ESC   27
-#define KEY_SPACE 32
-#define TASKBAR_H 28
-/* User-supplied wallpaper BMP (optional; loaded once at startup) */
-#define RESOURCE_HOME_DIR_1 "AIOS"
-#define WALLPAPER_BMP_PATH "BG.BMP"
-#define START_BUTTON_W 86
-#define START_BUTTON_H 20
-#define START_MENU_W 220
-#define START_MENU_H 188
-#define START_MENU_STRIP_W 28
-#define START_MENU_ITEM_NONE (-1)
-#define START_MENU_ITEM_COUNT 4
-#define DESKTOP_MAX_ITEMS 16
-#define DESKTOP_CELL_W 96
-#define DESKTOP_CELL_H 70
-#define DESKTOP_ICON_W 36
-#define DESKTOP_ICON_H 28
-#define CLOCK_TEXT_LEN 9
-#define CLOCK_REFRESH_MS 1000
+#include "win95_demo.h"
+#include "win95_icon_pack.h"
 
 enum {
     START_MENU_ITEM_PROGRAMAS = 0,
@@ -34,52 +12,17 @@ enum {
 typedef struct {
     const char* label;
     const char* detail;
-    const char* glyph;
-    unsigned int accent;
+    int icon_id;
 } start_menu_entry_t;
 
 static const start_menu_entry_t g_start_menu_items[START_MENU_ITEM_COUNT] = {
-    {"Programas", "Apps e demos", "P", 0xC04040u},
-    {"Documentos", "Ficheiros e notas", "D", 0xD0A020u},
-    {"Definicoes", "Tema e video", "C", 0x2C76D2u},
-    {"Ajuda", "Dicas rapidas", "?", 0x2C9A58u},
+    {"Programas", "Apps e demos", WIN95_ICON_TERMINAL},
+    {"Documentos", "Ficheiros e notas", WIN95_ICON_NOTEPAD},
+    {"Definicoes", "Tema e video", WIN95_ICON_SETTINGS},
+    {"Ajuda", "Dicas rapidas", WIN95_ICON_COMPUTER},
 };
 
-typedef struct {
-    char name[13];
-    int is_dir;
-    ui_rect_t bounds;
-} desktop_item_t;
-
-typedef struct {
-    ui_window_manager_t wm;
-    app_mouse_state_t mouse;
-    int sw;
-    int sh;
-    int window_id;
-    int label_mouse_id;
-    int label_status_id;
-    int button_ok_id;
-    int button_cancel_id;
-    int input_id;
-    int dragging;
-    int mouse_pressed_control_id;
-    int drag_offset_x;
-    int drag_offset_y;
-    ui_rect_t drag_preview_bounds;
-    int start_menu_open;
-    int start_button_pressed;
-    int start_menu_pressed_item;
-    int start_menu_hot_item;
-    int desktop_item_count;
-    desktop_item_t desktop_items[DESKTOP_MAX_ITEMS];
-    char mouse_text[48];
-    char status_text[96];
-    char input_text[64];
-    char clock_text[CLOCK_TEXT_LEN];
-} demo_state_t;
-
-static void str_copy(char* dst, const char* src, int max_len) {
+void str_copy(char* dst, const char* src, int max_len) {
     int i = 0;
     while (i < (max_len - 1) && src[i] != '\0') {
         dst[i] = src[i];
@@ -88,7 +31,7 @@ static void str_copy(char* dst, const char* src, int max_len) {
     dst[i] = '\0';
 }
 
-static int str_equal(const char* a, const char* b) {
+int str_equal(const char* a, const char* b) {
     int i = 0;
 
     if (a == b) {
@@ -108,14 +51,14 @@ static int str_equal(const char* a, const char* b) {
     return a[i] == b[i];
 }
 
-static int rect_equal(ui_rect_t a, ui_rect_t b) {
+int rect_equal(ui_rect_t a, ui_rect_t b) {
     return a.x == b.x
         && a.y == b.y
         && a.w == b.w
         && a.h == b.h;
 }
 
-static void enter_resource_home(const minidos_app_api_t* api) {
+void enter_resource_home(const minidos_app_api_t* api) {
     if (!api) {
         return;
     }
@@ -129,7 +72,7 @@ static void enter_resource_home(const minidos_app_api_t* api) {
     }
 }
 
-static void update_mouse_label_text(demo_state_t* state) {
+void update_mouse_label_text(demo_state_t* state) {
     ui_control_t* control;
 
     if (!state) {
@@ -146,7 +89,7 @@ static void update_mouse_label_text(demo_state_t* state) {
     }
 }
 
-static void update_status_text(demo_state_t* state, const char* text) {
+void update_status_text(demo_state_t* state, const char* text) {
     ui_control_t* control;
 
     if (!state) {
@@ -160,12 +103,12 @@ static void update_status_text(demo_state_t* state, const char* text) {
     }
 }
 
-static void append_two_digits(char* out, unsigned int value) {
+void append_two_digits(char* out, unsigned int value) {
     out[0] = (char)('0' + ((value / 10u) % 10u));
     out[1] = (char)('0' + (value % 10u));
 }
 
-static void update_clock_text(demo_state_t* state, const minidos_app_api_t* api) {
+void update_clock_text(demo_state_t* state, const minidos_app_api_t* api) {
     app_time_t time;
 
     if (!state) {
@@ -185,7 +128,7 @@ static void update_clock_text(demo_state_t* state, const minidos_app_api_t* api)
     state->clock_text[8] = '\0';
 }
 
-static void enter_desktop_home(const minidos_app_api_t* api) {
+void enter_desktop_home(const minidos_app_api_t* api) {
     if (!api) {
         return;
     }
@@ -202,143 +145,7 @@ static void enter_desktop_home(const minidos_app_api_t* api) {
     (void)app_chdir(api, "Desktop");
 }
 
-static void desktop_item_icon_tag(const desktop_item_t* item, char out[4]) {
-    const char* ext = 0;
-    int i;
-
-    if (!out) {
-        return;
-    }
-
-    if (!item) {
-        out[0] = 'F';
-        out[1] = 'I';
-        out[2] = 'L';
-        out[3] = '\0';
-        return;
-    }
-
-    if (item->is_dir) {
-        out[0] = 'D';
-        out[1] = 'I';
-        out[2] = 'R';
-        out[3] = '\0';
-        return;
-    }
-
-    for (i = 0; item->name[i] != '\0'; i++) {
-        if (item->name[i] == '.') {
-            ext = &item->name[i + 1];
-        }
-    }
-
-    if (!ext || ext[0] == '\0') {
-        out[0] = 'F';
-        out[1] = 'I';
-        out[2] = 'L';
-        out[3] = '\0';
-        return;
-    }
-
-    if (ext[0] == 'E' && ext[1] == 'L' && ext[2] == 'F' && ext[3] == '\0') {
-        out[0] = 'E';
-        out[1] = 'X';
-        out[2] = 'E';
-        out[3] = '\0';
-        return;
-    }
-    if ((ext[0] == 'T' && ext[1] == 'X' && ext[2] == 'T' && ext[3] == '\0')
-        || (ext[0] == 'M' && ext[1] == 'D' && ext[2] == '\0')) {
-        out[0] = 'T';
-        out[1] = 'X';
-        out[2] = 'T';
-        out[3] = '\0';
-        return;
-    }
-    if ((ext[0] == 'B' && ext[1] == 'I' && ext[2] == 'N' && ext[3] == '\0')
-        || (ext[0] == 'D' && ext[1] == 'A' && ext[2] == 'T' && ext[3] == '\0')) {
-        out[0] = 'B';
-        out[1] = 'I';
-        out[2] = 'N';
-        out[3] = '\0';
-        return;
-    }
-    if ((ext[0] == 'B' && ext[1] == 'M' && ext[2] == 'P' && ext[3] == '\0')
-        || (ext[0] == 'P' && ext[1] == 'N' && ext[2] == 'G' && ext[3] == '\0')) {
-        out[0] = 'I';
-        out[1] = 'M';
-        out[2] = 'G';
-        out[3] = '\0';
-        return;
-    }
-
-    out[0] = ext[0];
-    out[1] = ext[1] ? ext[1] : ' ';
-    out[2] = ext[2] ? ext[2] : ' ';
-    out[3] = '\0';
-}
-
-static unsigned int desktop_item_color(const desktop_item_t* item) {
-    const char* ext = 0;
-    int i;
-
-    if (!item) {
-        return ui_rgb(192, 192, 192);
-    }
-    if (item->is_dir) {
-        return ui_rgb(224, 192, 64);
-    }
-
-    for (i = 0; item->name[i] != '\0'; i++) {
-        if (item->name[i] == '.') {
-            ext = &item->name[i + 1];
-        }
-    }
-
-    if (!ext) {
-        return ui_rgb(160, 160, 160);
-    }
-    if (ext[0] == 'E' && ext[1] == 'L' && ext[2] == 'F' && ext[3] == '\0') {
-        return ui_rgb(64, 128, 255);
-    }
-    if ((ext[0] == 'T' && ext[1] == 'X' && ext[2] == 'T' && ext[3] == '\0')
-        || (ext[0] == 'M' && ext[1] == 'D' && ext[2] == '\0')) {
-        return ui_rgb(128, 224, 128);
-    }
-    if ((ext[0] == 'B' && ext[1] == 'I' && ext[2] == 'N' && ext[3] == '\0')
-        || (ext[0] == 'D' && ext[1] == 'A' && ext[2] == 'T' && ext[3] == '\0')) {
-        return ui_rgb(192, 192, 192);
-    }
-    if ((ext[0] == 'B' && ext[1] == 'M' && ext[2] == 'P' && ext[3] == '\0')
-        || (ext[0] == 'P' && ext[1] == 'N' && ext[2] == 'G' && ext[3] == '\0')) {
-        return ui_rgb(224, 96, 192);
-    }
-    return ui_rgb(160, 160, 160);
-}
-
-static void desktop_item_display_name(const desktop_item_t* item, char out[13]) {
-    int i;
-    int j = 0;
-
-    if (!out) {
-        return;
-    }
-
-    out[0] = '\0';
-    if (!item) {
-        return;
-    }
-
-    for (i = 0; item->name[i] != '\0' && j < 12; i++) {
-        if (item->name[i] == '.') {
-            break;
-        }
-        out[j++] = item->name[i];
-    }
-    out[j] = '\0';
-}
-
-static void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
+void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
     unsigned int fg, ui_rect_t clip) {
     int i;
     int row;
@@ -381,116 +188,6 @@ static void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, i
                 }
             }
         }
-    }
-}
-
-static void layout_desktop_items(demo_state_t* state) {
-    int i;
-    int columns;
-    int left;
-    int top;
-
-    if (!state) {
-        return;
-    }
-
-    columns = (state->sw - 24) / DESKTOP_CELL_W;
-    if (columns < 1) {
-        columns = 1;
-    }
-    if (columns > 6) {
-        columns = 6;
-    }
-
-    left = 16;
-    top = 18;
-
-    for (i = 0; i < state->desktop_item_count; i++) {
-        int col = i % columns;
-        int row = i / columns;
-
-        state->desktop_items[i].bounds = ui_rect_make(
-            left + (col * DESKTOP_CELL_W),
-            top + (row * DESKTOP_CELL_H),
-            DESKTOP_CELL_W - 6,
-            DESKTOP_CELL_H - 6);
-    }
-}
-
-static void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state) {
-    int i;
-    int count = 0;
-
-    if (!api || !state) {
-        return;
-    }
-
-    enter_desktop_home(api);
-    for (i = 0; i < DESKTOP_MAX_ITEMS; i++) {
-        char name[13];
-        int is_dir = 0;
-
-        name[0] = '\0';
-        if (!app_list_entry(api, (unsigned int)i, name, &is_dir)) {
-            break;
-        }
-        if (name[0] == '\0'
-            || (name[0] == '.' && name[1] == '\0')
-            || (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
-            continue;
-        }
-        str_copy(state->desktop_items[count].name, name, (int)sizeof(state->desktop_items[count].name));
-        state->desktop_items[count].is_dir = is_dir;
-        state->desktop_items[count].bounds = ui_rect_make(0, 0, 0, 0);
-        count++;
-    }
-    state->desktop_item_count = count;
-    layout_desktop_items(state);
-}
-
-static void draw_desktop_item(const minidos_app_api_t* api, const demo_state_t* state,
-    const desktop_item_t* item, ui_rect_t clip) {
-    ui_rect_t icon_rect;
-    ui_rect_t label_rect;
-    ui_rect_t body_rect;
-    char display_name[13];
-    char tag[4];
-    unsigned int icon_color;
-
-    if (!api || !state || !item) {
-        return;
-    }
-
-    body_rect = item->bounds;
-    if (ui_rect_is_empty(ui_rect_intersect(body_rect, clip))) {
-        return;
-    }
-
-    icon_color = desktop_item_color(item);
-    desktop_item_icon_tag(item, tag);
-    desktop_item_display_name(item, display_name);
-
-    icon_rect = ui_rect_make(body_rect.x + 6, body_rect.y + 4, DESKTOP_ICON_W, DESKTOP_ICON_H);
-    label_rect = ui_rect_make(body_rect.x, body_rect.y + DESKTOP_ICON_H + 10, body_rect.w, UI_CHAR_H);
-
-    ui_frame_rect_clipped(api, icon_rect, icon_color, clip);
-    ui_fill_rect_clipped(api, ui_rect_make(icon_rect.x + 1, icon_rect.y + 1, icon_rect.w - 2, 4), state->wm.theme.light, clip);
-    draw_text_transparent_clipped(api, icon_rect.x + 8, icon_rect.y + 9, tag,
-        state->wm.theme.dark_shadow, clip);
-
-    draw_text_transparent_clipped(api, label_rect.x, label_rect.y, display_name,
-        state->wm.theme.text, clip);
-}
-
-static void draw_desktop_items(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t clip) {
-    int i;
-
-    if (!api || !state) {
-        return;
-    }
-
-    for (i = 0; i < state->desktop_item_count; i++) {
-        draw_desktop_item(api, state, &state->desktop_items[i], clip);
     }
 }
 
@@ -694,6 +391,48 @@ static ui_rect_t current_title_bar_rect(const demo_state_t* state) {
     return ui_window_title_bar_rect(&win->window);
 }
 
+enum {
+    CURSOR_REGION_DESKTOP = 0,
+    CURSOR_REGION_WINDOW_BORDER = 1,
+    CURSOR_REGION_WINDOW_TITLE = 2,
+    CURSOR_REGION_WINDOW_CLIENT = 3,
+};
+
+static int cursor_window_region(const demo_state_t* state, ui_rect_t cursor_rect) {
+    ui_rect_t window_rect;
+    ui_rect_t title_bar_rect;
+    ui_rect_t client_rect;
+
+    if (!state || ui_rect_is_empty(cursor_rect)) {
+        return CURSOR_REGION_DESKTOP;
+    }
+
+    window_rect = current_window_rect(state);
+    if (ui_rect_is_empty(window_rect)
+        || ui_rect_is_empty(ui_rect_intersect(cursor_rect, window_rect))) {
+        return CURSOR_REGION_DESKTOP;
+    }
+
+    title_bar_rect = current_title_bar_rect(state);
+    if (!ui_rect_is_empty(title_bar_rect)
+        && !ui_rect_is_empty(ui_rect_intersect(cursor_rect, title_bar_rect))) {
+        return CURSOR_REGION_WINDOW_TITLE;
+    }
+
+    {
+        const ui_wm_window_t* win = ui_wm_find_window_const(&state->wm, state->window_id);
+        if (win) {
+            client_rect = ui_window_client_rect(&win->window);
+            if (!ui_rect_is_empty(client_rect)
+                && !ui_rect_is_empty(ui_rect_intersect(cursor_rect, client_rect))) {
+                return CURSOR_REGION_WINDOW_CLIENT;
+            }
+        }
+    }
+
+    return CURSOR_REGION_WINDOW_BORDER;
+}
+
 static int cursor_touches_title_bar(const demo_state_t* state,
     ui_rect_t previous_cursor_rect,
     ui_rect_t current_cursor_rect) {
@@ -710,6 +449,29 @@ static int cursor_touches_title_bar(const demo_state_t* state,
 
     return !ui_rect_is_empty(ui_rect_intersect(previous_cursor_rect, title_bar_rect))
         || !ui_rect_is_empty(ui_rect_intersect(current_cursor_rect, title_bar_rect));
+}
+
+static int cursor_crosses_window_chrome(const demo_state_t* state,
+    ui_rect_t previous_cursor_rect,
+    ui_rect_t current_cursor_rect) {
+    int previous_region;
+    int current_region;
+
+    if (!state) {
+        return 0;
+    }
+
+    previous_region = cursor_window_region(state, previous_cursor_rect);
+    current_region = cursor_window_region(state, current_cursor_rect);
+
+    if (previous_region == current_region) {
+        return 0;
+    }
+
+    return previous_region == CURSOR_REGION_WINDOW_TITLE
+        || previous_region == CURSOR_REGION_WINDOW_BORDER
+        || current_region == CURSOR_REGION_WINDOW_TITLE
+        || current_region == CURSOR_REGION_WINDOW_BORDER;
 }
 
 static ui_rect_t current_drag_preview_rect(const demo_state_t* state) {
@@ -902,7 +664,7 @@ static void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* 
 }
 
 static void draw_start_menu_item(const minidos_app_api_t* api, const demo_state_t* state,
-    int item_id, const char* label, unsigned int icon_color) {
+    int item_id, const char* label) {
     const start_menu_entry_t* entry;
     ui_rect_t item_rect;
     ui_rect_t icon_rect;
@@ -944,11 +706,8 @@ static void draw_start_menu_item(const minidos_app_api_t* api, const demo_state_
     icon_rect = ui_rect_make(item_rect.x + 4, item_rect.y + 2, 18, 18);
     ui_draw_panel(api, theme, icon_rect, !pressed);
     icon_inner = ui_rect_inset(icon_rect, 2);
-    ui_fill_rect(api, icon_inner, icon_color);
-    ui_fill_rect(api, ui_rect_make(icon_inner.x, icon_inner.y, icon_inner.w, 3), theme->light);
-    draw_text_transparent_clipped(api, icon_inner.x + ((icon_inner.w - UI_CHAR_W) / 2),
-        icon_inner.y + ((icon_inner.h - UI_CHAR_H) / 2) + 1, entry->glyph,
-        theme->dark_shadow, icon_inner);
+    ui_fill_rect(api, icon_inner, hot ? ui_rgb(218, 228, 252) : theme->face);
+    draw_win95_icon_clipped(api, icon_inner, entry->icon_id, icon_inner);
 
     ui_draw_text(api, item_rect.x + 28, item_rect.y + 2, label, fg, bg);
     ui_draw_text(api, item_rect.x + 28, item_rect.y + 12, entry->detail, detail_fg, bg);
@@ -1138,6 +897,7 @@ static void draw_task_button(const minidos_app_api_t* api, const demo_state_t* s
     ui_rect_t rect, const char* label) {
     const ui_theme_t* theme;
     ui_rect_t inner;
+    ui_rect_t icon_rect;
     unsigned int button_bg;
 
     if (!api || !state || !label) {
@@ -1150,8 +910,9 @@ static void draw_task_button(const minidos_app_api_t* api, const demo_state_t* s
     button_bg = ui_rgb(214, 219, 233);
     ui_fill_rect(api, inner, button_bg);
     ui_fill_rect(api, ui_rect_make(inner.x, inner.y, 5, inner.h), theme->title_active_bg);
-    draw_logo_mark(api, inner.x + 8, inner.y + 5, 3, 0);
-    ui_draw_text(api, inner.x + 24, inner.y + 5, label, theme->text, button_bg);
+    icon_rect = ui_rect_make(inner.x + 8, inner.y + 2, 16, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_APP, inner);
+    ui_draw_text(api, inner.x + 28, inner.y + 5, label, theme->text, button_bg);
 }
 
 static void draw_menu_info_panel(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
@@ -1203,10 +964,10 @@ static void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* st
     draw_vertical_text(api, strip, "AIOS 95", theme->title_active_text, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
     draw_logo_mark(api, strip.x + 5, strip.y + strip.h - 20, 5, 0);
 
-    draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].label, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].accent);
-    draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].label, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].accent);
-    draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES].label, g_start_menu_items[START_MENU_ITEM_DEFINICOES].accent);
-    draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA].label, g_start_menu_items[START_MENU_ITEM_AJUDA].accent);
+    draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].label);
+    draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].label);
+    draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES].label);
+    draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA].label);
 
     draw_menu_info_panel(api, state, info_rect);
 
@@ -1237,9 +998,9 @@ static void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_
     start_rect = start_button_rect(state);
     task_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, 170, 20);
     clock_rect = taskbar_clock_rect(state);
-    ui_draw_panel(api, theme, taskbar, 1);
-    ui_fill_rect(api, ui_rect_make(taskbar.x + 2, taskbar.y + 2, taskbar.w - 4, 1), theme->light);
-    ui_fill_rect(api, ui_rect_make(taskbar.x + 2, taskbar.y + taskbar.h - 3, taskbar.w - 4, 1), theme->shadow);
+    ui_fill_rect(api, taskbar, theme->face);
+    ui_fill_rect(api, ui_rect_make(taskbar.x, taskbar.y, taskbar.w, 1), theme->light);
+    ui_fill_rect(api, ui_rect_make(taskbar.x, taskbar.y + 1, taskbar.w, 1), theme->face_alt);
 
     draw_start_button(api, state, start_rect);
 
@@ -1476,8 +1237,10 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     int menu_hit = START_MENU_ITEM_NONE;
     ui_rect_t start_rect;
     ui_rect_t menu_rect;
+    ui_rect_t main_window_rect;
     int over_start;
     int over_menu;
+    int desktop_hit;
     ui_wm_window_t* win;
     const ui_control_t* pressed_control;
     ui_rect_t pressed_bounds;
@@ -1491,6 +1254,7 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
     left_released = ui_mouse_left_released(previous_mouse, &state->mouse);
     start_rect = start_button_rect(state);
     menu_rect = start_menu_rect(state);
+    main_window_rect = current_window_rect(state);
     over_start = ui_rect_contains(&start_rect, state->mouse.x, state->mouse.y);
     over_menu = state->start_menu_open && ui_rect_contains(&menu_rect, state->mouse.x, state->mouse.y);
 
@@ -1542,6 +1306,19 @@ static int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_m
 
     if (chrome_consumed) {
         return 0;
+    }
+
+    if (left_pressed) {
+        desktop_hit = desktop_item_hit_test(state, state->mouse.x, state->mouse.y);
+        if (desktop_hit >= 0) {
+            state->selected_desktop_item = desktop_hit;
+            dismiss_start_menu(state);
+            return 0;
+        }
+        if (!main_window_is_visible(state)
+            || !ui_rect_contains(&main_window_rect, state->mouse.x, state->mouse.y)) {
+            state->selected_desktop_item = -1;
+        }
     }
 
     activated = ui_wm_dispatch_mouse(&state->wm,
@@ -1631,6 +1408,7 @@ static void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
     state->start_menu_hot_item = START_MENU_ITEM_NONE;
+    state->selected_desktop_item = -1;
     state->desktop_item_count = 0;
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
@@ -1717,6 +1495,7 @@ int app_main(const minidos_app_api_t* api) {
             int previous_start_button_pressed = state.start_button_pressed;
             int previous_start_menu_pressed_item = state.start_menu_pressed_item;
             int previous_start_menu_hot_item = state.start_menu_hot_item;
+            int previous_selected_desktop_item = state.selected_desktop_item;
             (void)app_mouse_state(api, &state.mouse);
             update_mouse_label_text(&state);
             if (handle_mouse(&state, &previous_mouse)) {
@@ -1737,7 +1516,8 @@ int app_main(const minidos_app_api_t* api) {
                     || previous_start_menu_hot_item != state.start_menu_hot_item;
 
                 if (!motion_changed_layout
-                    && !cursor_touches_title_bar(&state, previous_cursor_rect, current_cursor_rect)) {
+                    && !cursor_touches_title_bar(&state, previous_cursor_rect, current_cursor_rect)
+                    && !cursor_crosses_window_chrome(&state, previous_cursor_rect, current_cursor_rect)) {
                     render_partial_motion(api, &state, &previous_mouse);
                     continue;
                 }
@@ -1750,8 +1530,18 @@ int app_main(const minidos_app_api_t* api) {
                     render_partial_drag(api, &state, previous_drag_rect, &previous_mouse);
                     continue;
                 }
+
+                need_full_render = 1;
             }
-            need_full_render = 1;
+            if (previous_start_menu_open != state.start_menu_open
+                || previous_start_button_pressed != state.start_button_pressed
+                || previous_start_menu_pressed_item != state.start_menu_pressed_item
+                || previous_start_menu_hot_item != state.start_menu_hot_item
+                || previous_selected_desktop_item != state.selected_desktop_item
+                || !rect_equal(previous_window_rect, current_window_rect(&state))
+                || !rect_equal(previous_drag_rect, current_drag_preview_rect(&state))) {
+                need_full_render = 1;
+            }
         }
 
         if (event_mask & APP_EVENT_KEY) {

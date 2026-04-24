@@ -21,6 +21,7 @@ KERNEL_VIDEO_DIR = $(KERNEL_DIR)/video
 BUILD_DIR = build
 BOOTLOGO_DIR = assets/bootlogo
 CURSOR_ASSETS_DIR = assets/cursor
+ICON_ASSETS_DIR = assets/Icons
 KERNEL_INCLUDE_DIRS := $(shell find $(KERNEL_DIR) -type d | sort)
 CFLAGS_BASE = -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib -MMD -MP $(addprefix -I,$(KERNEL_INCLUDE_DIRS))
 CFLAGS = $(CFLAGS_BASE) $(EXTRA_CFLAGS)
@@ -44,6 +45,7 @@ KERNEL_ASM = $(BUILD_DIR)/core/entry.o $(BUILD_DIR)/video/backbuffer_fill.o $(BU
 APP_RUNTIME_SOURCES := $(shell find external_apps/runtime -type f | sort)
 APP_SOURCES := $(shell find external_apps/apps -type f -name '*.c' | sort)
 CURSOR_ASSETS := $(shell find $(CURSOR_ASSETS_DIR) -type f | sort)
+ICON_ASSETS := $(shell find $(ICON_ASSETS_DIR) -type f | sort)
 QEMU_RAM ?= 32M
 QEMU_CPUS ?= 2
 QEMU_ACCEL_FLAGS := $(if $(wildcard /dev/kvm),-accel kvm -cpu host,-accel tcg -cpu qemu32)
@@ -121,7 +123,7 @@ $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
 # Disk image - create 1.44MB FAT12 floppy image
-minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_SOURCES) $(CURSOR_ASSETS)
+minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_SOURCES) $(CURSOR_ASSETS) $(ICON_ASSETS)
 	@# Convert boot logo if BMP exists
 	@if [ -f "$(BOOTLOGO_DIR)/boot_logo.bmp" ]; then \
 		echo "Converting boot logo..."; \

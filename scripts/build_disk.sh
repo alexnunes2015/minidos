@@ -22,6 +22,9 @@ EOF
 
 STARTUI_ASSET_DIR="$ROOT_DIR/external_apps/apps/win95_demo"
 STARTUI_RUNTIME_DIR="AIOS"
+STARTUI_ICON_SRC="$ROOT_DIR/assets/Icons/Folder.png"
+STARTUI_ICON_DISK_NAME="FOLDER.PNG"
+STARTUI_ICON_PACK_HEADER="$ROOT_DIR/build/generated_apps/STARTUI/win95_icon_pack.h"
 USER_HOME_DIR="USER/ADM"
 USER_HOME_SUBDIRS=(Desktop Documents Images Songs MainMenu)
 
@@ -74,6 +77,10 @@ app_elf_path() {
     printf '%s/%s.ELF' "$app_dir" "$1"
 }
 
+app_generated_include_dir() {
+    printf '%s/build/generated_apps/%s' "$ROOT_DIR" "$1"
+}
+
 find_cursor_source() {
     local png_src="$ROOT_DIR/assets/cursor/cursor.png"
     local bmp_src="$ROOT_DIR/assets/cursor/cursor.bmp"
@@ -103,6 +110,17 @@ prepare_cursor_bitmap() {
     "$ROOT_DIR/assets/cursor/convert_cursor.sh" "$cursor_src" "$cursor_header"
 }
 
+prepare_startui_folder_icon() {
+    local generated_dir
+
+    generated_dir="$(dirname "$STARTUI_ICON_PACK_HEADER")"
+    mkdir -p "$generated_dir"
+
+    echo "Preparing Win95 icon pack..."
+    chmod +x "$ROOT_DIR/assets/Icons/convert_icon_pack.sh"
+    "$ROOT_DIR/assets/Icons/convert_icon_pack.sh" "$STARTUI_ICON_PACK_HEADER"
+}
+
 ensure_app_toolchain() {
     if ! command -v gcc >/dev/null 2>&1 || ! command -v ld >/dev/null 2>&1 || ! command -v nasm >/dev/null 2>&1; then
         echo "ERROR: Missing toolchain for bundled apps (gcc/ld/nasm)." >&2
@@ -115,18 +133,44 @@ build_app() {
     local template_rel="$2"
     local app_dir
     local app_elf
+    local app_src_dir
+    local generated_include_dir
+    local src
+    local obj
+    local base
+    local -a app_sources
+    local -a app_objects
 
     app_dir="$(app_build_dir "$app_name")"
     app_elf="$(app_elf_path "$app_name")"
+    app_src_dir="$(dirname "$ROOT_DIR/$template_rel")"
+    generated_include_dir="$(app_generated_include_dir "$app_name")"
     mkdir -p "$app_dir"
 
     nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$app_dir/entry.o"
-    gcc -m32 -ffreestanding -O2 -Wall -Wextra \
-        -fno-stack-protector -fno-pic -fno-pie -fno-common \
-        -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
-        -I"$ROOT_DIR/external_apps/runtime" \
-        -c "$ROOT_DIR/$template_rel" -o "$app_dir/app.o"
-    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$app_elf" "$app_dir/entry.o" "$app_dir/app.o"
+    while IFS= read -r -d '' src; do
+        app_sources+=("$src")
+    done < <(find "$app_src_dir" -maxdepth 1 -type f -name '*.c' -print0 | sort -z)
+
+    if [ "${#app_sources[@]}" -eq 0 ]; then
+        echo "ERROR: No app sources found under $app_src_dir" >&2
+        exit 1
+    fi
+
+    for src in "${app_sources[@]}"; do
+        base="$(basename "$src" .c)"
+        obj="$app_dir/$base.o"
+        gcc -m32 -ffreestanding -O2 -Wall -Wextra \
+            -fno-stack-protector -fno-pic -fno-pie -fno-common \
+            -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
+            -I"$ROOT_DIR/external_apps/runtime" \
+            -I"$app_src_dir" \
+            -I"$generated_include_dir" \
+            -c "$src" -o "$obj"
+        app_objects+=("$obj")
+    done
+
+    ld -m elf_i386 -T "$ROOT_DIR/external_apps/runtime/app.ld" -o "$app_elf" "$app_dir/entry.o" "${app_objects[@]}"
 
     if [ ! -s "$app_elf" ]; then
         echo "ERROR: Failed to build bundled app: $app_elf" >&2
@@ -141,6 +185,7 @@ build_bundled_apps() {
 
     ensure_app_toolchain
     prepare_cursor_bitmap
+    prepare_startui_folder_icon
     while IFS='|' read -r app_name app_subdir template_rel; do
         [ -n "$app_name" ] || continue
         build_app "$app_name" "$template_rel"
@@ -203,6 +248,9 @@ copy_startui_resources_tree() {
         esac
         cp "$resource" "$runtime_dir/$base"
     done
+    if [ -f "$STARTUI_ICON_SRC" ]; then
+        cp "$STARTUI_ICON_SRC" "$runtime_dir/$STARTUI_ICON_DISK_NAME"
+    fi
 }
 
 write_desktop_experiments_tree() {
@@ -229,6 +277,9 @@ EOF
     cat > "$desktop_dir/EXPER4.DAT" <<'EOF'
 Data placeholder for desktop icon tests.
 EOF
+
+    mkdir -p "$desktop_dir/PROJECTS"
+    mkdir -p "$desktop_dir/TOOLS"
 
 }
 
@@ -405,7 +456,7 @@ copy_with_mtools() {
         echo "ERROR: failed to write README.TXT via mtools" >&2
         return 1
     fi
-    for dir_part in "$USER_HOME_DIR" "$USER_HOME_DIR/Desktop" "$USER_HOME_DIR/Documents" "$USER_HOME_DIR/Images" "$USER_HOME_DIR/Songs" "$USER_HOME_DIR/MainMenu"; do
+    for dir_part in "$USER_HOME_DIR" "$USER_HOME_DIR/Desktop" "$USER_HOME_DIR/Documents" "$USER_HOME_DIR/Images" "$USER_HOME_DIR/Songs" "$USER_HOME_DIR/MainMenu" "$USER_HOME_DIR/Desktop/PROJECTS" "$USER_HOME_DIR/Desktop/TOOLS"; do
         if ! ensure_mtools_dir_tree "$dir_part"; then
             return 1
         fi
@@ -497,6 +548,12 @@ EOF
             return 1
         fi
     done
+    if [ -f "$STARTUI_ICON_SRC" ]; then
+        if ! mcopy -o -i "$DISK_IMG" "$STARTUI_ICON_SRC" "::/$STARTUI_RUNTIME_DIR/$STARTUI_ICON_DISK_NAME"; then
+            echo "ERROR: failed to write $STARTUI_ICON_DISK_NAME via mtools" >&2
+            return 1
+        fi
+    fi
 
     if [ -f "$ROOT_DIR/assets/bootlogo/logo.raw" ]; then
         if ! mcopy -o -i "$DISK_IMG" "$ROOT_DIR/assets/bootlogo/logo.raw" ::/BOOTLOGO.DAT; then

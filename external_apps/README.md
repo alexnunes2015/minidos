@@ -45,12 +45,16 @@ Examples:
 ```
 
 Each bundled example lives under `external_apps/apps/<name>/<name>.c`, so point the helper at that path when you want to rebuild an app or copy it into `minidos.img`.
+The helper now compiles every sibling `*.c` file in that app directory, so UI apps like `STARTUI` can be split into smaller modules without `#include`-ing implementation files.
 
 The utility will:
 1. Build a 32-bit app in the selected format (`.ELF` by default, `.COM` with `--format com`).
 2. Copy it to `A:` inside `minidos.img` with the matching extension, or into `A:\DIRNAME` when `--dir` is used.
 
 When `--dir` is used, the helper also copies non-code companion files that sit next to the source file (for example `.BMP`, `.ICO`, `.WAV`, `.TXT`) into the same target directory. The bundled `STARTUI` desktop resources are installed by `make` under `A:\AIOS`.
+If `assets/Icons/Folder.png` exists, the `STARTUI` build also regenerates
+`external_apps/apps/win95_demo/win95_folder_icon.h` automatically and copies the
+source PNG to `A:\AIOS\FOLDER.PNG`.
 
 If `assets/cursor/cursor.png` exists, the app build also regenerates
 `external_apps/runtime/minidos_cursor_bitmap.h` automatically before compilation.
@@ -81,9 +85,12 @@ If needed, manual commands are:
 nasm -f elf32 external_apps/runtime/entry.asm -o build/external_apps/entry.o
 gcc -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie \
     -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
-    -Iexternal_apps/runtime -c my_app.c -o build/external_apps/app.o
+    -Iexternal_apps/runtime -Imy_app_dir -c my_app_dir/main.c -o build/external_apps/main.o
+gcc -m32 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pic -fno-pie \
+    -fno-common -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
+    -Iexternal_apps/runtime -Imy_app_dir -c my_app_dir/view.c -o build/external_apps/view.o
 ld -m elf_i386 -T external_apps/runtime/app.ld -o build/external_apps/app.elf \
-    build/external_apps/entry.o build/external_apps/app.o
+    build/external_apps/entry.o build/external_apps/main.o build/external_apps/view.o
 mcopy -o -i minidos.img build/external_apps/app.elf ::/MYAPP.ELF
 ```
 

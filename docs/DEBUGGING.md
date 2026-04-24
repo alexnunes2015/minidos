@@ -204,6 +204,7 @@ That suite now covers keyboard-only entry into the shell plus keyboard exit path
 The normal boot now lands directly in the shell. The harness still tolerates a future boot-launched `STARTUI` by dismissing it with `ESC` before continuing.
 It waits for `APPIN001` before sending keys into GUI apps and for `APPRET001` before asserting that the shell resumed, so app-input races are easier to localize from serial logs.
 The manual/demo layout now keeps `STARTUI.ELF` plus its companion resources under `A:\AIOS`, so the normal launch flow is `cd aios`, then `startui`.
+`STARTUI` now builds from all `external_apps/apps/win95_demo/*.c` siblings, so a compile break in that app can come from any extracted UI module, not just `win95_demo.c`.
 
 ### Mouse / GUI IRQ12 regressions
 
