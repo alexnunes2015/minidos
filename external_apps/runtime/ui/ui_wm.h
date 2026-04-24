@@ -4,7 +4,11 @@
 #include "ui_draw.h"
 
 /* Shared line buffer for listview batch rendering (used by ui_wm_draw and ui_wm_redraw_dirty) */
-static ui_listview_line_buf_t g_ui_listview_line_buf;
+#ifdef MINIDOS_UI_IMPLEMENTATION
+ui_listview_line_buf_t g_ui_listview_line_buf;
+#else
+extern ui_listview_line_buf_t g_ui_listview_line_buf;
+#endif
 
 static inline ui_rect_t ui_window_client_rect(const ui_window_t* window) {
     ui_rect_t rect = ui_rect_make(0, 0, 0, 0);

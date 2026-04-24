@@ -3,8 +3,13 @@
 
 #include "ui_defs.h"
 
-static ui_bitmap_cache_t g_ui_bitmap_cache;
-static ui_wallpaper_surface_t g_ui_wallpaper_surface;
+#ifdef MINIDOS_UI_IMPLEMENTATION
+ui_bitmap_cache_t g_ui_bitmap_cache;
+ui_wallpaper_surface_t g_ui_wallpaper_surface;
+#else
+extern ui_bitmap_cache_t g_ui_bitmap_cache;
+extern ui_wallpaper_surface_t g_ui_wallpaper_surface;
+#endif
 
 static inline int ui_path_equal(const char* a, const char* b) {
     if (!a || !b) {

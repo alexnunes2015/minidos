@@ -1,11 +1,11 @@
 #!/bin/bash
-# Convert the Win95 icon pack into a compiled MiniDOS ARGB header.
+# Convert the Win95 icon pack into a single compiled MiniDOS icon header.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT="${1:-$ROOT_DIR/build/generated_apps/STARTUI/win95_icon_pack.h}"
+OUTPUT="${1:-$ROOT_DIR/external_apps/apps/win95_demo/win95_icons.h}"
 ICON_W="${2:-32}"
 ICON_H="${3:-32}"
 TMP_DIR="$(mktemp -d)"
@@ -150,8 +150,8 @@ for index, (icon_name, enum_name, width, height, pixels) in enumerate(icons):
         % (array_name, width, height, "\n".join(rows))
     )
 
-content = """#ifndef WIN95_ICON_PACK_H
-#define WIN95_ICON_PACK_H
+content = """#ifndef WIN95_ICONS_H
+#define WIN95_ICONS_H
 
 typedef struct {
     unsigned short width;
@@ -166,7 +166,7 @@ enum {
 
 %s
 
-static const win95_icon_bitmap_t g_win95_icon_pack[WIN95_ICON_COUNT] = {
+static const win95_icon_bitmap_t g_win95_icons[WIN95_ICON_COUNT] = {
 %s
 };
 

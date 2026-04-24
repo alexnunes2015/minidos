@@ -26,6 +26,14 @@
 #define CLOCK_TEXT_LEN 9
 #define CLOCK_REFRESH_MS 1000
 
+enum {
+    START_MENU_ITEM_PROGRAMAS = 0,
+    START_MENU_ITEM_DOCUMENTOS = 1,
+    START_MENU_ITEM_DEFINICOES = 2,
+    START_MENU_ITEM_AJUDA = 3,
+    START_MENU_ITEM_BACK_TO_DOS = 4,
+};
+
 typedef struct {
     char name[13];
     int is_dir;
@@ -77,5 +85,44 @@ void draw_win95_icon_clipped(const minidos_app_api_t* api, ui_rect_t rect, int i
 void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state);
 void draw_desktop_items(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t clip);
 int desktop_item_hit_test(const demo_state_t* state, int x, int y);
+
+ui_rect_t taskbar_rect(const demo_state_t* state);
+ui_rect_t start_button_rect(const demo_state_t* state);
+ui_rect_t taskbar_clock_rect(const demo_state_t* state);
+int main_window_is_visible(const demo_state_t* state);
+ui_rect_t cursor_rect_at(int x, int y);
+ui_rect_t current_window_rect(const demo_state_t* state);
+ui_rect_t current_title_bar_rect(const demo_state_t* state);
+int cursor_touches_title_bar(const demo_state_t* state, ui_rect_t previous_cursor_rect, ui_rect_t current_cursor_rect);
+int cursor_crosses_window_chrome(const demo_state_t* state, ui_rect_t previous_cursor_rect, ui_rect_t current_cursor_rect);
+ui_rect_t current_drag_preview_rect(const demo_state_t* state);
+void add_window_damage_for_cursor(ui_dirty_list_t* dirty, const demo_state_t* state,
+    ui_rect_t previous_cursor_rect, ui_rect_t current_cursor_rect);
+
+ui_rect_t start_menu_rect(const demo_state_t* state);
+ui_rect_t start_menu_item_rect(const demo_state_t* state, int item_index);
+ui_rect_t start_menu_exit_rect(const demo_state_t* state);
+void dismiss_start_menu(demo_state_t* state);
+void open_start_menu(demo_state_t* state);
+void close_start_menu(demo_state_t* state, const char* reason);
+int start_menu_hit_test(const demo_state_t* state, int x, int y);
+int handle_start_menu_action(demo_state_t* state, int action_id);
+void clamp_rect_to_desktop(const demo_state_t* state, ui_rect_t* rect);
+
+void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* state);
+void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state);
+void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_t* state);
+
+void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect);
+void render_clock_update(const minidos_app_api_t* api, const demo_state_t* state);
+void render_partial_motion(const minidos_app_api_t* api, const demo_state_t* state,
+    const app_mouse_state_t* previous_mouse);
+void render_partial_drag(const minidos_app_api_t* api, const demo_state_t* state,
+    ui_rect_t previous_drag_rect, const app_mouse_state_t* previous_mouse);
+void render(const minidos_app_api_t* api, const demo_state_t* state);
+
+int handle_keyboard(demo_state_t* state, char c);
+int handle_mouse(demo_state_t* state, const app_mouse_state_t* previous_mouse);
+void init_demo(demo_state_t* state, const minidos_app_api_t* api);
 
 #endif

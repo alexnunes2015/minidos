@@ -24,7 +24,7 @@ STARTUI_ASSET_DIR="$ROOT_DIR/external_apps/apps/win95_demo"
 STARTUI_RUNTIME_DIR="AIOS"
 STARTUI_ICON_SRC="$ROOT_DIR/assets/Icons/Folder.png"
 STARTUI_ICON_DISK_NAME="FOLDER.PNG"
-STARTUI_ICON_PACK_HEADER="$ROOT_DIR/build/generated_apps/STARTUI/win95_icon_pack.h"
+STARTUI_ICONS_HEADER="$ROOT_DIR/external_apps/apps/win95_demo/win95_icons.h"
 USER_HOME_DIR="USER/ADM"
 USER_HOME_SUBDIRS=(Desktop Documents Images Songs MainMenu)
 
@@ -77,10 +77,6 @@ app_elf_path() {
     printf '%s/%s.ELF' "$app_dir" "$1"
 }
 
-app_generated_include_dir() {
-    printf '%s/build/generated_apps/%s' "$ROOT_DIR" "$1"
-}
-
 find_cursor_source() {
     local png_src="$ROOT_DIR/assets/cursor/cursor.png"
     local bmp_src="$ROOT_DIR/assets/cursor/cursor.bmp"
@@ -110,15 +106,10 @@ prepare_cursor_bitmap() {
     "$ROOT_DIR/assets/cursor/convert_cursor.sh" "$cursor_src" "$cursor_header"
 }
 
-prepare_startui_folder_icon() {
-    local generated_dir
-
-    generated_dir="$(dirname "$STARTUI_ICON_PACK_HEADER")"
-    mkdir -p "$generated_dir"
-
+prepare_startui_icons() {
     echo "Preparing Win95 icon pack..."
     chmod +x "$ROOT_DIR/assets/Icons/convert_icon_pack.sh"
-    "$ROOT_DIR/assets/Icons/convert_icon_pack.sh" "$STARTUI_ICON_PACK_HEADER"
+    "$ROOT_DIR/assets/Icons/convert_icon_pack.sh" "$STARTUI_ICONS_HEADER"
 }
 
 ensure_app_toolchain() {
@@ -134,7 +125,6 @@ build_app() {
     local app_dir
     local app_elf
     local app_src_dir
-    local generated_include_dir
     local src
     local obj
     local base
@@ -144,7 +134,6 @@ build_app() {
     app_dir="$(app_build_dir "$app_name")"
     app_elf="$(app_elf_path "$app_name")"
     app_src_dir="$(dirname "$ROOT_DIR/$template_rel")"
-    generated_include_dir="$(app_generated_include_dir "$app_name")"
     mkdir -p "$app_dir"
 
     nasm -f elf32 "$ROOT_DIR/external_apps/runtime/entry.asm" -o "$app_dir/entry.o"
@@ -165,7 +154,6 @@ build_app() {
             -fno-asynchronous-unwind-tables -fno-stack-check -nostdlib \
             -I"$ROOT_DIR/external_apps/runtime" \
             -I"$app_src_dir" \
-            -I"$generated_include_dir" \
             -c "$src" -o "$obj"
         app_objects+=("$obj")
     done
@@ -185,7 +173,7 @@ build_bundled_apps() {
 
     ensure_app_toolchain
     prepare_cursor_bitmap
-    prepare_startui_folder_icon
+    prepare_startui_icons
     while IFS='|' read -r app_name app_subdir template_rel; do
         [ -n "$app_name" ] || continue
         build_app "$app_name" "$template_rel"

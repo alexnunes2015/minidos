@@ -53,7 +53,7 @@ The utility will:
 
 When `--dir` is used, the helper also copies non-code companion files that sit next to the source file (for example `.BMP`, `.ICO`, `.WAV`, `.TXT`) into the same target directory. The bundled `STARTUI` desktop resources are installed by `make` under `A:\AIOS`.
 If `assets/Icons/Folder.png` exists, the `STARTUI` build also regenerates
-`external_apps/apps/win95_demo/win95_folder_icon.h` automatically and copies the
+`external_apps/apps/win95_demo/win95_icons.h` automatically and copies the
 source PNG to `A:\AIOS\FOLDER.PNG`.
 
 If `assets/cursor/cursor.png` exists, the app build also regenerates

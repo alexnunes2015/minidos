@@ -1,5 +1,5 @@
 #include "win95_demo.h"
-#include "win95_icon_pack.h"
+#include "win95_icons.h"
 
 static int str_contains(const char* text, const char* needle) {
     int i;
@@ -224,7 +224,7 @@ void draw_win95_icon_clipped(const minidos_app_api_t* api, ui_rect_t icon_rect, 
         return;
     }
 
-    icon = &g_win95_icon_pack[icon_id];
+    icon = &g_win95_icons[icon_id];
     if (!icon->pixels || icon->width == 0 || icon->height == 0) {
         return;
     }
