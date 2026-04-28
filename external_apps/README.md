@@ -25,6 +25,10 @@ Important:
 - Use `app_puts(api, "...")` for output.
 - Use `app_get_char(api)` for single-char input.
 - Use `app_file_size(api, "FILE.ELF")` for basic file stat.
+- Use `app_drive_valid(api, 0)` to test whether drive `A:` is mounted; pass
+  `1` for `B:`, up to `25` for `Z:`.
+- Use `app_chdir(api, "A:")` to switch the app filesystem context to a drive
+  root before listing or opening entries there.
 - Keep programs simple for now (no command-line arguments yet).
 
 ## Build and install utility

@@ -171,24 +171,43 @@ void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, c
 }
 
 void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
-    int window_w = 420;
-    int window_h = 220;
-    int x;
-    int y;
-
     state->sw = 640;
     state->sh = 480;
+    state->window_id = 0;
+    state->label_mouse_id = 0;
+    state->label_status_id = 0;
+    state->button_ok_id = 0;
+    state->button_cancel_id = 0;
+    state->input_id = 0;
     state->dragging = 0;
+    state->resizing = 0;
+    state->dragging_window_id = 0;
+    state->resizing_window_id = 0;
+    state->resize_edges = 0;
+    state->resize_hover_window_id = 0;
+    state->resize_hover_edges = 0;
     state->mouse_pressed_control_id = 0;
+    state->title_button_pressed_window_id = 0;
+    state->title_button_pressed_action = 0;
+    state->last_title_click_window_id = 0;
+    state->last_title_click_ticks = 0;
+    state->taskbar_pressed_window_id = 0;
     state->drag_offset_x = 0;
     state->drag_offset_y = 0;
+    state->resize_start_mouse_x = 0;
+    state->resize_start_mouse_y = 0;
+    state->resize_start_bounds = ui_rect_make(0, 0, 0, 0);
     state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
+    state->layout_version = 0;
     state->start_menu_open = 0;
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
     state->start_menu_hot_item = START_MENU_ITEM_NONE;
     state->selected_desktop_item = -1;
+    state->last_desktop_click_index = -1;
+    state->last_desktop_click_ticks = 0;
     state->desktop_item_count = 0;
+    explorer_init_all(state);
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
@@ -200,46 +219,7 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
 
     load_desktop_items(api, state);
 
-    x = (state->sw - window_w) / 2;
-    y = (state->sh - window_h) / 2;
-    state->window_id = ui_wm_create_window(&state->wm,
-        ui_rect_make(x, y, window_w, window_h),
-        "MiniDOS 95",
-        1);
-
-    (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 12, ui_strlen("MENU INICIAR DISPONIVEL.") * UI_CHAR_W, UI_CHAR_H),
-        "MENU INICIAR DISPONIVEL.");
-    (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 28, ui_strlen("Rato: clique, arraste e abre o Iniciar.") * UI_CHAR_W, UI_CHAR_H),
-        "Rato: clique, arraste e abre o Iniciar.");
-    (void)ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 44, ui_strlen("ESC, Q, Fechar ou Voltar para DOS saem.") * UI_CHAR_W, UI_CHAR_H),
-        "ESC, Q, Fechar ou Voltar para DOS saem.");
-
     str_copy(state->input_text, "MiniDOS 95", (int)sizeof(state->input_text));
-    state->input_id = ui_wm_add_textinput(&state->wm, state->window_id,
-        ui_rect_make(12, 68, window_w - 32, 28),
-        state->input_text,
-        (int)sizeof(state->input_text));
-
-    state->label_mouse_id = ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 108, 280, UI_CHAR_H),
-        "");
-
-    state->label_status_id = ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(12, 124, 360, UI_CHAR_H),
-        "");
-
-    state->button_ok_id = ui_wm_add_button(&state->wm, state->window_id,
-        ui_rect_make(window_w - 180, 158, 76, 24),
-        "OK");
-
-    state->button_cancel_id = ui_wm_add_button(&state->wm, state->window_id,
-        ui_rect_make(window_w - 96, 158, 76, 24),
-        "Fechar");
-
-    ui_wm_set_focus_control(&state->wm, state->button_ok_id);
 
     (void)app_mouse_state(api, &state->mouse);
     update_mouse_label_text(state);
@@ -270,6 +250,8 @@ int app_main(const minidos_app_api_t* api) {
             app_mouse_state_t previous_mouse = state.mouse;
             ui_rect_t previous_window_rect = current_window_rect(&state);
             ui_rect_t previous_drag_rect = current_drag_preview_rect(&state);
+            ui_rect_t previous_explorer_rect = explorer_window_rect(&state);
+            int previous_layout_version = state.layout_version;
             int previous_start_menu_open = state.start_menu_open;
             int previous_start_button_pressed = state.start_button_pressed;
             int previous_start_menu_pressed_item = state.start_menu_pressed_item;
@@ -277,7 +259,7 @@ int app_main(const minidos_app_api_t* api) {
             int previous_selected_desktop_item = state.selected_desktop_item;
             (void)app_mouse_state(api, &state.mouse);
             update_mouse_label_text(&state);
-            if (handle_mouse(&state, &previous_mouse)) {
+            if (handle_mouse(api, &state, &previous_mouse)) {
                 app_gfx_clear(api, 0x000000u);
                 ui_present(api);
                 return 0;
@@ -317,7 +299,9 @@ int app_main(const minidos_app_api_t* api) {
                 || previous_start_menu_pressed_item != state.start_menu_pressed_item
                 || previous_start_menu_hot_item != state.start_menu_hot_item
                 || previous_selected_desktop_item != state.selected_desktop_item
+                || previous_layout_version != state.layout_version
                 || !rect_equal(previous_window_rect, current_window_rect(&state))
+                || !rect_equal(previous_explorer_rect, explorer_window_rect(&state))
                 || !rect_equal(previous_drag_rect, current_drag_preview_rect(&state))) {
                 need_full_render = 1;
             }
@@ -326,7 +310,7 @@ int app_main(const minidos_app_api_t* api) {
         if (event_mask & APP_EVENT_KEY) {
             char c = 0;
             while (app_get_char_nonblock(api, &c)) {
-                if (handle_keyboard(&state, c)) {
+                if (handle_keyboard(api, &state, c)) {
                     app_gfx_clear(api, 0x000000u);
                     ui_present(api);
                     return 0;

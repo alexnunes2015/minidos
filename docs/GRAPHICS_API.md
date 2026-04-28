@@ -83,6 +83,9 @@ Describes a top-level classic window:
 - title
 - active/inactive state
 - optional close button
+- optional minimize/maximize buttons
+- minimized/maximized state and restore bounds for resizable windows
+- resizable windows can be resized from their borders and corners
 
 ### `ui_button_t`
 
@@ -151,11 +154,15 @@ The initial reusable widget layer includes:
 - `ui_draw_window`
 - `ui_window_title_bar_rect`
 - `ui_window_close_button_rect`
+- `ui_window_minimize_button_rect`
+- `ui_window_maximize_button_rect`
 - `ui_window_client_rect`
 - `ui_draw_button`
 - `ui_button_contains`
 - `ui_window_hit_title`
 - `ui_window_hit_close`
+- `ui_window_hit_minimize`
+- `ui_window_hit_maximize`
 - `ui_draw_label`
 - `ui_draw_label_centered`
 - `ui_draw_text_box`
@@ -182,6 +189,7 @@ Window-manager API additions:
 
 - `ui_wm_init`
 - `ui_wm_create_window`
+- `ui_wm_create_window_ex`
 - `ui_wm_bring_to_front`
 - `ui_wm_add_label`
 - `ui_wm_add_button`
@@ -190,6 +198,10 @@ Window-manager API additions:
 - `ui_wm_hit_test_control`
 - `ui_wm_dispatch_mouse`
 - `ui_wm_dispatch_key`
+- `ui_wm_minimize_window`
+- `ui_wm_restore_window`
+- `ui_wm_maximize_window`
+- `ui_wm_toggle_maximize_window`
 - `ui_wm_close_window`
 - `ui_wm_draw`
 
@@ -244,10 +256,12 @@ startui
 Expected result:
 
 - a teal desktop with taskbar
-- a classic beveled window
-- a text box and two buttons
+- desktop icons and a Start menu
+- Explorer windows with taskbar buttons, including minimized windows
 - a software cursor driven by the PS/2 mouse
-- click support for `OK`, `Cancel`, and the title-bar close button
+- title-bar minimize/maximize/restore/close for resizable windows
+- border/corner resizing for Explorer windows; until resize cursors exist, the demo shows a small resize marker and corner grip
+- static windows can be created with only a close button
 - title-bar window dragging
 - keyboard-driven focus cycling with `TAB`
 - activation with `SPACE` or `ENTER`

@@ -39,6 +39,7 @@ enum {
     MINIDOS_SYSCALL_THREAD_SELF = 31,
     MINIDOS_SYSCALL_EXIT = 32,
     MINIDOS_SYSCALL_GFX_SURFACE_BLIT = 33,
+    MINIDOS_SYSCALL_DRIVE_VALID = 34,
 };
 
 enum {
@@ -215,6 +216,10 @@ static inline int app_thread_self(const minidos_app_api_t* api) {
 
 static inline int app_chdir(const minidos_app_api_t* api, const char* dir_name) {
     return app_syscall(api, MINIDOS_SYSCALL_CHDIR, (unsigned int)dir_name, 0, 0);
+}
+
+static inline int app_drive_valid(const minidos_app_api_t* api, unsigned int drive_letter) {
+    return app_syscall(api, MINIDOS_SYSCALL_DRIVE_VALID, drive_letter, 0, 0);
 }
 
 static inline int app_mkdir(const minidos_app_api_t* api, const char* dir_name) {

@@ -17,6 +17,7 @@ TEST_SOURCE = r"""
 #include <ucontext.h>
 #include <sys/mman.h>
 
+#define MINIDOS_UI_IMPLEMENTATION
 #include "minidos_ui.h"
 
 static int saw_single_title = 0;
@@ -149,20 +150,121 @@ static int test_close_window_promotes_next_visible(void) {
 
     back_window = ui_wm_find_window_const(&wm, back_id);
     front_window = ui_wm_find_window_const(&wm, front_id);
-    if (!back_window || !front_window) {
+    if (!back_window) {
         fprintf(stderr, "window lookup failed after close\n");
         return 0;
     }
-    if (front_window->visible) {
-        fprintf(stderr, "closed window is still visible\n");
+    if (front_window) {
+        fprintf(stderr, "closed window id was still discoverable\n");
         return 0;
     }
-    if (wm.active_window_id != back_id || !back_window->window.active || front_window->window.active) {
+    if (wm.active_window_id != back_id || !back_window->window.active) {
         fprintf(stderr, "active window was not promoted correctly after close\n");
         return 0;
     }
     if (wm.focused_control_id != 0 || wm.pressed_control_id != 0 || wm.pressed_window_id != 0 || wm.pressed_hit_close != 0) {
         fprintf(stderr, "close window left stale focus/press state behind\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_minimize_restore_and_maximize_window(void) {
+    ui_window_manager_t wm;
+    const ui_wm_window_t* back_window;
+    const ui_wm_window_t* front_window;
+    ui_rect_t restore_bounds;
+    ui_rect_t max_bounds;
+    int back_id;
+    int front_id;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    back_id = ui_wm_create_window(&wm, ui_rect_make(16, 16, 120, 80), "Back", 0);
+    front_id = ui_wm_create_window_ex(&wm, ui_rect_make(24, 24, 140, 90), "Front", 1, 1, 1);
+    if (back_id <= 0 || front_id <= 0) {
+        fprintf(stderr, "failed to create windows for minimize/maximize test\n");
+        return 0;
+    }
+
+    ui_wm_minimize_window(&wm, front_id);
+    back_window = ui_wm_find_window_const(&wm, back_id);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!back_window || !front_window) {
+        fprintf(stderr, "window lookup failed after minimize\n");
+        return 0;
+    }
+    if (!front_window->visible || !front_window->window.minimized) {
+        fprintf(stderr, "minimized window was not retained for taskbar restore\n");
+        return 0;
+    }
+    if (ui_wm_top_window_at(&wm, 30, 30) != back_id || wm.active_window_id != back_id) {
+        fprintf(stderr, "minimized front window still participates in hit-test/activation\n");
+        return 0;
+    }
+
+    ui_wm_restore_window(&wm, front_id);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!front_window || front_window->window.minimized || wm.active_window_id != front_id) {
+        fprintf(stderr, "restore did not reactivate minimized window\n");
+        return 0;
+    }
+
+    restore_bounds = front_window->window.bounds;
+    max_bounds = ui_rect_make(0, 0, 320, 172);
+    ui_wm_toggle_maximize_window(&wm, front_id, max_bounds);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!front_window || !front_window->window.maximized
+        || front_window->window.bounds.w != max_bounds.w
+        || front_window->window.bounds.h != max_bounds.h) {
+        fprintf(stderr, "maximize did not apply desktop bounds\n");
+        return 0;
+    }
+
+    ui_wm_toggle_maximize_window(&wm, front_id, max_bounds);
+    front_window = ui_wm_find_window_const(&wm, front_id);
+    if (!front_window || front_window->window.maximized
+        || front_window->window.bounds.x != restore_bounds.x
+        || front_window->window.bounds.y != restore_bounds.y
+        || front_window->window.bounds.w != restore_bounds.w
+        || front_window->window.bounds.h != restore_bounds.h) {
+        fprintf(stderr, "restore from maximized did not recover original bounds\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_static_window_ignores_minimize_maximize(void) {
+    ui_window_manager_t wm;
+    const ui_wm_window_t* window;
+    ui_rect_t original_bounds;
+    int window_id;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    window_id = ui_wm_create_window(&wm, ui_rect_make(24, 24, 140, 90), "Static", 1);
+    if (window_id <= 0) {
+        fprintf(stderr, "failed to create static window\n");
+        return 0;
+    }
+
+    window = ui_wm_find_window_const(&wm, window_id);
+    if (!window) {
+        fprintf(stderr, "static window lookup failed\n");
+        return 0;
+    }
+    original_bounds = window->window.bounds;
+
+    ui_wm_minimize_window(&wm, window_id);
+    ui_wm_toggle_maximize_window(&wm, window_id, ui_rect_make(0, 0, 320, 172));
+
+    window = ui_wm_find_window_const(&wm, window_id);
+    if (!window || window->window.minimized || window->window.maximized
+        || window->window.bounds.x != original_bounds.x
+        || window->window.bounds.y != original_bounds.y
+        || window->window.bounds.w != original_bounds.w
+        || window->window.bounds.h != original_bounds.h) {
+        fprintf(stderr, "static window accepted minimize/maximize operation\n");
         return 0;
     }
 
@@ -528,6 +630,14 @@ static void run_all_tests(void) {
         return;
     }
     if (!test_close_window_promotes_next_visible()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_minimize_restore_and_maximize_window()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_static_window_ignores_minimize_maximize()) {
         test_status = 1;
         return;
     }

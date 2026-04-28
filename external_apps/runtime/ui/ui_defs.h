@@ -6,13 +6,17 @@
 #define UI_CHAR_W 8
 #define UI_CHAR_H 8
 #define UI_DIRTY_RECTS_MAX 8
-#define UI_WM_MAX_WINDOWS 8
-#define UI_WM_MAX_CONTROLS 64
+#define UI_WM_MAX_WINDOWS 16
+#define UI_WM_MAX_CONTROLS 128
 #define UI_BITMAP_MAX_FILE_SIZE (256 * 1024)
 #define UI_BITMAP_TRANSPARENT_COLOR 0xFF00FFu
 #define UI_BITMAP_PATH_MAX 128
 /* Max decoded XRGB8888 pixels for wallpaper surface (covers 24bpp source up to 256KB) */
 #define UI_WALLPAPER_SURFACE_MAX_BYTES (348160)
+
+/* Optional window titlebar icons (set ui_window_t.icon_id). */
+#define UI_WINDOW_ICON_NONE (-1)
+#define UI_WINDOW_ICON_FOLDER 1
 
 typedef struct {
     char path[UI_BITMAP_PATH_MAX];
@@ -73,9 +77,15 @@ typedef struct {
 
 typedef struct {
     ui_rect_t bounds;
+    ui_rect_t restore_bounds;
     const char* title;
+    int icon_id; /* UI_WINDOW_ICON_* or UI_WINDOW_ICON_NONE */
     int active;
     int has_close_button;
+    int has_minimize_button;
+    int has_maximize_button;
+    int minimized;
+    int maximized;
 } ui_window_t;
 
 typedef struct {
@@ -156,6 +166,8 @@ typedef struct {
     int pressed_window_id;
     int pressed_control_id;
     int pressed_hit_close;
+    int pressed_hit_minimize;
+    int pressed_hit_maximize;
 } ui_window_manager_t;
 
 static inline int ui_strlen(const char* s) {

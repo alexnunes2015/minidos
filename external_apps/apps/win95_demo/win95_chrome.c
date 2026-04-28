@@ -15,13 +15,72 @@ static const start_menu_entry_t g_start_menu_items[START_MENU_ITEM_COUNT] = {
 };
 
 void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* state) {
-    if (!api || !state || !state->dragging || ui_rect_is_empty(state->drag_preview_bounds)) {
+    if (!api || !state || (!state->dragging && !state->resizing) || ui_rect_is_empty(state->drag_preview_bounds)) {
         return;
     }
 
-    ui_frame_rect(api, state->drag_preview_bounds, state->wm.theme.selection_bg);
+    ui_frame_rect(api, state->drag_preview_bounds,
+        state->resizing ? state->wm.theme.title_active_bg : state->wm.theme.selection_bg);
     if (state->drag_preview_bounds.w > 4 && state->drag_preview_bounds.h > 4) {
         ui_frame_rect(api, ui_rect_inset(state->drag_preview_bounds, 2), state->wm.theme.light);
+    }
+}
+
+static void draw_resize_grip(const minidos_app_api_t* api, const demo_state_t* state,
+    const ui_wm_window_t* win, int active) {
+    const ui_theme_t* theme;
+    ui_rect_t bounds;
+    unsigned int color;
+    int i;
+
+    if (!api || !state || !win || !win->visible || win->window.minimized
+        || win->window.maximized || !win->window.has_maximize_button) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    bounds = win->window.bounds;
+    color = active ? theme->title_active_bg : theme->shadow;
+    for (i = 0; i < 3; i++) {
+        int x = bounds.x + bounds.w - 13 + (i * 4);
+        int y = bounds.y + bounds.h - 5 - (i * 4);
+        ui_fill_rect(api, ui_rect_make(x, bounds.y + bounds.h - 3, 3, 1), color);
+        ui_fill_rect(api, ui_rect_make(bounds.x + bounds.w - 3, y, 1, 3), color);
+    }
+}
+
+void draw_resize_hint(const minidos_app_api_t* api, const demo_state_t* state) {
+    const ui_wm_window_t* win;
+    int window_id;
+    int i;
+
+    if (!api || !state) {
+        return;
+    }
+
+    for (i = 0; i < state->wm.window_count; i++) {
+        const ui_wm_window_t* candidate = &state->wm.windows[i];
+        if (candidate->id == 0 || !candidate->visible || candidate->window.minimized) {
+            continue;
+        }
+        draw_resize_grip(api, state, candidate,
+            state->resize_hover_window_id == candidate->id || state->resizing_window_id == candidate->id);
+    }
+
+    window_id = state->resize_hover_window_id;
+    if (state->resizing_window_id != 0) {
+        window_id = state->resizing_window_id;
+    }
+    win = ui_wm_find_window_const(&state->wm, window_id);
+    if (!win) {
+        return;
+    }
+
+    if (state->resize_hover_edges || state->resize_edges) {
+        ui_rect_t marker = ui_rect_make(state->mouse.x + 10, state->mouse.y + 10, 54, 14);
+        ui_draw_panel(api, &state->wm.theme, marker, 1);
+        ui_draw_text(api, marker.x + 4, marker.y + 3, "resize",
+            state->wm.theme.text, state->wm.theme.face);
     }
 }
 
@@ -255,54 +314,126 @@ static void draw_start_button(const minidos_app_api_t* api, const demo_state_t* 
 }
 
 static void draw_task_button(const minidos_app_api_t* api, const demo_state_t* state,
-    ui_rect_t rect, const char* label) {
+    ui_rect_t rect, const ui_wm_window_t* window) {
     const ui_theme_t* theme;
     ui_rect_t inner;
     ui_rect_t icon_rect;
     unsigned int button_bg;
+    const char* label;
+    int pressed;
+    int icon_id;
+    int has_icon;
 
-    if (!api || !state || !label) {
+    if (!api || !state || !window) {
         return;
     }
 
     theme = &state->wm.theme;
-    ui_draw_panel(api, theme, rect, 0);
+    label = window->window.title ? window->window.title : "";
+    pressed = (state->taskbar_pressed_window_id == window->id)
+        || (state->wm.active_window_id == window->id && !window->window.minimized);
+
+    icon_id = WIN95_ICON_APP;
+    has_icon = 1;
+    if (window->window.icon_id == UI_WINDOW_ICON_NONE) {
+        has_icon = 0;
+    } else if (window->window.icon_id == UI_WINDOW_ICON_FOLDER) {
+        icon_id = WIN95_ICON_FOLDER_CLOSED;
+    }
+
+    ui_draw_panel(api, theme, rect, pressed ? 0 : 1);
     inner = ui_rect_inset(rect, 2);
-    button_bg = ui_rgb(214, 219, 233);
+    button_bg = pressed ? theme->face_alt : theme->face;
     ui_fill_rect(api, inner, button_bg);
     ui_fill_rect(api, ui_rect_make(inner.x, inner.y, 5, inner.h), theme->title_active_bg);
-    icon_rect = ui_rect_make(inner.x + 8, inner.y + 2, 16, 16);
-    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_APP, inner);
-    ui_draw_text(api, inner.x + 28, inner.y + 5, label, theme->text, button_bg);
+    if (has_icon && inner.w >= 26) {
+        icon_rect = ui_rect_make(inner.x + 8, inner.y + 2, 16, 16);
+        draw_win95_icon_clipped(api, icon_rect, icon_id, inner);
+    }
+    if (inner.w >= 44) {
+        int text_x = has_icon ? (inner.x + 28) : (inner.x + 8);
+        int text_w = inner.w - (text_x - inner.x) - 2;
+        if (text_w < 0) {
+            text_w = 0;
+        }
+        ui_draw_text_clipped(api, text_x, inner.y + 5, label, theme->text, button_bg,
+            ui_rect_make(text_x, inner.y, text_w, inner.h));
+    }
 }
 
-static void draw_menu_info_panel(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
+static void draw_taskbar_grip(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect) {
+    int x;
+    int y;
+
+    if (!api || !theme || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    x = rect.x + (rect.w / 2) - 2;
+    y = rect.y + 4;
+    ui_fill_rect(api, ui_rect_make(x, y, 1, rect.h - 8), theme->shadow);
+    ui_fill_rect(api, ui_rect_make(x + 1, y, 1, rect.h - 8), theme->light);
+    ui_fill_rect(api, ui_rect_make(x + 3, y, 1, rect.h - 8), theme->shadow);
+    ui_fill_rect(api, ui_rect_make(x + 4, y, 1, rect.h - 8), theme->light);
+}
+
+static void draw_quicklaunch(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
     const ui_theme_t* theme;
     ui_rect_t inner;
-    ui_rect_t badge_rect;
+    ui_rect_t icon_rect;
+    int x;
 
-    if (!api || !state) {
+    if (!api || !state || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    theme = &state->wm.theme;
+    ui_draw_panel(api, theme, rect, 1);
+    inner = ui_rect_inset(rect, 2);
+    ui_fill_rect(api, inner, theme->face);
+
+    x = inner.x + 4;
+    icon_rect = ui_rect_make(x, inner.y + 2, 18, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_COMPUTER, inner);
+    x += 20;
+    icon_rect = ui_rect_make(x, inner.y + 2, 18, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_TERMINAL, inner);
+    x += 20;
+    icon_rect = ui_rect_make(x, inner.y + 2, 18, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_NOTEPAD, inner);
+}
+
+static void draw_tray(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect) {
+    const ui_theme_t* theme;
+    ui_rect_t inner;
+    ui_rect_t icon_rect;
+    ui_rect_t clock_inner;
+    unsigned int bg;
+
+    if (!api || !state || rect.w <= 0 || rect.h <= 0) {
         return;
     }
 
     theme = &state->wm.theme;
     ui_draw_panel(api, theme, rect, 0);
     inner = ui_rect_inset(rect, 2);
-    ui_fill_rect(api, inner, theme->face);
-    ui_fill_rect(api, ui_rect_make(inner.x, inner.y, 5, inner.h), theme->title_active_bg);
-    ui_draw_text(api, inner.x + 10, inner.y + 2, "Atalho", theme->shadow, theme->face);
-    ui_draw_text(api, inner.x + 10, inner.y + 12, "ESC fecha", theme->text, theme->face);
+    bg = theme->face_alt;
+    ui_fill_rect(api, inner, bg);
 
-    badge_rect = ui_rect_make(inner.x + inner.w - 72, inner.y + 3, 68, inner.h - 6);
-    ui_draw_panel(api, theme, badge_rect, 1);
-    ui_draw_label_centered(api, ui_rect_inset(badge_rect, 2), state->clock_text, theme->text, theme->face);
+    icon_rect = ui_rect_make(inner.x + TASKBAR_TRAY_GAP, inner.y + 2, TASKBAR_TRAY_ICON_W, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_SPEAKER, inner);
+
+    clock_inner = ui_rect_make(inner.x + TASKBAR_TRAY_ICON_W + (TASKBAR_TRAY_GAP * 2),
+        inner.y,
+        inner.w - (TASKBAR_TRAY_ICON_W + (TASKBAR_TRAY_GAP * 3)),
+        inner.h);
+    ui_draw_label_centered(api, clock_inner, state->clock_text, theme->text, bg);
 }
 
 void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_rect_t menu;
     ui_rect_t strip;
     ui_rect_t divider;
-    ui_rect_t info_rect;
     ui_rect_t exit_rect;
     ui_button_t exit_button;
     const ui_theme_t* theme;
@@ -314,8 +445,6 @@ void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     theme = &state->wm.theme;
     menu = start_menu_rect(state);
     strip = ui_rect_make(menu.x + 4, menu.y + 4, START_MENU_STRIP_W, menu.h - 8);
-    info_rect = ui_rect_make(menu.x + START_MENU_STRIP_W + 14, menu.y + 114,
-        menu.w - START_MENU_STRIP_W - 28, 26);
     divider = ui_rect_make(menu.x + START_MENU_STRIP_W + 12, menu.y + menu.h - 48, menu.w - START_MENU_STRIP_W - 24, 2);
     exit_rect = start_menu_exit_rect(state);
 
@@ -329,8 +458,6 @@ void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     draw_start_menu_item(api, state, START_MENU_ITEM_DOCUMENTOS, g_start_menu_items[START_MENU_ITEM_DOCUMENTOS].label);
     draw_start_menu_item(api, state, START_MENU_ITEM_DEFINICOES, g_start_menu_items[START_MENU_ITEM_DEFINICOES].label);
     draw_start_menu_item(api, state, START_MENU_ITEM_AJUDA, g_start_menu_items[START_MENU_ITEM_AJUDA].label);
-
-    draw_menu_info_panel(api, state, info_rect);
 
     ui_fill_rect(api, ui_rect_make(divider.x, divider.y, divider.w, 1), theme->shadow);
     ui_fill_rect(api, ui_rect_make(divider.x, divider.y + 1, divider.w, 1), theme->light);
@@ -346,9 +473,11 @@ void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
 void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_rect_t taskbar;
     ui_rect_t start_rect;
-    ui_rect_t task_rect;
     ui_rect_t clock_rect;
+    ui_rect_t quick_rect;
+    ui_rect_t grip_rect;
     const ui_theme_t* theme;
+    int i;
 
     if (!api || !state) {
         return;
@@ -357,19 +486,27 @@ void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_t* stat
     theme = &state->wm.theme;
     taskbar = taskbar_rect(state);
     start_rect = start_button_rect(state);
-    task_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, 170, 20);
     clock_rect = taskbar_clock_rect(state);
     ui_fill_rect(api, taskbar, theme->face);
     ui_fill_rect(api, ui_rect_make(taskbar.x, taskbar.y, taskbar.w, 1), theme->light);
     ui_fill_rect(api, ui_rect_make(taskbar.x, taskbar.y + 1, taskbar.w, 1), theme->face_alt);
+    ui_fill_rect(api, ui_rect_make(taskbar.x, taskbar.y + taskbar.h - 1, taskbar.w, 1), theme->shadow);
 
     draw_start_button(api, state, start_rect);
 
-    if (main_window_is_visible(state)) {
-        draw_task_button(api, state, task_rect, "MiniDOS 95 Demo");
+    quick_rect = ui_rect_make(start_rect.x + start_rect.w + 6, taskbar.y + 4, QUICKLAUNCH_W - 10, 20);
+    grip_rect = ui_rect_make(start_rect.x + start_rect.w + 2, taskbar.y + 4, 10, 20);
+    draw_taskbar_grip(api, theme, grip_rect);
+    draw_quicklaunch(api, state, quick_rect);
+
+    for (i = 0; i < state->wm.window_count; i++) {
+        const ui_wm_window_t* win = &state->wm.windows[i];
+
+        if (win->id == 0 || !win->visible || !win->window.has_minimize_button) {
+            continue;
+        }
+        draw_task_button(api, state, taskbar_button_rect(state, win->id), win);
     }
 
-    ui_draw_panel(api, theme, clock_rect, 0);
-    ui_fill_rect(api, ui_rect_inset(clock_rect, 2), ui_rgb(224, 224, 224));
-    ui_draw_label_centered(api, ui_rect_inset(clock_rect, 2), state->clock_text, theme->text, ui_rgb(224, 224, 224));
+    draw_tray(api, state, clock_rect);
 }

@@ -1331,6 +1331,10 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         return (int)value;
     }
 
+    if (num == MINIDOS_SYSCALL_DRIVE_VALID) {
+        return drive_get_info((int)a0) ? 1 : 0;
+    }
+
     if (num == MINIDOS_SYSCALL_FILE_SIZE) {
         int result = -1;
         int entered = 0;
@@ -1517,6 +1521,22 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
 
         if (!shell_apps_copy_user_string(task, (const char*)a0, name_a, sizeof(name_a))) {
             return 0;
+        }
+
+        if (((name_a[0] >= 'A' && name_a[0] <= 'Z') || (name_a[0] >= 'a' && name_a[0] <= 'z'))
+            && name_a[1] == ':' && name_a[2] == '\0') {
+            int drive_letter = name_a[0];
+            if (drive_letter >= 'a' && drive_letter <= 'z') {
+                drive_letter = drive_letter - 'a' + 'A';
+            }
+            drive_letter -= 'A';
+            if (!drive_get_info(drive_letter)) {
+                return 0;
+            }
+            task->drive = drive_letter;
+            task->current_dir_cluster = 0;
+            task->path_reset(task->current_path);
+            return 1;
         }
 
         if (name_a[0] == '\\' || name_a[0] == '/') {
