@@ -339,6 +339,216 @@ static inline void ui_draw_label_centered(const minidos_app_api_t* api, ui_rect_
     ui_draw_text(api, draw_x, draw_y, text, fg, bg);
 }
 
+static inline void ui_draw_text_clipped_right(const minidos_app_api_t* api, int x, int y, const char* text,
+    unsigned int fg, unsigned int bg, int max_chars);
+
+static inline ui_rect_t ui_dropdown_popup_rect(ui_rect_t rect, int item_count) {
+    int popup_h = item_count * UI_DROPDOWN_ITEM_H;
+    if (popup_h < 0) {
+        popup_h = 0;
+    }
+    return ui_rect_make(rect.x, rect.y + rect.h - 1, rect.w, popup_h + 2);
+}
+
+static inline ui_rect_t ui_dropdown_item_rect(ui_rect_t rect, int item_index) {
+    return ui_rect_make(rect.x + 1, rect.y + rect.h + (item_index * UI_DROPDOWN_ITEM_H),
+        rect.w - 2, UI_DROPDOWN_ITEM_H);
+}
+
+static inline ui_rect_t ui_menu_item_rect(ui_rect_t rect, int item_index) {
+    return ui_rect_make(rect.x + 1, rect.y + 1 + (item_index * UI_MENU_ITEM_H),
+        rect.w - 2, UI_MENU_ITEM_H);
+}
+
+static inline ui_rect_t ui_scrollbar_decrement_rect(ui_rect_t rect) {
+    return ui_rect_make(rect.x, rect.y, rect.w, UI_SCROLLBAR_BUTTON_H);
+}
+
+static inline ui_rect_t ui_scrollbar_increment_rect(ui_rect_t rect) {
+    return ui_rect_make(rect.x, rect.y + rect.h - UI_SCROLLBAR_BUTTON_H, rect.w, UI_SCROLLBAR_BUTTON_H);
+}
+
+static inline ui_rect_t ui_scrollbar_track_rect(ui_rect_t rect) {
+    return ui_rect_make(rect.x, rect.y + UI_SCROLLBAR_BUTTON_H, rect.w, rect.h - (UI_SCROLLBAR_BUTTON_H * 2));
+}
+
+static inline ui_rect_t ui_scrollbar_thumb_rect(ui_rect_t rect, int min_value, int max_value, int page_size, int value) {
+    ui_rect_t track = ui_scrollbar_track_rect(rect);
+    ui_rect_t thumb = track;
+    int range;
+    int usable_h;
+    int thumb_h;
+    int pos;
+
+    if (track.h <= 0) {
+        return ui_rect_make(track.x, track.y, track.w, 0);
+    }
+
+    range = max_value - min_value;
+    thumb_h = page_size > 0 ? (track.h * page_size) / (range + page_size) : UI_SCROLLBAR_MIN_THUMB_H;
+    if (thumb_h < UI_SCROLLBAR_MIN_THUMB_H) {
+        thumb_h = UI_SCROLLBAR_MIN_THUMB_H;
+    }
+    if (thumb_h > track.h) {
+        thumb_h = track.h;
+    }
+
+    usable_h = track.h - thumb_h;
+    pos = 0;
+    if (usable_h > 0 && range > 0) {
+        if (value < min_value) {
+            value = min_value;
+        }
+        if (value > max_value) {
+            value = max_value;
+        }
+        pos = ((value - min_value) * usable_h) / range;
+    }
+
+    thumb.y += pos;
+    thumb.h = thumb_h;
+    return thumb;
+}
+
+static inline void ui_draw_checkbox(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    const char* label, int checked, int focused, int enabled) {
+    ui_rect_t box = ui_rect_make(rect.x, rect.y + ((rect.h - 13) / 2), 13, 13);
+    unsigned int fg = enabled ? theme->text : theme->text_disabled;
+    unsigned int bg = theme->field_bg;
+
+    ui_draw_panel(api, theme, box, 0);
+    ui_fill_rect(api, ui_rect_inset(box, 2), bg);
+    if (checked) {
+        ui_draw_text(api, box.x + 2, box.y + 2, "X", fg, bg);
+    }
+    if (focused) {
+        ui_frame_rect(api, ui_rect_make(box.x - 2, box.y - 2, rect.w > 18 ? rect.w : 18, box.h + 4), theme->dark_shadow);
+    }
+    if (label) {
+        ui_draw_text(api, rect.x + 18, rect.y + ((rect.h - UI_CHAR_H) / 2), label, fg, theme->field_bg);
+    }
+}
+
+static inline void ui_draw_radio_button(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    const char* label, int checked, int focused, int enabled) {
+    ui_rect_t circle = ui_rect_make(rect.x, rect.y + ((rect.h - 13) / 2), 13, 13);
+    unsigned int fg = enabled ? theme->text : theme->text_disabled;
+    unsigned int bg = theme->field_bg;
+
+    ui_fill_rect(api, circle, theme->face);
+    ui_frame_rect(api, circle, theme->dark_shadow);
+    ui_fill_rect(api, ui_rect_inset(circle, 1), bg);
+    if (checked) {
+        ui_fill_rect(api, ui_rect_make(circle.x + 4, circle.y + 4, 5, 5), fg);
+    }
+    if (focused) {
+        ui_frame_rect(api, ui_rect_make(circle.x - 2, circle.y - 2, rect.w > 18 ? rect.w : 18, circle.h + 4), theme->dark_shadow);
+    }
+    if (label) {
+        ui_draw_text(api, rect.x + 18, rect.y + ((rect.h - UI_CHAR_H) / 2), label, fg, theme->field_bg);
+    }
+}
+
+static inline void ui_draw_dropdown(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    const char* const* items, int item_count, int selected_index, int expanded, int focused, int hot_index) {
+    ui_rect_t arrow_rect;
+    const char* text = "";
+    int i;
+
+    if (!theme || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    if (items && selected_index >= 0 && selected_index < item_count && items[selected_index]) {
+        text = items[selected_index];
+    }
+
+    ui_draw_panel(api, theme, rect, 0);
+    ui_fill_rect(api, ui_rect_inset(rect, 2), theme->field_bg);
+    arrow_rect = ui_rect_make(rect.x + rect.w - 20, rect.y + 2, 18, rect.h - 4);
+    ui_draw_panel(api, theme, arrow_rect, 1);
+    ui_draw_text(api, arrow_rect.x + 5, arrow_rect.y + ((arrow_rect.h - UI_CHAR_H) / 2), expanded ? "^" : "v",
+        theme->text, theme->face);
+    ui_draw_text_clipped_right(api, rect.x + 4, rect.y + ((rect.h - UI_CHAR_H) / 2), text,
+        theme->field_text, theme->field_bg, (rect.w - 28) / UI_CHAR_W);
+
+    if (focused) {
+        ui_frame_rect(api, ui_rect_inset(rect, 3), theme->selection_bg);
+    }
+
+    if (expanded && item_count > 0) {
+        ui_rect_t popup = ui_dropdown_popup_rect(rect, item_count);
+        ui_draw_panel(api, theme, popup, 1);
+        for (i = 0; i < item_count; i++) {
+            ui_rect_t item_rect = ui_dropdown_item_rect(rect, i);
+            int highlighted = (i == hot_index) || (hot_index < 0 && i == selected_index);
+            unsigned int bg = highlighted ? theme->selection_bg : theme->field_bg;
+            unsigned int fg = highlighted ? theme->selection_text : theme->field_text;
+            ui_fill_rect(api, item_rect, bg);
+            ui_draw_text(api, item_rect.x + 4, item_rect.y + ((item_rect.h - UI_CHAR_H) / 2),
+                (items && items[i]) ? items[i] : "", fg, bg);
+        }
+    }
+}
+
+static inline void ui_draw_menu_widget(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    const char* const* items, int item_count, int selected_index, int focused) {
+    int i;
+
+    if (!theme || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    ui_draw_panel(api, theme, rect, 1);
+    for (i = 0; i < item_count; i++) {
+        ui_rect_t item_rect = ui_menu_item_rect(rect, i);
+        unsigned int bg = (i == selected_index) ? theme->selection_bg : theme->face;
+        unsigned int fg = (i == selected_index) ? theme->selection_text : theme->text;
+
+        if (item_rect.y + item_rect.h > rect.y + rect.h - 1) {
+            break;
+        }
+        ui_fill_rect(api, item_rect, bg);
+        ui_draw_text(api, item_rect.x + 6, item_rect.y + ((item_rect.h - UI_CHAR_H) / 2),
+            (items && items[i]) ? items[i] : "", fg, bg);
+    }
+
+    if (focused) {
+        ui_frame_rect(api, ui_rect_inset(rect, 3), theme->dark_shadow);
+    }
+}
+
+static inline void ui_draw_scrollbar(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    int min_value, int max_value, int page_size, int value, int focused) {
+    ui_rect_t dec_rect;
+    ui_rect_t inc_rect;
+    ui_rect_t track_rect;
+    ui_rect_t thumb_rect;
+
+    if (!theme || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    dec_rect = ui_scrollbar_decrement_rect(rect);
+    inc_rect = ui_scrollbar_increment_rect(rect);
+    track_rect = ui_scrollbar_track_rect(rect);
+    thumb_rect = ui_scrollbar_thumb_rect(rect, min_value, max_value, page_size, value);
+
+    ui_draw_panel(api, theme, rect, 1);
+    ui_fill_rect(api, track_rect, theme->face_alt);
+    ui_draw_panel(api, theme, dec_rect, 1);
+    ui_draw_panel(api, theme, inc_rect, 1);
+    ui_draw_text(api, dec_rect.x + ((dec_rect.w - UI_CHAR_W) / 2),
+        dec_rect.y + ((dec_rect.h - UI_CHAR_H) / 2), "^", theme->text, theme->face);
+    ui_draw_text(api, inc_rect.x + ((inc_rect.w - UI_CHAR_W) / 2),
+        inc_rect.y + ((inc_rect.h - UI_CHAR_H) / 2), "v", theme->text, theme->face);
+    ui_draw_panel(api, theme, thumb_rect, 1);
+
+    if (focused) {
+        ui_frame_rect(api, ui_rect_inset(rect, 2), theme->selection_bg);
+    }
+}
+
 /* --- Clipped compound primitives for layer composition --- */
 
 static inline void ui_frame_rect_clipped(const minidos_app_api_t* api, ui_rect_t rect, unsigned int color, ui_rect_t clip) {
@@ -776,6 +986,11 @@ static inline void ui_listview_select_next(ui_listview_t* lv) {
 static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect, const char* text, int focused) {
     unsigned int fill;
     int max_chars;
+    int len = 0;
+    int start = 0;
+    int visible_len = 0;
+    int cursor_x;
+    unsigned int ticks = 0;
     if (!theme) {
         return;
     }
@@ -785,8 +1000,24 @@ static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme
     ui_fill_rect(api, rect, fill);
     ui_frame_rect(api, rect, focused ? theme->selection_bg : theme->shadow);
     if (text) {
+        len = ui_strlen(text);
         max_chars = (rect.w - 8) / UI_CHAR_W;
         ui_draw_text_clipped_right(api, rect.x + 4, rect.y + 4, text, theme->field_text, fill, max_chars);
+        if (max_chars > 0) {
+            start = len > max_chars ? (len - max_chars) : 0;
+            visible_len = len - start;
+        }
+    }
+    ticks = app_get_ticks(api);
+    if (focused && (((ticks / 20u) & 1u) == 0u)) {
+        cursor_x = rect.x + 4 + (visible_len * UI_CHAR_W);
+        if (cursor_x > rect.x + rect.w - 3) {
+            cursor_x = rect.x + rect.w - 3;
+        }
+        if (cursor_x < rect.x + 3) {
+            cursor_x = rect.x + 3;
+        }
+        ui_fill_rect(api, ui_rect_make(cursor_x, rect.y + 3, 1, rect.h - 6), theme->field_text);
     }
 }
 

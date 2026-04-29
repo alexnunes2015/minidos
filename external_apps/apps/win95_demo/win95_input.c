@@ -15,6 +15,34 @@ static void close_main_window(demo_state_t* state) {
     ui_wm_close_window(&state->wm, state->window_id);
 }
 
+static void clear_window_interaction_state(demo_state_t* state, int window_id) {
+    if (!state || window_id == 0) {
+        return;
+    }
+
+    if (state->dragging_window_id == window_id) {
+        state->dragging = 0;
+        state->dragging_window_id = 0;
+    }
+
+    if (state->resizing_window_id == window_id) {
+        state->resizing = 0;
+        state->resizing_window_id = 0;
+        state->resize_edges = 0;
+        state->resize_start_bounds = ui_rect_make(0, 0, 0, 0);
+    }
+
+    if (state->resize_hover_window_id == window_id) {
+        state->resize_hover_window_id = 0;
+        state->resize_hover_edges = 0;
+    }
+
+    if (state->title_button_pressed_window_id == window_id) {
+        state->title_button_pressed_window_id = 0;
+        state->title_button_pressed_action = TITLE_BUTTON_NONE;
+    }
+}
+
 static void activate_taskbar_window(demo_state_t* state, int window_id) {
     ui_wm_window_t* win;
     explorer_state_t* explorer;
@@ -199,15 +227,54 @@ static ui_rect_t resize_preview_for_mouse(const demo_state_t* state) {
 
 static int handle_activated_control(const minidos_app_api_t* api, demo_state_t* state, int control_id) {
     if (control_id == state->button_ok_id) {
-        close_main_window(state);
+        sync_showcase_state(state);
+        update_status_text(state, "Valores aplicados na janela de componentes.");
         return 0;
     }
     if (control_id == state->button_cancel_id) {
         close_main_window(state);
         return 0;
     }
+    if (control_id == state->checkbox_sound_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Checkbox 'Ativar sons' atualizado.");
+        return 0;
+    }
+    if (control_id == state->checkbox_grid_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Checkbox 'Mostrar grelha' atualizado.");
+        return 0;
+    }
+    if (control_id == state->radio_theme_classic_id || control_id == state->radio_theme_cloud_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Tema selecionado na janela de teste.");
+        return 0;
+    }
+    if (control_id == state->dropdown_speed_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Velocidade selecionada no dropdown.");
+        return 0;
+    }
+    if (control_id == state->menu_actions_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Acao escolhida no menu widget.");
+        return 0;
+    }
+    if (control_id == state->scrollbar_zoom_id) {
+        sync_showcase_state(state);
+        update_status_text(state, "Zoom ajustado no scrollbar.");
+        return 0;
+    }
     {
         explorer_state_t* explorer = explorer_for_control(state, control_id);
+        if (explorer && control_id == explorer->back_button_id) {
+            (void)explorer_go_back_in(api, state, explorer);
+            return 0;
+        }
+        if (explorer && control_id == explorer->forward_button_id) {
+            (void)explorer_go_forward_in(api, state, explorer);
+            return 0;
+        }
         if (explorer && control_id == explorer->up_button_id) {
             (void)explorer_go_up_in(api, state, explorer);
             return 0;
@@ -240,21 +307,33 @@ static int explorer_window_is_active(demo_state_t* state, explorer_state_t** out
 }
 
 static void cycle_focus(demo_state_t* state) {
-    int next_id;
+    int focus_order[9];
+    int count = 0;
+    int i;
+    int next_index = 0;
 
     if (!state) {
         return;
     }
 
-    if (state->wm.focused_control_id == state->button_ok_id) {
-        next_id = state->button_cancel_id;
-    } else if (state->wm.focused_control_id == state->button_cancel_id) {
-        next_id = state->input_id;
-    } else {
-        next_id = state->button_ok_id;
+    focus_order[count++] = state->input_id;
+    focus_order[count++] = state->dropdown_speed_id;
+    focus_order[count++] = state->checkbox_sound_id;
+    focus_order[count++] = state->checkbox_grid_id;
+    focus_order[count++] = state->radio_theme_classic_id;
+    focus_order[count++] = state->radio_theme_cloud_id;
+    focus_order[count++] = state->menu_actions_id;
+    focus_order[count++] = state->scrollbar_zoom_id;
+    focus_order[count++] = state->button_ok_id;
+
+    for (i = 0; i < count; i++) {
+        if (focus_order[i] == state->wm.focused_control_id) {
+            next_index = (i + 1) % count;
+            break;
+        }
     }
 
-    ui_wm_set_focus_control(&state->wm, next_id);
+    ui_wm_set_focus_control(&state->wm, focus_order[next_index]);
     update_status_text(state, "Foco movido por teclado.");
 }
 
@@ -267,9 +346,13 @@ static void cycle_explorer_focus(demo_state_t* state) {
     }
 
     if (state->wm.focused_control_id == explorer->listview_id) {
-        next_id = explorer->open_button_id;
-    } else if (state->wm.focused_control_id == explorer->open_button_id) {
+        next_id = explorer->back_button_id;
+    } else if (state->wm.focused_control_id == explorer->back_button_id) {
+        next_id = explorer->forward_button_id;
+    } else if (state->wm.focused_control_id == explorer->forward_button_id) {
         next_id = explorer->up_button_id;
+    } else if (state->wm.focused_control_id == explorer->up_button_id) {
+        next_id = explorer->open_button_id;
     } else {
         next_id = explorer->listview_id;
     }
@@ -324,8 +407,20 @@ int handle_keyboard(const minidos_app_api_t* api, demo_state_t* state, char c) {
             (void)explorer_go_up_in(api, state, explorer);
             return 0;
         }
+        if (c == '[') {
+            (void)explorer_go_back_in(api, state, explorer);
+            return 0;
+        }
+        if (c == ']') {
+            (void)explorer_go_forward_in(api, state, explorer);
+            return 0;
+        }
         if (c == KEY_ENTER) {
-            if (state->wm.focused_control_id == explorer->up_button_id) {
+            if (state->wm.focused_control_id == explorer->back_button_id) {
+                (void)explorer_go_back_in(api, state, explorer);
+            } else if (state->wm.focused_control_id == explorer->forward_button_id) {
+                (void)explorer_go_forward_in(api, state, explorer);
+            } else if (state->wm.focused_control_id == explorer->up_button_id) {
                 (void)explorer_go_up_in(api, state, explorer);
             } else if (state->wm.focused_control_id == explorer->open_button_id) {
                 (void)explorer_open_selected_in(api, state, explorer);
@@ -338,12 +433,22 @@ int handle_keyboard(const minidos_app_api_t* api, demo_state_t* state, char c) {
     }
 
     if (c == KEY_ENTER || c == KEY_SPACE) {
-        if (state->wm.focused_control_id == state->button_ok_id || state->wm.focused_control_id == state->button_cancel_id) {
+        if (state->wm.focused_control_id == state->button_ok_id
+            || state->wm.focused_control_id == state->button_cancel_id) {
             return handle_activated_control(api, state, state->wm.focused_control_id);
         }
     }
 
-    (void)ui_wm_dispatch_key(&state->wm, c);
+    if (ui_wm_dispatch_key(&state->wm, c)) {
+        sync_showcase_state(state);
+        if (state->wm.focused_control_id == state->scrollbar_zoom_id) {
+            update_status_text(state, "Zoom ajustado por teclado.");
+        } else if (state->wm.focused_control_id == state->menu_actions_id) {
+            update_status_text(state, "Menu widget atualizado por teclado.");
+        } else if (state->wm.focused_control_id == state->dropdown_speed_id) {
+            update_status_text(state, "Dropdown atualizado por teclado.");
+        }
+    }
     return 0;
 }
 
@@ -543,8 +648,22 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
         &out_control_id,
         &out_hit_close);
 
+    if (out_control_id != 0 || activated) {
+        state->layout_version++;
+        sync_showcase_state(state);
+    }
+
     if (left_pressed) {
-        if (out_control_id == state->button_ok_id || out_control_id == state->button_cancel_id) {
+        if (out_control_id == state->button_ok_id
+            || out_control_id == state->button_cancel_id
+            || out_control_id == state->scrollbar_zoom_id) {
+            state->mouse_pressed_control_id = out_control_id;
+        } else if (out_control_id == state->checkbox_sound_id
+            || out_control_id == state->checkbox_grid_id
+            || out_control_id == state->radio_theme_classic_id
+            || out_control_id == state->radio_theme_cloud_id
+            || out_control_id == state->dropdown_speed_id
+            || out_control_id == state->menu_actions_id) {
             state->mouse_pressed_control_id = out_control_id;
         } else if (explorer_for_control(state, out_control_id)) {
             state->mouse_pressed_control_id = out_control_id;
@@ -594,11 +713,24 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
         state->drag_preview_bounds.y = state->mouse.y - state->drag_offset_y;
         clamp_rect_to_desktop(state, &state->drag_preview_bounds);
         state->layout_version++;
+    } else if (state->dragging && (!win || !win->visible || win->window.minimized)) {
+        state->dragging = 0;
+        state->dragging_window_id = 0;
+        state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
     }
 
     if (state->resizing && left_down) {
-        state->drag_preview_bounds = resize_preview_for_mouse(state);
-        state->layout_version++;
+        win = ui_wm_find_window(&state->wm, state->resizing_window_id);
+        if (win && win->visible && !win->window.minimized) {
+            state->drag_preview_bounds = resize_preview_for_mouse(state);
+            state->layout_version++;
+        } else {
+            state->resizing = 0;
+            state->resizing_window_id = 0;
+            state->resize_edges = 0;
+            state->resize_start_bounds = ui_rect_make(0, 0, 0, 0);
+            state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
+        }
     }
 
     {
@@ -657,6 +789,8 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
     }
 
     if (out_hit_close && activated) {
+        clear_window_interaction_state(state, out_window_id);
+        state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
         if (out_window_id == state->window_id) {
             close_main_window(state);
         } else if (explorer_for_window(state, out_window_id)) {

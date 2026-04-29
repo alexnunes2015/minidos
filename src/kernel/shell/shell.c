@@ -14,8 +14,23 @@ static int fat16_initialized = 0;
 static unsigned int app_clip_src_cluster = 0;
 static char app_clip_name[64];
 static int app_clip_mode = 0; /* 0 none, 1 copy, 2 move */
+static int autocomplete_active = 0;
+static int autocomplete_token_start = 0;
+static int autocomplete_next_match = 0;
+static char autocomplete_prefix[13];
 
 static int ensure_fat16_ready(void);
+
+static int prefix_matches_upper(const char* text, const char* prefix) {
+    int i = 0;
+    while (prefix[i] != '\0') {
+        if (text[i] != prefix[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
 
 static void shell_out_screen(const char* s) {
     print_string(s);
@@ -409,6 +424,143 @@ int shell_run_app_from_drive_root(const char* app_name, int drive_letter) {
     fat16_initialized = 0;
 
     return launched;
+}
+
+void shell_autocomplete_reset(void) {
+    autocomplete_active = 0;
+    autocomplete_token_start = 0;
+    autocomplete_next_match = 0;
+    autocomplete_prefix[0] = '\0';
+}
+
+int shell_autocomplete_apply(char* buffer, int* len, int max_len) {
+    int token_start = 0;
+    int token_len;
+    int i;
+    int target_match;
+    int match_count = 0;
+    int selected_pos = -1;
+    int selected_len = 0;
+    int new_len;
+    char prefix_upper[13];
+    char selected_name[13];
+
+    if (!buffer || !len || *len < 0 || *len >= max_len || max_len <= 1) {
+        return 0;
+    }
+    if (!ensure_fat16_ready()) {
+        return 0;
+    }
+
+    for (i = *len - 1; i >= 0; i--) {
+        if (buffer[i] == ' ' || buffer[i] == '\t') {
+            token_start = i + 1;
+            break;
+        }
+    }
+
+    token_len = *len - token_start;
+    if (token_len >= (int)sizeof(prefix_upper)) {
+        token_len = (int)sizeof(prefix_upper) - 1;
+    }
+    for (i = 0; i < token_len; i++) {
+        char c = buffer[token_start + i];
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        prefix_upper[i] = c;
+    }
+    prefix_upper[token_len] = '\0';
+
+    if (!autocomplete_active
+        || autocomplete_token_start != token_start
+        || mystrcmp(autocomplete_prefix, prefix_upper) != 0) {
+        autocomplete_active = 1;
+        autocomplete_token_start = token_start;
+        autocomplete_next_match = 0;
+        str_copy_raw(prefix_upper, autocomplete_prefix, (int)sizeof(autocomplete_prefix));
+    }
+
+    target_match = autocomplete_next_match;
+    for (i = 0; ; i++) {
+        char entry_name[13];
+        int is_dir = 0;
+        unsigned int file_size = 0;
+        int entry_len = 0;
+
+        if (!fat16_get_entry_by_index(current_dir_cluster, (unsigned int)i, entry_name, 13, &is_dir, &file_size)) {
+            break;
+        }
+        (void)is_dir;
+        (void)file_size;
+        if (!prefix_matches_upper(entry_name, autocomplete_prefix)) {
+            continue;
+        }
+
+        if (match_count == target_match) {
+            str_copy_raw(entry_name, selected_name, (int)sizeof(selected_name));
+            while (selected_name[entry_len] != '\0') {
+                entry_len++;
+            }
+            selected_len = entry_len;
+            selected_pos = match_count;
+        }
+        match_count++;
+    }
+
+    if (match_count <= 0) {
+        shell_autocomplete_reset();
+        return 0;
+    }
+
+    if (selected_pos < 0) {
+        target_match = 0;
+        match_count = 0;
+        for (i = 0; ; i++) {
+            char entry_name[13];
+            int is_dir = 0;
+            unsigned int file_size = 0;
+            if (!fat16_get_entry_by_index(current_dir_cluster, (unsigned int)i, entry_name, 13, &is_dir, &file_size)) {
+                break;
+            }
+            (void)is_dir;
+            (void)file_size;
+            if (!prefix_matches_upper(entry_name, autocomplete_prefix)) {
+                continue;
+            }
+            if (match_count == target_match) {
+                str_copy_raw(entry_name, selected_name, (int)sizeof(selected_name));
+                selected_len = 0;
+                while (selected_name[selected_len] != '\0') {
+                    selected_len++;
+                }
+                selected_pos = match_count;
+                break;
+            }
+            match_count++;
+        }
+        if (selected_pos < 0) {
+            shell_autocomplete_reset();
+            return 0;
+        }
+    }
+
+    new_len = token_start + selected_len;
+    if (new_len >= max_len) {
+        return 0;
+    }
+
+    for (i = 0; i < selected_len; i++) {
+        buffer[token_start + i] = selected_name[i];
+    }
+    buffer[new_len] = '\0';
+    *len = new_len;
+    autocomplete_next_match = selected_pos + 1;
+    if (autocomplete_next_match >= match_count) {
+        autocomplete_next_match = 0;
+    }
+
+    return 1;
 }
 
 void shell_execute(char* cmd) {

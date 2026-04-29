@@ -1,6 +1,19 @@
 #define MINIDOS_UI_IMPLEMENTATION
 #include "win95_demo.h"
 
+static const char* const g_showcase_speed_items[] = {
+    "Lento",
+    "Normal",
+    "Turbo",
+};
+
+static const char* const g_showcase_menu_items[] = {
+    "Novo ficheiro",
+    "Copiar",
+    "Colar",
+    "Propriedades",
+};
+
 void str_copy(char* dst, const char* src, int max_len) {
     int i = 0;
     while (i < (max_len - 1) && src[i] != '\0') {
@@ -82,6 +95,148 @@ void update_status_text(demo_state_t* state, const char* text) {
     }
 }
 
+void update_value_label_text(demo_state_t* state) {
+    ui_control_t* control;
+    ui_control_t* dropdown;
+    ui_control_t* menu;
+    ui_control_t* scrollbar;
+    ui_control_t* sound;
+    ui_control_t* grid;
+    ui_control_t* classic;
+    const char* speed = "-";
+    const char* action = "-";
+    const char* theme = "Cloud";
+    const char* sound_state = "off";
+    const char* grid_state = "off";
+    char value[96];
+    int i = 0;
+    int zoom = 0;
+
+    if (!state) {
+        return;
+    }
+
+    dropdown = ui_wm_find_control(&state->wm, state->dropdown_speed_id);
+    menu = ui_wm_find_control(&state->wm, state->menu_actions_id);
+    scrollbar = ui_wm_find_control(&state->wm, state->scrollbar_zoom_id);
+    sound = ui_wm_find_control(&state->wm, state->checkbox_sound_id);
+    grid = ui_wm_find_control(&state->wm, state->checkbox_grid_id);
+    classic = ui_wm_find_control(&state->wm, state->radio_theme_classic_id);
+
+    if (dropdown && dropdown->items && dropdown->selected_index >= 0 && dropdown->selected_index < dropdown->item_count) {
+        speed = dropdown->items[dropdown->selected_index];
+    }
+    if (menu && menu->items && menu->selected_index >= 0 && menu->selected_index < menu->item_count) {
+        action = menu->items[menu->selected_index];
+    }
+    if (scrollbar) {
+        zoom = scrollbar->value;
+    }
+    if (sound && sound->checked) {
+        sound_state = "on";
+    }
+    if (grid && grid->checked) {
+        grid_state = "on";
+    }
+    if (classic && classic->checked) {
+        theme = "Classic";
+    }
+
+    while (i < (int)sizeof(value) - 1 && "Tema:"[i] != '\0') {
+        value[i] = "Tema:"[i];
+        i++;
+    }
+    value[i++] = ' ';
+    str_copy(&value[i], theme, (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    str_copy(&value[i], "  Zoom:", (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    value[i++] = ' ';
+    value[i++] = (char)('0' + ((zoom / 10) % 10));
+    value[i++] = (char)('0' + (zoom % 10));
+    value[i++] = '%';
+    value[i++] = ' ';
+    value[i++] = ' ';
+    str_copy(&value[i], "Vel:", (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    value[i++] = ' ';
+    str_copy(&value[i], speed, (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    str_copy(&value[i], "  Menu:", (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    value[i++] = ' ';
+    str_copy(&value[i], action, (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    str_copy(&value[i], "  Som:", (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    value[i++] = ' ';
+    str_copy(&value[i], sound_state, (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    str_copy(&value[i], "  Grelha:", (int)sizeof(value) - i);
+    i = ui_strlen(value);
+    value[i++] = ' ';
+    str_copy(&value[i], grid_state, (int)sizeof(value) - i);
+
+    control = ui_wm_find_control(&state->wm, state->label_value_id);
+    if (control) {
+        str_copy(state->value_text, value, (int)sizeof(state->value_text));
+        control->text = state->value_text;
+    }
+}
+
+void sync_showcase_state(demo_state_t* state) {
+    update_mouse_label_text(state);
+    update_value_label_text(state);
+}
+
+void create_showcase_window(demo_state_t* state) {
+    ui_rect_t bounds;
+
+    if (!state || state->window_id != 0) {
+        return;
+    }
+
+    bounds = ui_rect_make((state->sw - 508) / 2, 52, 508, 320);
+    if (bounds.x < 8) {
+        bounds.x = 8;
+    }
+    if (bounds.y < 8) {
+        bounds.y = 8;
+    }
+
+    state->window_id = ui_wm_create_window_ex(&state->wm, bounds, "Componentes UI", 1, 1, 1);
+    state->label_mouse_id = ui_wm_add_label(&state->wm, state->window_id,
+        ui_rect_make(18, 56, 472, 16), "Mouse");
+    state->label_status_id = ui_wm_add_label(&state->wm, state->window_id,
+        ui_rect_make(18, 286, 472, 16), state->status_text);
+    state->label_value_id = ui_wm_add_label(&state->wm, state->window_id,
+        ui_rect_make(18, 266, 472, 16), "");
+    state->input_id = ui_wm_add_textinput(&state->wm, state->window_id,
+        ui_rect_make(18, 76, 204, 24), state->input_text, (int)sizeof(state->input_text));
+    state->dropdown_speed_id = ui_wm_add_dropdown(&state->wm, state->window_id,
+        ui_rect_make(246, 76, 156, 24), g_showcase_speed_items,
+        (int)(sizeof(g_showcase_speed_items) / sizeof(g_showcase_speed_items[0])), 1);
+    state->checkbox_sound_id = ui_wm_add_checkbox(&state->wm, state->window_id,
+        ui_rect_make(18, 132, 176, 20), "Ativar sons", 1);
+    state->checkbox_grid_id = ui_wm_add_checkbox(&state->wm, state->window_id,
+        ui_rect_make(18, 156, 176, 20), "Mostrar grelha", 0);
+    state->radio_theme_classic_id = ui_wm_add_radio(&state->wm, state->window_id,
+        ui_rect_make(246, 132, 156, 20), "Tema Classic", 1, 1);
+    state->radio_theme_cloud_id = ui_wm_add_radio(&state->wm, state->window_id,
+        ui_rect_make(246, 156, 156, 20), "Tema Cloud", 1, 0);
+    state->menu_actions_id = ui_wm_add_menu(&state->wm, state->window_id,
+        ui_rect_make(18, 180, 176, 76), g_showcase_menu_items,
+        (int)(sizeof(g_showcase_menu_items) / sizeof(g_showcase_menu_items[0])), 0);
+    state->scrollbar_zoom_id = ui_wm_add_scrollbar(&state->wm, state->window_id,
+        ui_rect_make(446, 76, 22, 180), 0, 20, 4, 8);
+    state->button_ok_id = ui_wm_add_button(&state->wm, state->window_id,
+        ui_rect_make(246, 180, 90, 24), "Aplicar");
+    state->button_cancel_id = ui_wm_add_button(&state->wm, state->window_id,
+        ui_rect_make(344, 180, 90, 24), "Fechar");
+    ui_wm_set_focus_control(&state->wm, state->input_id);
+    sync_showcase_state(state);
+}
+
 void append_two_digits(char* out, unsigned int value) {
     out[0] = (char)('0' + ((value / 10u) % 10u));
     out[1] = (char)('0' + (value % 10u));
@@ -95,16 +250,14 @@ void update_clock_text(demo_state_t* state, const minidos_app_api_t* api) {
     }
 
     if (!api || !app_get_time(api, &time)) {
-        str_copy(state->clock_text, "--:--:--", (int)sizeof(state->clock_text));
+        str_copy(state->clock_text, "--:--", (int)sizeof(state->clock_text));
         return;
     }
 
     append_two_digits(&state->clock_text[0], time.hours);
     state->clock_text[2] = ':';
     append_two_digits(&state->clock_text[3], time.minutes);
-    state->clock_text[5] = ':';
-    append_two_digits(&state->clock_text[6], time.seconds);
-    state->clock_text[8] = '\0';
+    state->clock_text[5] = '\0';
 }
 
 void enter_desktop_home(const minidos_app_api_t* api) {
@@ -176,9 +329,17 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->window_id = 0;
     state->label_mouse_id = 0;
     state->label_status_id = 0;
+    state->label_value_id = 0;
     state->button_ok_id = 0;
     state->button_cancel_id = 0;
     state->input_id = 0;
+    state->checkbox_sound_id = 0;
+    state->checkbox_grid_id = 0;
+    state->radio_theme_classic_id = 0;
+    state->radio_theme_cloud_id = 0;
+    state->dropdown_speed_id = 0;
+    state->menu_actions_id = 0;
+    state->scrollbar_zoom_id = 0;
     state->dragging = 0;
     state->resizing = 0;
     state->dragging_window_id = 0;
@@ -217,17 +378,17 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
         state->wm.theme.desktop_bg_bitmap = WALLPAPER_BMP_PATH;
     }
 
-    load_desktop_items(api, state);
-
     str_copy(state->input_text, "MiniDOS 95", (int)sizeof(state->input_text));
+    load_desktop_items(api, state);
+    create_showcase_window(state);
 
     (void)app_mouse_state(api, &state->mouse);
-    update_mouse_label_text(state);
     update_clock_text(state, api);
     update_status_text(state,
         state->mouse.present
-            ? "Mouse pronto. Usa OK, Fechar ou o menu Iniciar."
+            ? "Janela de teste aberta. Experimenta os componentes."
             : "Sem mouse. Teclado continua funcional.");
+    sync_showcase_state(state);
 }
 
 int app_main(const minidos_app_api_t* api) {

@@ -24,7 +24,7 @@ Current goals:
 
 - stable pixel-space drawing API for apps
 - classic Win95-like theme defaults
-- reusable window, panel, button, label, and text-box helpers
+- reusable window, panel, button, label, text-box, checkbox, radio, dropdown, menu, and scrollbar helpers
 - retained-mode window manager for app-level UI composition
 - explicit parent/child controls (label, button, text input)
 - mouse snapshots and waitable input events for GUI apps
@@ -111,6 +111,12 @@ Children are represented by `ui_control_t` and support:
 - `UI_CONTROL_LABEL`
 - `UI_CONTROL_BUTTON`
 - `UI_CONTROL_TEXTINPUT`
+- `UI_CONTROL_LISTVIEW`
+- `UI_CONTROL_CHECKBOX`
+- `UI_CONTROL_RADIO`
+- `UI_CONTROL_DROPDOWN`
+- `UI_CONTROL_MENU`
+- `UI_CONTROL_SCROLLBAR`
 
 ## Primitive Helpers
 
@@ -166,6 +172,11 @@ The initial reusable widget layer includes:
 - `ui_draw_label`
 - `ui_draw_label_centered`
 - `ui_draw_text_box`
+- `ui_draw_checkbox`
+- `ui_draw_radio_button`
+- `ui_draw_dropdown`
+- `ui_draw_menu_widget`
+- `ui_draw_scrollbar`
 - `ui_draw_cursor`
 - `ui_draw_bitmap`
 
@@ -194,6 +205,11 @@ Window-manager API additions:
 - `ui_wm_add_label`
 - `ui_wm_add_button`
 - `ui_wm_add_textinput`
+- `ui_wm_add_checkbox`
+- `ui_wm_add_radio`
+- `ui_wm_add_dropdown`
+- `ui_wm_add_menu`
+- `ui_wm_add_scrollbar`
 - `ui_wm_set_focus_control`
 - `ui_wm_hit_test_control`
 - `ui_wm_dispatch_mouse`
@@ -256,6 +272,8 @@ startui
 Expected result:
 
 - a teal desktop with taskbar
+- a "Componentes UI" test window opened at startup
+- mouse/keyboard-testable checkbox, radio, combo/dropdown, menu, and scrollbar widgets
 - desktop icons and a Start menu
 - Explorer windows with taskbar buttons, including minimized windows
 - a software cursor driven by the PS/2 mouse

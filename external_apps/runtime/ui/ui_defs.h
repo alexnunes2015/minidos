@@ -101,7 +101,17 @@ enum {
     UI_CONTROL_BUTTON = 2,
     UI_CONTROL_TEXTINPUT = 3,
     UI_CONTROL_LISTVIEW = 4,
+    UI_CONTROL_CHECKBOX = 5,
+    UI_CONTROL_RADIO = 6,
+    UI_CONTROL_DROPDOWN = 7,
+    UI_CONTROL_MENU = 8,
+    UI_CONTROL_SCROLLBAR = 9,
 };
+
+#define UI_MENU_ITEM_H 18
+#define UI_DROPDOWN_ITEM_H 18
+#define UI_SCROLLBAR_BUTTON_H 16
+#define UI_SCROLLBAR_MIN_THUMB_H 12
 
 #define UI_LISTVIEW_MAX_ITEMS 128
 #define UI_LISTVIEW_ITEM_NAME_MAX 32
@@ -144,6 +154,18 @@ typedef struct {
     int focused;
     int pressed;
     ui_listview_t* listview;  /* non-NULL for UI_CONTROL_LISTVIEW */
+    int checked;
+    int group_id;
+    const char* const* items;
+    int item_count;
+    int selected_index;
+    int open;
+    int hot_index;
+    int min_value;
+    int max_value;
+    int page_size;
+    int value;
+    int drag_offset;
 } ui_control_t;
 
 typedef struct {

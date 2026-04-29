@@ -52,6 +52,7 @@ static command_input_t read_command_line(char* buffer, int max_len) {
     if (!buffer || max_len <= 0) {
         return CMD_INPUT_NONE;
     }
+    shell_autocomplete_reset();
 
     while (i < max_len - 1) {
         char c = 0;
@@ -63,6 +64,7 @@ static command_input_t read_command_line(char* buffer, int max_len) {
                 print_char('\n');
                 video_cursor_reset_blink();
                 video_set_deferred_present(0);
+                shell_autocomplete_reset();
                 break;
             }
             if (c == '\b') {
@@ -71,13 +73,32 @@ static command_input_t read_command_line(char* buffer, int max_len) {
                     print_char('\b');
                     video_cursor_reset_blink();
                 }
+                shell_autocomplete_reset();
+                buffer[i] = '\0';
+                video_set_deferred_present(0);
+                continue;
+            }
+            if (c == '\t') {
+                int old_len = i;
+                if (shell_autocomplete_apply(buffer, &i, max_len)) {
+                    while (old_len > 0) {
+                        print_char('\b');
+                        old_len--;
+                    }
+                    for (int j = 0; j < i; j++) {
+                        print_char(buffer[j]);
+                    }
+                    video_cursor_reset_blink();
+                }
                 video_set_deferred_present(0);
                 continue;
             }
 
             buffer[i++] = c;
+            buffer[i] = '\0';
             print_char(c);
             video_cursor_reset_blink();
+            shell_autocomplete_reset();
             video_set_deferred_present(0);
             continue;
         }
@@ -93,6 +114,7 @@ static command_input_t read_command_line(char* buffer, int max_len) {
 
             source = CMD_INPUT_SERIAL;
             if (c == '\r' || c == '\n') {
+                shell_autocomplete_reset();
                 break;
             }
             if (c == '\b') {
@@ -100,11 +122,19 @@ static command_input_t read_command_line(char* buffer, int max_len) {
                     i--;
                     serial_putchar('\b');
                 }
+                shell_autocomplete_reset();
+                buffer[i] = '\0';
+                continue;
+            }
+            if (c == '\t') {
+                shell_autocomplete_reset();
                 continue;
             }
 
             buffer[i++] = c;
+            buffer[i] = '\0';
             serial_putchar(c);
+            shell_autocomplete_reset();
             continue;
         }
 

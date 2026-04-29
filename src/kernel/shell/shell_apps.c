@@ -868,11 +868,14 @@ static void shell_apps_sync_host_state(const shell_app_task_t* task, const shell
         return;
     }
 
-    *host->current_dir_cluster = task->current_dir_cluster;
+    /*
+     * Child apps run with a copy of the shell cwd/path and may change it via
+     * app_chdir for their own navigation. Do not propagate that cwd back to
+     * the shell when the app exits.
+     */
     *host->fat16_initialized = task->fat16_initialized;
     *host->app_clip_src_cluster = task->app_clip_src_cluster;
     *host->app_clip_mode = task->app_clip_mode;
-    (void)shell_apps_copy_string(task->current_path, host->current_path, host->current_path_size);
     (void)shell_apps_copy_string(task->app_clip_name, host->app_clip_name, host->app_clip_name_size);
 }
 

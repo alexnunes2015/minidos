@@ -29,6 +29,7 @@ static char last_text[128];
 static int gfx_rect_calls = 0;
 static int gfx_surface_blit_calls = 0;
 static app_gfx_surface_blit_t last_surface_blit;
+static unsigned int stub_ticks = 0;
 
 static void run_all_tests(void);
 
@@ -64,6 +65,10 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
             last_surface_blit = *blit;
         }
         gfx_surface_blit_calls++;
+    }
+
+    if (num == MINIDOS_SYSCALL_GET_TICKS) {
+        return (int)stub_ticks;
     }
 
     return 1;
@@ -109,6 +114,177 @@ static int test_text_box_clips_overflow(void) {
     ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 0);
     if (strcmp(last_text, "EFG") != 0) {
         fprintf(stderr, "text box overflow was not clipped to visible suffix: '%s'\n", last_text);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_text_box_draws_focus_cursor(void) {
+    minidos_app_api_t api;
+    ui_theme_t theme;
+    int unfocused_rects;
+    int focused_rects;
+
+    api.syscall = stub_syscall;
+    theme = ui_theme_classic();
+
+    stub_ticks = 0;
+    gfx_rect_calls = 0;
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 0);
+    unfocused_rects = gfx_rect_calls;
+
+    stub_ticks = 0;
+    gfx_rect_calls = 0;
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 1);
+    focused_rects = gfx_rect_calls;
+
+    if (focused_rects <= unfocused_rects) {
+        fprintf(stderr, "focused text box did not draw an insertion cursor\n");
+        return 0;
+    }
+
+    stub_ticks = 20;
+    gfx_rect_calls = 0;
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 1);
+    if (gfx_rect_calls >= focused_rects) {
+        fprintf(stderr, "focused text box cursor did not blink off\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_checkbox_and_radio_keyboard_dispatch(void) {
+    ui_window_manager_t wm;
+    int window_id;
+    int checkbox_id;
+    int radio_a_id;
+    int radio_b_id;
+    const ui_control_t* checkbox;
+    const ui_control_t* radio_a;
+    const ui_control_t* radio_b;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    window_id = ui_wm_create_window(&wm, ui_rect_make(10, 10, 220, 120), "Controls", 1);
+    checkbox_id = ui_wm_add_checkbox(&wm, window_id, ui_rect_make(8, 8, 120, 20), "Check", 0);
+    radio_a_id = ui_wm_add_radio(&wm, window_id, ui_rect_make(8, 32, 120, 20), "A", 7, 1);
+    radio_b_id = ui_wm_add_radio(&wm, window_id, ui_rect_make(8, 56, 120, 20), "B", 7, 0);
+    if (checkbox_id <= 0 || radio_a_id <= 0 || radio_b_id <= 0) {
+        fprintf(stderr, "failed to create checkbox/radio controls\n");
+        return 0;
+    }
+
+    ui_wm_set_focus_control(&wm, checkbox_id);
+    if (!ui_wm_dispatch_key(&wm, 32)) {
+        fprintf(stderr, "checkbox did not react to keyboard activation\n");
+        return 0;
+    }
+
+    ui_wm_set_focus_control(&wm, radio_b_id);
+    if (!ui_wm_dispatch_key(&wm, 32)) {
+        fprintf(stderr, "radio did not react to keyboard activation\n");
+        return 0;
+    }
+
+    checkbox = ui_wm_find_control_const(&wm, checkbox_id);
+    radio_a = ui_wm_find_control_const(&wm, radio_a_id);
+    radio_b = ui_wm_find_control_const(&wm, radio_b_id);
+    if (!checkbox || !radio_a || !radio_b || !checkbox->checked || radio_a->checked || !radio_b->checked) {
+        fprintf(stderr, "checkbox/radio keyboard state incorrect\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_dropdown_and_scrollbar_mouse_dispatch(void) {
+    ui_window_manager_t wm;
+    int window_id;
+    int dropdown_id;
+    int scrollbar_id;
+    const char* const items[] = {"One", "Two", "Three"};
+    ui_control_t* dropdown;
+    ui_control_t* scrollbar;
+    int out_window_id = 0;
+    int out_control_id = 0;
+    int out_hit_close = 0;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    window_id = ui_wm_create_window(&wm, ui_rect_make(20, 20, 260, 180), "Widget", 1);
+    dropdown_id = ui_wm_add_dropdown(&wm, window_id, ui_rect_make(12, 12, 120, 24), items, 3, 0);
+    scrollbar_id = ui_wm_add_scrollbar(&wm, window_id, ui_rect_make(180, 12, 18, 120), 0, 20, 4, 5);
+    if (dropdown_id <= 0 || scrollbar_id <= 0) {
+        fprintf(stderr, "failed to create dropdown/scrollbar controls\n");
+        return 0;
+    }
+
+    if (ui_wm_dispatch_mouse(&wm, 50, 66, 1, 1, 0, &out_window_id, &out_control_id, &out_hit_close) != 0) {
+        fprintf(stderr, "dropdown header press unexpectedly activated\n");
+        return 0;
+    }
+    if (ui_wm_dispatch_mouse(&wm, 50, 66, 0, 0, 1, &out_window_id, &out_control_id, &out_hit_close) != 1) {
+        fprintf(stderr, "dropdown header click did not open popup\n");
+        return 0;
+    }
+    dropdown = ui_wm_find_control(&wm, dropdown_id);
+    if (!dropdown || !dropdown->open) {
+        fprintf(stderr, "dropdown popup was not opened\n");
+        return 0;
+    }
+
+    if (ui_wm_dispatch_mouse(&wm, 50, 102, 1, 1, 0, &out_window_id, &out_control_id, &out_hit_close) != 0) {
+        fprintf(stderr, "dropdown item press unexpectedly activated\n");
+        return 0;
+    }
+    if (ui_wm_dispatch_mouse(&wm, 50, 102, 0, 0, 1, &out_window_id, &out_control_id, &out_hit_close) != 1) {
+        fprintf(stderr, "dropdown item click did not select item\n");
+        return 0;
+    }
+
+    dropdown = ui_wm_find_control(&wm, dropdown_id);
+    if (!dropdown || dropdown->selected_index != 1 || dropdown->open) {
+        fprintf(stderr, "dropdown selection was not updated by mouse click\n");
+        return 0;
+    }
+
+    if (ui_wm_dispatch_mouse(&wm, 210, 130, 1, 1, 0, &out_window_id, &out_control_id, &out_hit_close) == 0) {
+        scrollbar = ui_wm_find_control(&wm, scrollbar_id);
+        if (!scrollbar || scrollbar->value <= 5) {
+            fprintf(stderr, "scrollbar page click did not advance value\n");
+            return 0;
+        }
+    } else {
+        fprintf(stderr, "scrollbar press should report state change via control update\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_control_visible_bounds_clip_to_client(void) {
+    ui_window_manager_t wm;
+    int window_id;
+    int button_id;
+    const ui_control_t* button;
+    ui_rect_t visible;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    window_id = ui_wm_create_window(&wm, ui_rect_make(20, 20, 120, 80), "Clip", 1);
+    button_id = ui_wm_add_button(&wm, window_id, ui_rect_make(70, 40, 60, 24), "Wide");
+    if (window_id <= 0 || button_id <= 0) {
+        fprintf(stderr, "failed to create clipping test controls\n");
+        return 0;
+    }
+
+    button = ui_wm_find_control_const(&wm, button_id);
+    visible = ui_wm_control_visible_bounds(&wm, button);
+    if (visible.w <= 0 || visible.h <= 0) {
+        fprintf(stderr, "visible bounds unexpectedly empty\n");
+        return 0;
+    }
+    if (visible.w >= 60) {
+        fprintf(stderr, "control bounds were not clipped to the window client area\n");
         return 0;
     }
 
@@ -629,7 +805,23 @@ static void run_all_tests(void) {
         test_status = 1;
         return;
     }
+    if (!test_text_box_draws_focus_cursor()) {
+        test_status = 1;
+        return;
+    }
     if (!test_close_window_promotes_next_visible()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_checkbox_and_radio_keyboard_dispatch()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_dropdown_and_scrollbar_mouse_dispatch()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_control_visible_bounds_clip_to_client()) {
         test_status = 1;
         return;
     }

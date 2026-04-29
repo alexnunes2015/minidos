@@ -48,6 +48,7 @@
 #define EXPLORER_GRID_ICON_W 34
 #define EXPLORER_GRID_ICON_H 30
 #define EXPLORER_MAX_WINDOWS (UI_WM_MAX_WINDOWS - 1)
+#define EXPLORER_HISTORY_MAX 12
 #define TASK_BUTTON_MIN_W 24
 #define TASK_BUTTON_MAX_W 170
 #define WINDOW_RESIZE_MARGIN 5
@@ -79,6 +80,8 @@ typedef struct {
     int status_label_id;
     int status_count_id;
     int status_extra_id;
+    int back_button_id;
+    int forward_button_id;
     int up_button_id;
     int open_button_id;
     int listview_id;
@@ -95,6 +98,12 @@ typedef struct {
     char status_text[EXPLORER_STATUS_LEN];
     char status_count_text[32];
     char status_extra_text[32];
+    int history_count;
+    int history_index;
+    int history_showing_drives[EXPLORER_HISTORY_MAX];
+    int history_drive[EXPLORER_HISTORY_MAX];
+    int history_depth[EXPLORER_HISTORY_MAX];
+    char history_dirs[EXPLORER_HISTORY_MAX][EXPLORER_MAX_DEPTH][13];
     ui_listview_t listview;
 } explorer_state_t;
 
@@ -106,9 +115,17 @@ typedef struct {
     int window_id;
     int label_mouse_id;
     int label_status_id;
+    int label_value_id;
     int button_ok_id;
     int button_cancel_id;
     int input_id;
+    int checkbox_sound_id;
+    int checkbox_grid_id;
+    int radio_theme_classic_id;
+    int radio_theme_cloud_id;
+    int dropdown_speed_id;
+    int menu_actions_id;
+    int scrollbar_zoom_id;
     int dragging;
     int resizing;
     int dragging_window_id;
@@ -141,6 +158,7 @@ typedef struct {
     int active_explorer_index;
     char mouse_text[48];
     char status_text[96];
+    char value_text[128];
     char input_text[64];
     char clock_text[CLOCK_TEXT_LEN];
 } demo_state_t;
@@ -151,12 +169,15 @@ int rect_equal(ui_rect_t a, ui_rect_t b);
 void enter_resource_home(const minidos_app_api_t* api);
 void update_mouse_label_text(demo_state_t* state);
 void update_status_text(demo_state_t* state, const char* text);
+void update_value_label_text(demo_state_t* state);
 void append_two_digits(char* out, unsigned int value);
 void update_clock_text(demo_state_t* state, const minidos_app_api_t* api);
 void enter_desktop_home(const minidos_app_api_t* api);
 void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
     unsigned int fg, ui_rect_t clip);
 void draw_win95_icon_clipped(const minidos_app_api_t* api, ui_rect_t rect, int icon_id, ui_rect_t clip);
+void create_showcase_window(demo_state_t* state);
+void sync_showcase_state(demo_state_t* state);
 
 void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state);
 void draw_desktop_items(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t clip);
@@ -180,6 +201,10 @@ int explorer_open_selected(const minidos_app_api_t* api, demo_state_t* state);
 int explorer_open_selected_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer);
 int explorer_go_up(const minidos_app_api_t* api, demo_state_t* state);
 int explorer_go_up_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer);
+int explorer_go_back(const minidos_app_api_t* api, demo_state_t* state);
+int explorer_go_back_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer);
+int explorer_go_forward(const minidos_app_api_t* api, demo_state_t* state);
+int explorer_go_forward_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer);
 void explorer_close(demo_state_t* state);
 void explorer_close_window(demo_state_t* state, int window_id);
 void explorer_move_selection(demo_state_t* state, int delta);

@@ -84,7 +84,9 @@ explorer_state_t* explorer_for_control(demo_state_t* state, int control_id) {
     }
     for (i = 0; i < EXPLORER_MAX_WINDOWS; i++) {
         explorer_state_t* explorer = &g_explorer_slots[i];
-        if (explorer->up_button_id == control_id
+        if (explorer->back_button_id == control_id
+            || explorer->forward_button_id == control_id
+            || explorer->up_button_id == control_id
             || explorer->open_button_id == control_id
             || explorer->listview_id == control_id
             || explorer->path_label_id == control_id
@@ -239,6 +241,164 @@ static void explorer_update_texts(explorer_state_t* explorer) {
     }
 }
 
+static int explorer_history_matches_index(const explorer_state_t* explorer, int index) {
+    int i;
+
+    if (!explorer || index < 0 || index >= explorer->history_count) {
+        return 0;
+    }
+    if (explorer->history_showing_drives[index] != explorer->showing_drives) {
+        return 0;
+    }
+    if (explorer->showing_drives) {
+        return 1;
+    }
+    if (explorer->history_drive[index] != explorer->drive
+        || explorer->history_depth[index] != explorer->depth) {
+        return 0;
+    }
+    for (i = 0; i < explorer->depth; i++) {
+        if (!str_equal(explorer->history_dirs[index][i], explorer->dirs[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void explorer_history_capture(explorer_state_t* explorer, int index) {
+    int i;
+
+    if (!explorer || index < 0 || index >= EXPLORER_HISTORY_MAX) {
+        return;
+    }
+
+    explorer->history_showing_drives[index] = explorer->showing_drives;
+    explorer->history_drive[index] = explorer->drive;
+    explorer->history_depth[index] = explorer->depth;
+    for (i = 0; i < EXPLORER_MAX_DEPTH; i++) {
+        str_copy(explorer->history_dirs[index][i], explorer->dirs[i],
+            (int)sizeof(explorer->history_dirs[index][i]));
+    }
+}
+
+static void explorer_history_restore(explorer_state_t* explorer, int index) {
+    int i;
+
+    if (!explorer || index < 0 || index >= explorer->history_count) {
+        return;
+    }
+
+    explorer->showing_drives = explorer->history_showing_drives[index];
+    explorer->drive = explorer->history_drive[index];
+    explorer->depth = explorer->history_depth[index];
+    if (explorer->depth < 0) {
+        explorer->depth = 0;
+    } else if (explorer->depth > EXPLORER_MAX_DEPTH) {
+        explorer->depth = EXPLORER_MAX_DEPTH;
+    }
+    for (i = 0; i < EXPLORER_MAX_DEPTH; i++) {
+        str_copy(explorer->dirs[i], explorer->history_dirs[index][i],
+            (int)sizeof(explorer->dirs[i]));
+    }
+    for (i = explorer->depth; i < EXPLORER_MAX_DEPTH; i++) {
+        explorer->dirs[i][0] = '\0';
+    }
+    explorer->last_click_index = -1;
+    explorer->last_click_ticks = 0;
+}
+
+static void explorer_history_reset(explorer_state_t* explorer) {
+    if (!explorer) {
+        return;
+    }
+
+    explorer->history_count = 1;
+    explorer->history_index = 0;
+    explorer_history_capture(explorer, 0);
+}
+
+static void explorer_history_commit_current(explorer_state_t* explorer) {
+    int i;
+
+    if (!explorer) {
+        return;
+    }
+
+    if (explorer->history_count <= 0) {
+        explorer_history_reset(explorer);
+        return;
+    }
+    if (explorer->history_index < 0) {
+        explorer->history_index = 0;
+    }
+    if (explorer->history_index >= explorer->history_count) {
+        explorer->history_index = explorer->history_count - 1;
+    }
+    if (explorer_history_matches_index(explorer, explorer->history_index)) {
+        return;
+    }
+
+    if (explorer->history_index < explorer->history_count - 1) {
+        explorer->history_count = explorer->history_index + 1;
+    }
+
+    if (explorer->history_count >= EXPLORER_HISTORY_MAX) {
+        for (i = 1; i < explorer->history_count; i++) {
+            int j;
+
+            explorer->history_showing_drives[i - 1] = explorer->history_showing_drives[i];
+            explorer->history_drive[i - 1] = explorer->history_drive[i];
+            explorer->history_depth[i - 1] = explorer->history_depth[i];
+            for (j = 0; j < EXPLORER_MAX_DEPTH; j++) {
+                str_copy(explorer->history_dirs[i - 1][j], explorer->history_dirs[i][j],
+                    (int)sizeof(explorer->history_dirs[i - 1][j]));
+            }
+        }
+        explorer->history_count = EXPLORER_HISTORY_MAX - 1;
+    }
+
+    explorer_history_capture(explorer, explorer->history_count);
+    explorer->history_index = explorer->history_count;
+    explorer->history_count++;
+}
+
+static int explorer_can_go_back(const explorer_state_t* explorer) {
+    return explorer && explorer->history_count > 1 && explorer->history_index > 0;
+}
+
+static int explorer_can_go_forward(const explorer_state_t* explorer) {
+    return explorer && explorer->history_count > 1 && explorer->history_index < (explorer->history_count - 1);
+}
+
+static void explorer_update_button_states(demo_state_t* state, explorer_state_t* explorer) {
+    ui_control_t* control;
+    int has_selection;
+
+    if (!state || !explorer) {
+        return;
+    }
+
+    has_selection = explorer->listview.selected_index >= 0
+        && explorer->listview.selected_index < explorer->listview.item_count;
+
+    control = ui_wm_find_control(&state->wm, explorer->back_button_id);
+    if (control) {
+        control->enabled = explorer_can_go_back(explorer);
+    }
+    control = ui_wm_find_control(&state->wm, explorer->forward_button_id);
+    if (control) {
+        control->enabled = explorer_can_go_forward(explorer);
+    }
+    control = ui_wm_find_control(&state->wm, explorer->up_button_id);
+    if (control) {
+        control->enabled = !explorer->showing_drives;
+    }
+    control = ui_wm_find_control(&state->wm, explorer->open_button_id);
+    if (control) {
+        control->enabled = has_selection;
+    }
+}
+
 static int enter_explorer_dir(const minidos_app_api_t* api, const explorer_state_t* explorer) {
     int i;
 
@@ -300,6 +460,7 @@ static void explorer_refresh_list(const minidos_app_api_t* api, demo_state_t* st
         explorer_set_status(explorer, count > 0 ? "Enter para abrir um drive." : "Nenhum drive encontrado.");
         explorer_set_count_text(explorer, count, 1);
         str_copy(explorer->status_extra_text, "Computer", (int)sizeof(explorer->status_extra_text));
+        explorer_update_button_states(state, explorer);
         return;
     }
 
@@ -312,6 +473,7 @@ static void explorer_refresh_list(const minidos_app_api_t* api, demo_state_t* st
 
     if (!enter_explorer_dir(api, explorer)) {
         explorer_set_status(explorer, "Falha ao abrir a pasta.");
+        explorer_update_button_states(state, explorer);
         return;
     }
 
@@ -366,6 +528,7 @@ static void explorer_refresh_list(const minidos_app_api_t* api, demo_state_t* st
         explorer_set_status(explorer, "Duplo clique ou Enter para abrir.");
     }
     str_copy(explorer->status_extra_text, explorer->path_text, (int)sizeof(explorer->status_extra_text));
+    explorer_update_button_states(state, explorer);
 }
 
 static ui_rect_t explorer_default_bounds(const demo_state_t* state) {
@@ -419,6 +582,10 @@ void explorer_relayout_window(demo_state_t* state, int window_id) {
     int list_y;
     int list_w;
     int list_h;
+    int nav_y;
+    int open_x;
+    int up_x;
+    int status_left_w;
     int status_y;
 
     if (!state || window_id == 0) {
@@ -435,21 +602,35 @@ void explorer_relayout_window(demo_state_t* state, int window_id) {
     client_w = client.w;
     client_h = client.h;
     top_h = EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + EXPLORER_ADDR_H;
+    nav_y = EXPLORER_MENU_H + 4;
     status_y = client_h - 22;
+    open_x = client_w - 66;
+    up_x = open_x - 58;
+    if (up_x < 70) {
+        up_x = 70;
+    }
 
+    control = ui_wm_find_control(&state->wm, explorer->back_button_id);
+    if (control) {
+        control->bounds = ui_rect_make(12, nav_y, 24, 22);
+    }
+    control = ui_wm_find_control(&state->wm, explorer->forward_button_id);
+    if (control) {
+        control->bounds = ui_rect_make(40, nav_y, 24, 22);
+    }
     control = ui_wm_find_control(&state->wm, explorer->up_button_id);
     if (control) {
-        control->bounds = ui_rect_make(client_w - 150, EXPLORER_MENU_H + 4, 64, 22);
+        control->bounds = ui_rect_make(up_x, nav_y, 54, 22);
     }
     control = ui_wm_find_control(&state->wm, explorer->open_button_id);
     if (control) {
-        control->bounds = ui_rect_make(client_w - 78, EXPLORER_MENU_H + 4, 64, 22);
+        control->bounds = ui_rect_make(open_x, nav_y, 54, 22);
     }
     control = ui_wm_find_control(&state->wm, explorer->path_label_id);
     if (control) {
         control->bounds = ui_rect_make(12, EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + 6, 56, UI_CHAR_H);
     }
-    field_w = client_w - 252;
+    field_w = up_x - 80;
     if (field_w < 80) {
         field_w = 80;
     }
@@ -458,8 +639,12 @@ void explorer_relayout_window(demo_state_t* state, int window_id) {
         control->bounds = ui_rect_make(74, EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + 4, field_w, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->status_label_id);
+    status_left_w = client_w - 252;
+    if (status_left_w < 72) {
+        status_left_w = 72;
+    }
     if (control) {
-        control->bounds = ui_rect_make(12, status_y, client_w - 268, 16);
+        control->bounds = ui_rect_make(12, status_y, status_left_w, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->status_count_id);
     if (control) {
@@ -545,6 +730,10 @@ static void explorer_ensure_window(demo_state_t* state, explorer_state_t* explor
         int list_y;
         int list_w;
         int list_h;
+        int nav_y;
+        int up_x;
+        int open_x;
+        int status_left_w;
         int status_y;
 
         explorer->window_id = ui_wm_create_window_ex(&state->wm, bounds, explorer->title, 1, 1, 1);
@@ -553,21 +742,35 @@ static void explorer_ensure_window(demo_state_t* state, explorer_state_t* explor
         client_h = bounds.h - 26;
         ui_listview_init(&explorer->listview, client_h - 72);
         top_h = EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + EXPLORER_ADDR_H;
+        nav_y = EXPLORER_MENU_H + 4;
         status_y = client_h - 22;
+        open_x = client_w - 66;
+        up_x = open_x - 58;
+        if (up_x < 70) {
+            up_x = 70;
+        }
+        status_left_w = client_w - 252;
+        if (status_left_w < 72) {
+            status_left_w = 72;
+        }
 
         explorer->path_label_id = ui_wm_add_label(&state->wm, explorer->window_id,
             ui_rect_make(12, EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + 6, 56, UI_CHAR_H), "Endereco:");
+        explorer->back_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
+            ui_rect_make(12, nav_y, 24, 22), "<");
+        explorer->forward_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
+            ui_rect_make(40, nav_y, 24, 22), ">");
         explorer->up_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
-            ui_rect_make(client_w - 150, EXPLORER_MENU_H + 4, 64, 22), "Subir");
+            ui_rect_make(up_x, nav_y, 54, 22), "Subir");
         explorer->open_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
-            ui_rect_make(client_w - 78, EXPLORER_MENU_H + 4, 64, 22), "Abrir");
+            ui_rect_make(open_x, nav_y, 54, 22), "Abrir");
         explorer->status_label_id = ui_wm_add_label(&state->wm, explorer->window_id,
-            ui_rect_make(12, status_y, client_w - 268, 16), explorer->status_text);
+            ui_rect_make(12, status_y, status_left_w, 16), explorer->status_text);
         explorer->status_count_id = ui_wm_add_label(&state->wm, explorer->window_id,
             ui_rect_make(client_w - 252, status_y, 96, 16), explorer->status_count_text);
         explorer->status_extra_id = ui_wm_add_label(&state->wm, explorer->window_id,
             ui_rect_make(client_w - 152, status_y, 140, 16), explorer->status_extra_text);
-        field_w = client_w - 252;
+        field_w = up_x - 80;
         if (field_w < 80) {
             field_w = 80;
         }
@@ -598,6 +801,7 @@ static void explorer_ensure_window(demo_state_t* state, explorer_state_t* explor
         explorer_relayout_window(state, explorer->window_id);
     }
 
+    explorer_update_button_states(state, explorer);
     ui_wm_bring_to_front(&state->wm, explorer->window_id);
     ui_wm_set_focus_control(&state->wm, explorer->listview_id);
     explorer->visible = 1;
@@ -617,6 +821,8 @@ void explorer_init(explorer_state_t* explorer) {
     explorer->status_label_id = 0;
     explorer->status_count_id = 0;
     explorer->status_extra_id = 0;
+    explorer->back_button_id = 0;
+    explorer->forward_button_id = 0;
     explorer->up_button_id = 0;
     explorer->open_button_id = 0;
     explorer->listview_id = 0;
@@ -632,8 +838,20 @@ void explorer_init(explorer_state_t* explorer) {
     explorer->status_text[0] = '\0';
     explorer->status_count_text[0] = '\0';
     explorer->status_extra_text[0] = '\0';
+    explorer->history_count = 0;
+    explorer->history_index = -1;
     for (i = 0; i < EXPLORER_MAX_DEPTH; i++) {
         explorer->dirs[i][0] = '\0';
+    }
+    for (i = 0; i < EXPLORER_HISTORY_MAX; i++) {
+        int j;
+
+        explorer->history_showing_drives[i] = 0;
+        explorer->history_drive[i] = 0;
+        explorer->history_depth[i] = 0;
+        for (j = 0; j < EXPLORER_MAX_DEPTH; j++) {
+            explorer->history_dirs[i][j][0] = '\0';
+        }
     }
     ui_listview_init(&explorer->listview, 160);
     explorer->listview.selected_index = -1;
@@ -744,6 +962,7 @@ void explorer_select_item_in(demo_state_t* state, explorer_state_t* explorer, in
     explorer->listview.selected_index = item_index;
     ui_listview_ensure_visible(&explorer->listview);
     explorer_set_active(state, explorer);
+    explorer_update_button_states(state, explorer);
     bump_layout(state);
 }
 
@@ -770,6 +989,7 @@ void explorer_move_selection_in(demo_state_t* state, explorer_state_t* explorer,
         explorer->listview.selected_index = next;
         ui_listview_ensure_visible(&explorer->listview);
         explorer_set_active(state, explorer);
+        explorer_update_button_states(state, explorer);
         bump_layout(state);
     }
 }
@@ -811,6 +1031,7 @@ int explorer_open_desktop_folder(const minidos_app_api_t* api, demo_state_t* sta
     str_copy(explorer->dirs[2], "Desktop", (int)sizeof(explorer->dirs[2]));
     str_copy(explorer->dirs[3], folder_name, (int)sizeof(explorer->dirs[3]));
     explorer->depth = 4;
+    explorer_history_reset(explorer);
     explorer_refresh_list(api, state, explorer);
     explorer_ensure_window(state, explorer);
     update_status_text(state, "Explorer aberto.");
@@ -840,6 +1061,7 @@ int explorer_open_selected_in(const minidos_app_api_t* api, demo_state_t* state,
         explorer->showing_drives = 0;
         explorer->depth = 0;
         explorer->last_click_index = -1;
+        explorer_history_commit_current(explorer);
         explorer_refresh_list(api, state, explorer);
         update_status_text(state, "Drive aberto no Explorer.");
         bump_layout(state);
@@ -855,6 +1077,7 @@ int explorer_open_selected_in(const minidos_app_api_t* api, demo_state_t* state,
     str_copy(explorer->dirs[explorer->depth], item->name, (int)sizeof(explorer->dirs[explorer->depth]));
     explorer->depth++;
     explorer->last_click_index = -1;
+    explorer_history_commit_current(explorer);
     explorer_refresh_list(api, state, explorer);
     update_status_text(state, "Pasta aberta no Explorer.");
     bump_layout(state);
@@ -879,7 +1102,9 @@ int explorer_go_up_in(const minidos_app_api_t* api, demo_state_t* state, explore
 
     if (explorer->depth <= 0) {
         explorer->showing_drives = 1;
+        explorer->depth = 0;
         explorer->last_click_index = -1;
+        explorer_history_commit_current(explorer);
         explorer_refresh_list(api, state, explorer);
         update_status_text(state, "A mostrar todos os drives.");
         bump_layout(state);
@@ -889,6 +1114,7 @@ int explorer_go_up_in(const minidos_app_api_t* api, demo_state_t* state, explore
     explorer->depth--;
     explorer->dirs[explorer->depth][0] = '\0';
     explorer->last_click_index = -1;
+    explorer_history_commit_current(explorer);
     explorer_refresh_list(api, state, explorer);
     update_status_text(state, "Voltou para a pasta anterior.");
     bump_layout(state);
@@ -897,6 +1123,54 @@ int explorer_go_up_in(const minidos_app_api_t* api, demo_state_t* state, explore
 
 int explorer_go_up(const minidos_app_api_t* api, demo_state_t* state) {
     return explorer_go_up_in(api, state, explorer_active(state));
+}
+
+int explorer_go_back_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer) {
+    if (!api || !state || !explorer) {
+        return 0;
+    }
+
+    explorer_set_active(state, explorer);
+    if (!explorer_can_go_back(explorer)) {
+        explorer_set_status(explorer, "Sem historico anterior.");
+        bump_layout(state);
+        return 0;
+    }
+
+    explorer->history_index--;
+    explorer_history_restore(explorer, explorer->history_index);
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, "Historico: pagina anterior.");
+    bump_layout(state);
+    return 1;
+}
+
+int explorer_go_back(const minidos_app_api_t* api, demo_state_t* state) {
+    return explorer_go_back_in(api, state, explorer_active(state));
+}
+
+int explorer_go_forward_in(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer) {
+    if (!api || !state || !explorer) {
+        return 0;
+    }
+
+    explorer_set_active(state, explorer);
+    if (!explorer_can_go_forward(explorer)) {
+        explorer_set_status(explorer, "Sem historico seguinte.");
+        bump_layout(state);
+        return 0;
+    }
+
+    explorer->history_index++;
+    explorer_history_restore(explorer, explorer->history_index);
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, "Historico: pagina seguinte.");
+    bump_layout(state);
+    return 1;
+}
+
+int explorer_go_forward(const minidos_app_api_t* api, demo_state_t* state) {
+    return explorer_go_forward_in(api, state, explorer_active(state));
 }
 
 void explorer_close_window(demo_state_t* state, int window_id) {

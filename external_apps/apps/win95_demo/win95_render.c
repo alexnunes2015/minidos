@@ -22,8 +22,35 @@ static void draw_status_panel_clipped(const minidos_app_api_t* api, const ui_the
     ui_draw_panel_clipped(api, theme, rect, 0, clip);
 }
 
+static void append_text(char* out, int max_len, const char* text) {
+    int pos = 0;
+
+    if (!out || max_len <= 1 || !text) {
+        return;
+    }
+
+    while (pos < (max_len - 1) && out[pos] != '\0') {
+        pos++;
+    }
+    while (pos < (max_len - 1) && *text != '\0') {
+        out[pos++] = *text++;
+    }
+    out[pos] = '\0';
+}
+
+static void set_prefixed_line(char* out, int out_len, const char* prefix, const char* value) {
+    if (!out || out_len <= 1) {
+        return;
+    }
+    out[0] = '\0';
+    str_copy(out, prefix ? prefix : "", out_len);
+    append_text(out, out_len, value ? value : "");
+}
+
 static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const demo_state_t* state,
     const ui_wm_window_t* win, ui_rect_t clip) {
+    const explorer_state_t* explorer;
+    const ui_listview_item_t* selected_item = 0;
     const ui_theme_t* theme;
     ui_rect_t client_abs;
     ui_rect_t client;
@@ -31,13 +58,20 @@ static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const dem
     ui_rect_t toolbar;
     ui_rect_t addr;
     ui_rect_t sidebar;
+    ui_rect_t menu_clip;
+    ui_rect_t toolbar_clip;
+    ui_rect_t sidebar_text_clip;
     ui_rect_t divider;
-    ui_rect_t toolbar_btn;
+    char line1[52];
+    char line2[52];
+    char line3[52];
+    char line4[52];
 
     if (!api || !state || !win) {
         return;
     }
 
+    explorer = explorer_for_window((demo_state_t*)state, win->id);
     theme = &state->wm.theme;
     client_abs = ui_window_client_rect(&win->window);
     if (ui_rect_is_empty(ui_rect_intersect(client_abs, clip))) {
@@ -50,37 +84,117 @@ static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const dem
     addr = ui_rect_make(client.x, client.y + EXPLORER_MENU_H + EXPLORER_TOOLBAR_H, client.w, EXPLORER_ADDR_H);
     sidebar = ui_rect_make(client.x + 8, client.y + EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + EXPLORER_ADDR_H + 6,
         EXPLORER_SIDEBAR_W, client.h - (EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + EXPLORER_ADDR_H) - 34);
+    menu_clip = ui_rect_intersect(menu, clip);
+    toolbar_clip = ui_rect_intersect(toolbar, clip);
 
     ui_fill_rect_clipped(api, menu, theme->face, clip);
     ui_fill_rect_clipped(api, ui_rect_make(menu.x, menu.y + menu.h - 1, menu.w, 1), theme->shadow, clip);
     ui_draw_text_clipped(api, menu.x + 8, menu.y + 5, "File   Edit   View   Go   Favorites   Help",
-        theme->text, theme->face, clip);
+        theme->text, theme->face, menu_clip);
 
     ui_draw_panel_clipped(api, theme, toolbar, 1, clip);
-    toolbar_btn = ui_rect_make(toolbar.x + 8, toolbar.y + 4, 22, 20);
-    ui_draw_panel_clipped(api, theme, toolbar_btn, 1, clip);
-    ui_draw_text_clipped(api, toolbar_btn.x + 7, toolbar_btn.y + 6, "<", theme->text, theme->face, clip);
-    toolbar_btn = ui_rect_make(toolbar.x + 34, toolbar.y + 4, 22, 20);
-    ui_draw_panel_clipped(api, theme, toolbar_btn, 1, clip);
-    ui_draw_text_clipped(api, toolbar_btn.x + 7, toolbar_btn.y + 6, ">", theme->text, theme->face, clip);
-    toolbar_btn = ui_rect_make(toolbar.x + 60, toolbar.y + 4, 22, 20);
-    ui_draw_panel_clipped(api, theme, toolbar_btn, 1, clip);
-    ui_draw_text_clipped(api, toolbar_btn.x + 7, toolbar_btn.y + 6, "^", theme->text, theme->face, clip);
-
     divider = ui_rect_make(toolbar.x + 90, toolbar.y + 3, 2, toolbar.h - 6);
     ui_fill_rect_clipped(api, ui_rect_make(divider.x, divider.y, 1, divider.h), theme->shadow, clip);
     ui_fill_rect_clipped(api, ui_rect_make(divider.x + 1, divider.y, 1, divider.h), theme->light, clip);
+    ui_draw_text_clipped(api, divider.x + 8, toolbar.y + 6, "Navegacao",
+        theme->text, theme->face, toolbar_clip);
 
     ui_fill_rect_clipped(api, addr, theme->face, clip);
     ui_fill_rect_clipped(api, ui_rect_make(addr.x, addr.y + addr.h - 1, addr.w, 1), theme->shadow, clip);
 
     if (sidebar.h > 0) {
+        line1[0] = '\0';
+        line2[0] = '\0';
+        line3[0] = '\0';
+        line4[0] = '\0';
+        if (explorer && explorer->listview.selected_index >= 0
+            && explorer->listview.selected_index < explorer->listview.item_count) {
+            selected_item = &explorer->listview.items[explorer->listview.selected_index];
+        }
+        if (!explorer || explorer->showing_drives) {
+            str_copy(line1, "Computer", (int)sizeof(line1));
+            str_copy(line2, "Selecione um drive.", (int)sizeof(line2));
+            str_copy(line3, "Back/Forward: [ ]", (int)sizeof(line3));
+            str_copy(line4, "Enter abre.", (int)sizeof(line4));
+        } else if (selected_item && selected_item->is_dir) {
+            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
+            set_prefixed_line(line2, (int)sizeof(line2), "Pasta: ", selected_item->name);
+            str_copy(line3, "Enter abre a pasta.", (int)sizeof(line3));
+            str_copy(line4, "Backspace sobe.", (int)sizeof(line4));
+        } else if (selected_item) {
+            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
+            set_prefixed_line(line2, (int)sizeof(line2), "Ficheiro: ", selected_item->name);
+            str_copy(line3, "Abertura de ficheiros", (int)sizeof(line3));
+            str_copy(line4, "sera adicionada.", (int)sizeof(line4));
+        } else {
+            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
+            str_copy(line2, "Selecione um item.", (int)sizeof(line2));
+            str_copy(line3, "Duplo clique ou Enter.", (int)sizeof(line3));
+            str_copy(line4, "Backspace sobe.", (int)sizeof(line4));
+        }
+
         ui_draw_panel_clipped(api, theme, sidebar, 0, clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 10, "Select an item to",
-            theme->text, theme->face, clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 20, "view its description.",
-            theme->text, theme->face, clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 40, "(C:)", theme->title_active_bg, theme->face, clip);
+        sidebar_text_clip = ui_rect_intersect(ui_rect_inset(sidebar, 3), clip);
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 10, line1,
+            theme->text, theme->face, sidebar_text_clip);
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 22, line2,
+            theme->text, theme->face, sidebar_text_clip);
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 34, line3,
+            theme->shadow, theme->face, sidebar_text_clip);
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 46, line4,
+            theme->shadow, theme->face, sidebar_text_clip);
+    }
+}
+
+static void draw_showcase_chrome_clipped(const minidos_app_api_t* api, const demo_state_t* state,
+    const ui_wm_window_t* win, ui_rect_t clip) {
+    ui_rect_t client;
+    ui_rect_t client_clip;
+    ui_rect_t left_group;
+    ui_rect_t right_group;
+    ui_rect_t notes;
+
+    if (!api || !state || !win || win->id != state->window_id) {
+        return;
+    }
+
+    client = ui_window_client_rect(&win->window);
+    if (ui_rect_is_empty(ui_rect_intersect(client, clip))) {
+        return;
+    }
+    client_clip = ui_rect_intersect(client, clip);
+
+    left_group = ui_rect_make(client.x + 8, client.y + 104, 200, 152);
+    right_group = ui_rect_make(client.x + 228, client.y + 104, 190, 152);
+    notes = ui_rect_make(client.x + 8, client.y + 8, client.w - 16, 42);
+
+    left_group = ui_rect_intersect(left_group, client);
+    right_group = ui_rect_intersect(right_group, client);
+    notes = ui_rect_intersect(notes, client);
+
+    if (!ui_rect_is_empty(left_group)) {
+        ui_draw_panel_clipped(api, &state->wm.theme, left_group, 0, client_clip);
+    }
+    if (!ui_rect_is_empty(right_group)) {
+        ui_draw_panel_clipped(api, &state->wm.theme, right_group, 0, client_clip);
+    }
+    if (!ui_rect_is_empty(notes)) {
+        ui_draw_panel_clipped(api, &state->wm.theme, notes, 0, client_clip);
+    }
+
+    if (!ui_rect_is_empty(left_group)) {
+        ui_draw_text_clipped(api, left_group.x + 8, left_group.y + 8, "Checks e Menu",
+            state->wm.theme.text, state->wm.theme.face, client_clip);
+    }
+    if (!ui_rect_is_empty(right_group)) {
+        ui_draw_text_clipped(api, right_group.x + 8, right_group.y + 8, "Radio, Combo e Scroll",
+            state->wm.theme.text, state->wm.theme.face, client_clip);
+    }
+    if (!ui_rect_is_empty(notes)) {
+        ui_draw_text_clipped(api, notes.x + 8, notes.y + 8, "Janela de validacao dos widgets da runtime UI.",
+            state->wm.theme.text, state->wm.theme.face, client_clip);
+        ui_draw_text_clipped(api, notes.x + 8, notes.y + 24, "TAB move o foco; ENTER/ESPACO ativam o controlo focado.",
+            state->wm.theme.text, state->wm.theme.face, client_clip);
     }
 }
 
@@ -170,17 +284,20 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
             const explorer_state_t* explorer = explorer_for_window((demo_state_t*)state, win->id);
             if (explorer) {
                 draw_explorer_chrome_clipped(api, state, win, rect);
+            } else if (win->id == state->window_id) {
+                draw_showcase_chrome_clipped(api, state, win, rect);
             }
         }
 
         for (c = 0; c < state->wm.control_count; c++) {
             const ui_control_t* control = &state->wm.controls[c];
             ui_rect_t abs_bounds;
+            ui_rect_t text_clip;
 
             if (!control->visible || control->window_id != win->id) {
                 continue;
             }
-            abs_bounds = ui_wm_control_abs_bounds(&state->wm, control);
+            abs_bounds = ui_wm_control_visible_bounds(&state->wm, control);
             if (ui_rect_is_empty(ui_rect_intersect(rect, abs_bounds))) {
                 continue;
             }
@@ -195,20 +312,23 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
 
                 if (explorer && control->id == explorer->path_value_id) {
                     draw_inset_field_clipped(api, &state->wm.theme, abs_bounds, rect);
+                    text_clip = ui_rect_intersect(ui_rect_inset(abs_bounds, 2), rect);
                     ui_draw_text_clipped(api, abs_bounds.x + 4, text_y,
                         control->text ? control->text : "",
-                        state->wm.theme.field_text, state->wm.theme.field_bg, rect);
+                        state->wm.theme.field_text, state->wm.theme.field_bg, text_clip);
                 } else if (explorer && (control->id == explorer->status_label_id
                     || control->id == explorer->status_count_id
                     || control->id == explorer->status_extra_id)) {
                     draw_status_panel_clipped(api, &state->wm.theme, abs_bounds, rect);
+                    text_clip = ui_rect_intersect(ui_rect_inset(abs_bounds, 2), rect);
                     ui_draw_text_clipped(api, abs_bounds.x + 4, text_y,
                         control->text ? control->text : "",
-                        state->wm.theme.text, state->wm.theme.face, rect);
+                        state->wm.theme.text, state->wm.theme.face, text_clip);
                 } else {
+                    text_clip = ui_rect_intersect(abs_bounds, rect);
                     ui_draw_text_clipped(api, abs_bounds.x, abs_bounds.y,
                         control->text ? control->text : "",
-                        state->wm.theme.text, state->wm.theme.field_bg, rect);
+                        state->wm.theme.text, state->wm.theme.field_bg, text_clip);
                 }
             } else if (control->type == UI_CONTROL_BUTTON) {
                 ui_button_t button;
@@ -219,16 +339,53 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
                 button.enabled = control->enabled;
                 ui_draw_button(api, &state->wm.theme, &button);
             } else if (control->type == UI_CONTROL_TEXTINPUT) {
-                ui_draw_text_box(api, &state->wm.theme, abs_bounds,
+                ui_draw_text_box(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
                     control->text ? control->text : "", control->focused);
             } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
                 const explorer_state_t* explorer = explorer_for_control((demo_state_t*)state, control->id);
                 if (explorer) {
-                    draw_explorer_grid(api, state, explorer, abs_bounds, rect);
+                    draw_explorer_grid(api, state, explorer, ui_wm_control_visible_bounds(&state->wm, control), rect);
                 } else {
-                    ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &state->wm.theme);
+                    ui_draw_listview(api, &g_ui_listview_line_buf, ui_wm_control_visible_bounds(&state->wm, control),
+                        control->listview, &state->wm.theme);
                 }
+            } else if (control->type == UI_CONTROL_CHECKBOX) {
+                ui_draw_checkbox(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
+                    control->text ? control->text : "", control->checked, control->focused, control->enabled);
+            } else if (control->type == UI_CONTROL_RADIO) {
+                ui_draw_radio_button(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
+                    control->text ? control->text : "", control->checked, control->focused, control->enabled);
+            } else if (control->type == UI_CONTROL_DROPDOWN) {
+                ui_draw_dropdown(api, &state->wm.theme, ui_wm_control_abs_bounds(&state->wm, control),
+                    control->items, control->item_count, control->selected_index, control->open, control->focused,
+                    control->hot_index);
+            } else if (control->type == UI_CONTROL_MENU) {
+                ui_draw_menu_widget(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
+                    control->items, control->item_count, control->selected_index, control->focused);
+            } else if (control->type == UI_CONTROL_SCROLLBAR) {
+                ui_draw_scrollbar(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
+                    control->min_value, control->max_value, control->page_size, control->value, control->focused);
             }
+        }
+
+        /* Draw expanded dropdown popups last so they stay above sibling controls. */
+        for (c = 0; c < state->wm.control_count; c++) {
+            const ui_control_t* control = &state->wm.controls[c];
+            ui_rect_t popup_bounds;
+
+            if (!control->visible || control->window_id != win->id
+                || control->type != UI_CONTROL_DROPDOWN || !control->open) {
+                continue;
+            }
+
+            popup_bounds = ui_wm_control_visible_bounds(&state->wm, control);
+            if (ui_rect_is_empty(ui_rect_intersect(rect, popup_bounds))) {
+                continue;
+            }
+
+            ui_draw_dropdown(api, &state->wm.theme, ui_wm_control_abs_bounds(&state->wm, control),
+                control->items, control->item_count, control->selected_index, control->open,
+                control->focused, control->hot_index);
         }
     }
 }
