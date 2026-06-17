@@ -26,10 +26,14 @@ static int front_order = 0;
 static int draw_sequence = 0;
 static int test_status = 1;
 static char last_text[128];
+static int gfx_text_calls = 0;
 static int gfx_rect_calls = 0;
 static int gfx_surface_blit_calls = 0;
 static app_gfx_surface_blit_t last_surface_blit;
 static unsigned int stub_ticks = 0;
+static int clip_check_enabled = 0;
+static int clip_check_failed = 0;
+static ui_rect_t clip_check_rect;
 
 static void run_all_tests(void);
 
@@ -40,6 +44,7 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
     if (num == MINIDOS_SYSCALL_GFX_TEXT) {
         const app_gfx_text_t* text = (const app_gfx_text_t*)a0;
 
+        gfx_text_calls++;
         if (!text || !text->text) {
             return 1;
         }
@@ -56,7 +61,17 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
     }
 
     if (num == MINIDOS_SYSCALL_GFX_RECT) {
+        const app_gfx_rect_t* rect = (const app_gfx_rect_t*)a0;
+
         gfx_rect_calls++;
+        if (clip_check_enabled && rect) {
+            if (rect->x < clip_check_rect.x
+                || rect->y < clip_check_rect.y
+                || rect->x + rect->w > clip_check_rect.x + clip_check_rect.w
+                || rect->y + rect->h > clip_check_rect.y + clip_check_rect.h) {
+                clip_check_failed = 1;
+            }
+        }
     }
 
     if (num == MINIDOS_SYSCALL_GFX_SURFACE_BLIT) {
@@ -149,6 +164,72 @@ static int test_text_box_draws_focus_cursor(void) {
     ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 1);
     if (gfx_rect_calls >= focused_rects) {
         fprintf(stderr, "focused text box cursor did not blink off\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_text_clipped_partial_cell_does_not_overdraw(void) {
+    minidos_app_api_t api;
+
+    api.syscall = stub_syscall;
+    gfx_text_calls = 0;
+    gfx_rect_calls = 0;
+    clip_check_enabled = 1;
+    clip_check_failed = 0;
+    clip_check_rect = ui_rect_make(13, 22, 2, 3);
+
+    ui_draw_text_clipped(&api, 10, 20, "A", 0xFFFFFFu, 0x000000u, clip_check_rect);
+
+    clip_check_enabled = 0;
+    if (gfx_text_calls != 0) {
+        fprintf(stderr, "partial clipped text used whole-cell text syscall\n");
+        return 0;
+    }
+    if (gfx_rect_calls <= 0) {
+        fprintf(stderr, "partial clipped text did not render clipped rects\n");
+        return 0;
+    }
+    if (clip_check_failed) {
+        fprintf(stderr, "partial clipped text drew outside the clip rect\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_listview_clipped_uses_surface_clip(void) {
+    minidos_app_api_t api;
+    ui_theme_t theme;
+    ui_listview_t listview;
+
+    api.syscall = stub_syscall;
+    theme = ui_theme_classic();
+    ui_listview_init(&listview, 40);
+    listview.item_count = 1;
+    listview.selected_index = 0;
+    listview.scroll_offset = 0;
+    snprintf(listview.items[0].name, UI_LISTVIEW_ITEM_NAME_MAX, "%s", "ITEM.TXT");
+    listview.items[0].is_dir = 0;
+    listview.items[0].icon_color = 0;
+
+    gfx_surface_blit_calls = 0;
+    memset(&last_surface_blit, 0, sizeof(last_surface_blit));
+    ui_draw_listview_clipped(&api, &g_ui_listview_line_buf,
+        ui_rect_make(10, 20, 120, 40), &listview, &theme,
+        ui_rect_make(15, 25, 7, 6));
+
+    if (gfx_surface_blit_calls != 1) {
+        fprintf(stderr, "clipped listview should blit only intersecting rows, got %d\n",
+            gfx_surface_blit_calls);
+        return 0;
+    }
+    if (last_surface_blit.clip_x != 15 || last_surface_blit.clip_y != 25
+        || last_surface_blit.clip_w != 7 || last_surface_blit.clip_h != 6) {
+        fprintf(stderr, "clipped listview blit used wrong clip: %d,%d %dx%d\n",
+            last_surface_blit.clip_x, last_surface_blit.clip_y,
+            last_surface_blit.clip_w, last_surface_blit.clip_h);
         return 0;
     }
 
@@ -806,6 +887,14 @@ static void run_all_tests(void) {
         return;
     }
     if (!test_text_box_draws_focus_cursor()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_text_clipped_partial_cell_does_not_overdraw()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_listview_clipped_uses_surface_clip()) {
         test_status = 1;
         return;
     }

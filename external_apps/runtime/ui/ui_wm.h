@@ -285,8 +285,24 @@ static inline void ui_draw_window(const minidos_app_api_t* api, const ui_theme_t
         title_text_x = 18;
     }
 
-    ui_draw_text(api, title_rect.x + title_text_x, title_rect.y + 4,
-        window->title ? window->title : "", title_fg, title_bg);
+    {
+        /* Keep long titles inside the title bar and clear of the caption buttons. */
+        ui_rect_t title_text_clip = title_rect;
+        int reserved = 0;
+
+        if (window->has_close_button && title_rect.w >= 20) {
+            reserved = 20;
+        }
+        if ((window->has_minimize_button || window->has_maximize_button) && title_rect.w >= 56) {
+            reserved = 56;
+        }
+        title_text_clip.w -= reserved;
+        if (title_text_clip.w < 0) {
+            title_text_clip.w = 0;
+        }
+        ui_draw_text_clipped(api, title_rect.x + title_text_x, title_rect.y + 4,
+            window->title ? window->title : "", title_fg, title_bg, title_text_clip);
+    }
 
     client_rect = ui_window_client_rect(window);
     ui_fill_rect(api, client_rect, theme->field_bg);
@@ -813,7 +829,12 @@ static inline int ui_wm_hit_test_control(const ui_window_manager_t* wm, int wind
         abs_bounds = ui_wm_control_abs_bounds(wm, control);
         item_index = ui_wm_dropdown_item_at(control, abs_bounds, x, y);
         if (item_index >= 0 || ui_rect_contains(&abs_bounds, x, y)) {
-            return control->id;
+            /* Rendering clips the popup to the window client area, so only
+             * accept hits inside the visible (client-clipped) bounds. */
+            ui_rect_t visible = ui_wm_control_visible_bounds(wm, control);
+            if (ui_rect_contains(&visible, x, y)) {
+                return control->id;
+            }
         }
     }
 
@@ -1482,8 +1503,16 @@ static inline void ui_wm_redraw_dirty(const minidos_app_api_t* api,
     int draw_count;
     ui_rect_t desktop;
     ui_rect_t dirty_desktop;
+    ui_rect_t effective;
 
     if (!api || !wm || ui_rect_is_empty(dirty)) { return; }
+
+    /* Window chrome and controls are painted unclipped, so a lower window may
+     * repaint pixels outside the original dirty rect. Track the union of
+     * everything painted so far and use it for the higher windows, otherwise
+     * a window above would only repaint the original dirty area and lower
+     * window pixels would bleed through. */
+    effective = dirty;
 
     /* Layer 0: desktop background (clipped to dirty) */
     desktop = ui_rect_make(0, 0, screen_w, screen_h);
@@ -1530,23 +1559,24 @@ static inline void ui_wm_redraw_dirty(const minidos_app_api_t* api,
         drawn[best_index] = 1;
 
         win = &wm->windows[best_index];
-        win_dirty = ui_rect_intersect(dirty, win->window.bounds);
+        win_dirty = ui_rect_intersect(effective, win->window.bounds);
         if (ui_rect_is_empty(win_dirty)) { continue; }
 
         /* Check if dirty touches chrome (title/border) */
         title_rect = ui_window_title_bar_rect(&win->window);
         client_rect = ui_window_client_rect(&win->window);
 
-        if (!ui_rect_is_empty(ui_rect_intersect(dirty, title_rect))
+        if (!ui_rect_is_empty(ui_rect_intersect(effective, title_rect))
             || win_dirty.x <= win->window.bounds.x + 4
             || win_dirty.y <= win->window.bounds.y + 4
             || win_dirty.x + win_dirty.w >= win->window.bounds.x + win->window.bounds.w - 4
             || win_dirty.y + win_dirty.h >= win->window.bounds.y + win->window.bounds.h - 4) {
             /* Dirty touches chrome — repaint full window chrome */
             ui_draw_window(api, &wm->theme, &win->window);
+            effective = ui_rect_union(effective, win->window.bounds);
         } else {
             /* Only client area — fill damaged client region */
-            ui_fill_rect(api, ui_rect_intersect(dirty, client_rect), wm->theme.field_bg);
+            ui_fill_rect(api, ui_rect_intersect(effective, client_rect), wm->theme.field_bg);
         }
 
         /* Controls: only those intersecting dirty rect */
@@ -1556,12 +1586,18 @@ static inline void ui_wm_redraw_dirty(const minidos_app_api_t* api,
 
             if (!control->visible || control->window_id != win->id) { continue; }
                 abs_bounds = ui_wm_control_visible_bounds(wm, control);
-                if (ui_rect_is_empty(ui_rect_intersect(dirty, abs_bounds))) { continue; }
+                if (ui_rect_is_empty(ui_rect_intersect(effective, abs_bounds))) { continue; }
+
+            /* The control is painted in full, so widen the effective dirty
+             * area for any window drawn above this one. */
+            if (control->type != UI_CONTROL_LABEL) {
+                effective = ui_rect_union(effective, ui_wm_control_render_bounds(wm, control));
+            }
 
             if (control->type == UI_CONTROL_LABEL) {
                 ui_draw_text_clipped(api, abs_bounds.x, abs_bounds.y,
                     control->text ? control->text : "",
-                    wm->theme.text, wm->theme.field_bg, dirty);
+                    wm->theme.text, wm->theme.field_bg, effective);
             } else if (control->type == UI_CONTROL_BUTTON) {
                 ui_button_t button;
                 button.bounds = abs_bounds;

@@ -328,24 +328,24 @@ void add_window_damage_for_cursor(ui_dirty_list_t* dirty,
     const demo_state_t* state,
     ui_rect_t previous_cursor_rect,
     ui_rect_t current_cursor_rect) {
-    ui_rect_t window_rect;
     int i;
 
     if (!dirty || !state) {
         return;
     }
 
-    for (i = 0; i < state->wm.window_count; i++) {
-        const ui_wm_window_t* win = &state->wm.windows[i];
+    for (i = 0; i < state->wm.control_count; i++) {
+        const ui_control_t* control = &state->wm.controls[i];
+        ui_rect_t render_bounds;
 
-        if (!win->visible || win->window.minimized) {
+        if (!control->visible || control->type != UI_CONTROL_DROPDOWN || !control->open) {
             continue;
         }
 
-        window_rect = win->window.bounds;
-        if (!ui_rect_is_empty(ui_rect_intersect(previous_cursor_rect, window_rect))
-            || !ui_rect_is_empty(ui_rect_intersect(current_cursor_rect, window_rect))) {
-            ui_dirty_list_add(dirty, window_rect);
+        render_bounds = ui_wm_control_visible_bounds(&state->wm, control);
+        if (!ui_rect_is_empty(ui_rect_intersect(previous_cursor_rect, render_bounds))
+            || !ui_rect_is_empty(ui_rect_intersect(current_cursor_rect, render_bounds))) {
+            ui_dirty_list_add(dirty, render_bounds);
         }
     }
 }
@@ -363,6 +363,20 @@ ui_rect_t start_menu_rect(const demo_state_t* state) {
     }
 
     return ui_rect_make(2, menu_y, START_MENU_W, START_MENU_H);
+}
+
+/* Painted area of the start menu: includes the 2px drop shadow drawn at
+ * (menu.x + 2, menu.y + 2). Use this for redraw/intersection tests so the
+ * shadow strip is repainted together with the menu. */
+ui_rect_t start_menu_paint_rect(const demo_state_t* state) {
+    ui_rect_t menu = start_menu_rect(state);
+
+    if (ui_rect_is_empty(menu)) {
+        return menu;
+    }
+    menu.w += 2;
+    menu.h += 2;
+    return menu;
 }
 
 ui_rect_t start_menu_item_rect(const demo_state_t* state, int item_index) {

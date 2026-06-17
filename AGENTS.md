@@ -32,6 +32,7 @@ Dependencies used by the build/tests include `gcc` (with `-m32`), `ld`, `nasm`, 
 - Use `make test` for the basic smoke suite, or `./tests/test.sh <name>` for specific cases.
 - Test scripts expect `minidos.img` to exist; run `make` first.
 - For serial-driven testing, wait for the serial log to say `Entering main loop` before sending commands.
+- Use `make test-ui-runtime` for UI runtime and rendering changes under `external_apps/`.
 - Use `make test-serial` (or `python3 tests/test_serial.py "ver" "drives"`) to send commands over COM1 and verify acceptance via the `Command:` serial log.
 
 ## Commit & Pull Request Guidelines
@@ -58,5 +59,6 @@ Dependencies used by the build/tests include `gcc` (with `-m32`), `ld`, `nasm`, 
 
 ## Agent Workflow
 - Follow `docs/DEVELOPMENT_PROTOCOL.md` for any non-trivial task.
+- For UI/runtime work, prefer `make test-ui-runtime` alongside the protocol tier that applies to the change.
 - Run the appropriate validation tier before claiming completion.
 - If a change touches build/image/debug behavior, keep `docs/DEBUGGING.md` and `docs/TEST_SCRIPTS.md` aligned in the same task.

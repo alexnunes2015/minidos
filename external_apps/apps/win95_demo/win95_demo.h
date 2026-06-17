@@ -34,6 +34,9 @@
 #define DESKTOP_ICON_H 32
 #define CLOCK_TEXT_LEN 9
 #define CLOCK_REFRESH_MS 1000
+/* Idle wait while a textinput is focused, so the caret blink phase
+ * (app ticks / 20) is sampled often enough to animate. */
+#define CARET_BLINK_POLL_MS 120
 #define DOUBLE_CLICK_TICKS 30
 #define EXPLORER_MAX_DEPTH 12
 #define EXPLORER_TITLE_LEN 32
@@ -153,6 +156,7 @@ typedef struct {
     int selected_desktop_item;
     int last_desktop_click_index;
     unsigned int last_desktop_click_ticks;
+    unsigned int caret_blink_phase;
     int desktop_item_count;
     desktop_item_t desktop_items[DESKTOP_MAX_ITEMS];
     int active_explorer_index;
@@ -231,6 +235,7 @@ void add_window_damage_for_cursor(ui_dirty_list_t* dirty, const demo_state_t* st
     ui_rect_t previous_cursor_rect, ui_rect_t current_cursor_rect);
 
 ui_rect_t start_menu_rect(const demo_state_t* state);
+ui_rect_t start_menu_paint_rect(const demo_state_t* state);
 ui_rect_t start_menu_item_rect(const demo_state_t* state, int item_index);
 ui_rect_t start_menu_exit_rect(const demo_state_t* state);
 void dismiss_start_menu(demo_state_t* state);
@@ -244,6 +249,7 @@ void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* state);
 void draw_resize_hint(const minidos_app_api_t* api, const demo_state_t* state);
 void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state);
 void draw_taskbar_overlay(const minidos_app_api_t* api, const demo_state_t* state);
+void draw_taskbar_overlay_clipped(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t clip);
 
 void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_rect_t rect);
 void render_clock_update(const minidos_app_api_t* api, const demo_state_t* state);
@@ -251,6 +257,8 @@ void render_partial_motion(const minidos_app_api_t* api, const demo_state_t* sta
     const app_mouse_state_t* previous_mouse);
 void render_partial_drag(const minidos_app_api_t* api, const demo_state_t* state,
     ui_rect_t previous_drag_rect, const app_mouse_state_t* previous_mouse);
+void render_dirty_regions(const minidos_app_api_t* api, const demo_state_t* state,
+    const ui_dirty_list_t* dirty);
 void render(const minidos_app_api_t* api, const demo_state_t* state);
 
 int handle_keyboard(const minidos_app_api_t* api, demo_state_t* state, char c);

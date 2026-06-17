@@ -256,12 +256,77 @@ static inline void ui_draw_text(const minidos_app_api_t* api, int x, int y, cons
     (void)app_gfx_text(api, &gfx_text);
 }
 
+static const unsigned char ui_font_8x8[95][8];
+
+static inline void ui_draw_char_cell_partially_clipped(const minidos_app_api_t* api, int x, int y, char ch,
+    unsigned int fg, unsigned int bg, ui_rect_t clip) {
+    ui_rect_t char_rect;
+    ui_rect_t draw_rect;
+    const unsigned char* glyph;
+    int row;
+
+    if (!api) {
+        return;
+    }
+
+    char_rect = ui_rect_make(x, y, UI_CHAR_W, UI_CHAR_H);
+    draw_rect = ui_rect_intersect(char_rect, clip);
+    if (ui_rect_is_empty(draw_rect)) {
+        return;
+    }
+
+    if (ch < 32 || ch > 126) {
+        ch = ' ';
+    }
+    glyph = ui_font_8x8[ch - 32];
+
+    ui_fill_rect(api, draw_rect, bg);
+    for (row = 0; row < UI_CHAR_H; row++) {
+        int py = y + row;
+        unsigned char bits;
+        int col = 0;
+
+        if (py < draw_rect.y || py >= draw_rect.y + draw_rect.h) {
+            continue;
+        }
+
+        bits = glyph[row];
+        while (col < UI_CHAR_W) {
+            int run_start;
+            int run_len;
+
+            while (col < UI_CHAR_W
+                && (!(bits & (0x80u >> col))
+                    || x + col < draw_rect.x
+                    || x + col >= draw_rect.x + draw_rect.w)) {
+                col++;
+            }
+            if (col >= UI_CHAR_W) {
+                break;
+            }
+
+            run_start = col;
+            run_len = 0;
+            while (col < UI_CHAR_W
+                && (bits & (0x80u >> col))
+                && x + col >= draw_rect.x
+                && x + col < draw_rect.x + draw_rect.w) {
+                col++;
+                run_len++;
+            }
+            if (run_len > 0) {
+                ui_fill_rect(api, ui_rect_make(x + run_start, py, run_len, 1), fg);
+            }
+        }
+    }
+}
+
 /* Clipped fill: only draws the intersection of rect and clip */
 static inline void ui_fill_rect_clipped(const minidos_app_api_t* api, ui_rect_t rect, unsigned int color, ui_rect_t clip) {
     ui_fill_rect(api, ui_rect_intersect(rect, clip), color);
 }
 
-/* Clipped text: renders only characters whose 8x8 cell intersects clip */
+/* Clipped text: preserves the fast text syscall for fully visible cells and clips edge cells pixel-exactly. */
 static inline void ui_draw_text_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
     unsigned int fg, unsigned int bg, ui_rect_t clip) {
     int i;
@@ -274,6 +339,10 @@ static inline void ui_draw_text_clipped(const minidos_app_api_t* api, int x, int
     for (i = 0; text[i] != '\0'; i++) {
         char_rect = ui_rect_make(x + i * UI_CHAR_W, y, UI_CHAR_W, UI_CHAR_H);
         if (ui_rect_is_empty(ui_rect_intersect(char_rect, clip))) {
+            continue;
+        }
+        if (!ui_rect_contains_rect(&clip, &char_rect)) {
+            ui_draw_char_cell_partially_clipped(api, char_rect.x, char_rect.y, text[i], fg, bg, clip);
             continue;
         }
         single[0] = text[i];
@@ -790,22 +859,27 @@ static inline void ui_linebuf_text(unsigned char* buf, int buf_w, int buf_h,
     }
 }
 
-/* Render one listview row into a line buffer and blit it to screen */
-static inline void ui_draw_listview_line(const minidos_app_api_t* api,
+static inline void ui_draw_listview_line_with_clip(const minidos_app_api_t* api,
     ui_listview_line_buf_t* line_buf,
     int dst_x, int dst_y, int line_w,
     const ui_listview_item_t* item, int is_selected,
-    int row_index, const ui_theme_t* theme) {
+    int row_index, const ui_theme_t* theme,
+    ui_rect_t clip, int use_clip) {
     unsigned int bg;
     unsigned int fg;
     unsigned int type_fg;
     app_gfx_surface_blit_t blit;
     int clamped_w;
+    ui_rect_t dst_rect;
+    ui_rect_t clipped;
 
     if (!api || !line_buf || !item || !theme || line_w <= 0) { return; }
 
     clamped_w = line_w;
     if (clamped_w > UI_LISTVIEW_LINE_MAX_W) { clamped_w = UI_LISTVIEW_LINE_MAX_W; }
+    dst_rect = ui_rect_make(dst_x, dst_y, clamped_w, UI_LISTVIEW_ROW_H);
+    clipped = use_clip ? ui_rect_intersect(dst_rect, clip) : dst_rect;
+    if (use_clip && ui_rect_is_empty(clipped)) { return; }
 
     /* Choose colors */
     if (is_selected) {
@@ -848,13 +922,32 @@ static inline void ui_draw_listview_line(const minidos_app_api_t* api,
     blit.format = APP_SURFACE_FORMAT_XRGB8888;
     blit.dest_x = dst_x;
     blit.dest_y = dst_y;
-    blit.clip_x = -1;
-    blit.clip_y = 0;
-    blit.clip_w = 0;
-    blit.clip_h = 0;
+    blit.clip_x = use_clip ? clipped.x : -1;
+    blit.clip_y = use_clip ? clipped.y : 0;
+    blit.clip_w = use_clip ? clipped.w : 0;
+    blit.clip_h = use_clip ? clipped.h : 0;
     blit.dest_w = clamped_w;
     blit.dest_h = UI_LISTVIEW_ROW_H;
     (void)app_gfx_surface_blit(api, &blit);
+}
+
+/* Render one listview row into a line buffer and blit it to screen */
+static inline void ui_draw_listview_line(const minidos_app_api_t* api,
+    ui_listview_line_buf_t* line_buf,
+    int dst_x, int dst_y, int line_w,
+    const ui_listview_item_t* item, int is_selected,
+    int row_index, const ui_theme_t* theme) {
+    ui_draw_listview_line_with_clip(api, line_buf, dst_x, dst_y, line_w,
+        item, is_selected, row_index, theme, ui_rect_make(0, 0, 0, 0), 0);
+}
+
+static inline void ui_draw_listview_line_clipped(const minidos_app_api_t* api,
+    ui_listview_line_buf_t* line_buf,
+    int dst_x, int dst_y, int line_w,
+    const ui_listview_item_t* item, int is_selected,
+    int row_index, const ui_theme_t* theme, ui_rect_t clip) {
+    ui_draw_listview_line_with_clip(api, line_buf, dst_x, dst_y, line_w,
+        item, is_selected, row_index, theme, clip, 1);
 }
 
 /* Draw the full listview: all visible rows via batch blit */
@@ -884,6 +977,40 @@ static inline void ui_draw_listview(const minidos_app_api_t* api,
             /* Empty row below items */
             ui_fill_rect(api, ui_rect_make(bounds.x, dst_y, line_w, UI_LISTVIEW_ROW_H),
                 theme->field_bg);
+        }
+    }
+}
+
+static inline void ui_draw_listview_clipped(const minidos_app_api_t* api,
+    ui_listview_line_buf_t* line_buf,
+    ui_rect_t bounds, const ui_listview_t* lv, const ui_theme_t* theme, ui_rect_t clip) {
+    int i;
+    int line_w;
+    int visible;
+
+    if (!api || !line_buf || !lv || !theme) { return; }
+
+    line_w = bounds.w;
+    if (line_w > UI_LISTVIEW_LINE_MAX_W) { line_w = UI_LISTVIEW_LINE_MAX_W; }
+    visible = lv->visible_count;
+
+    for (i = 0; i < visible; i++) {
+        int item_idx = lv->scroll_offset + i;
+        int dst_y = bounds.y + i * UI_LISTVIEW_ROW_H;
+        ui_rect_t line_rect = ui_rect_make(bounds.x, dst_y, line_w, UI_LISTVIEW_ROW_H);
+
+        if (ui_rect_is_empty(ui_rect_intersect(line_rect, clip))) {
+            continue;
+        }
+
+        if (item_idx < lv->item_count) {
+            ui_draw_listview_line_clipped(api, line_buf,
+                bounds.x, dst_y, line_w,
+                &lv->items[item_idx],
+                item_idx == lv->selected_index,
+                i, theme, clip);
+        } else {
+            ui_fill_rect_clipped(api, line_rect, theme->field_bg, clip);
         }
     }
 }

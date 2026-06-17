@@ -287,6 +287,34 @@ static int handle_activated_control(const minidos_app_api_t* api, demo_state_t* 
     return 0;
 }
 
+/* Visual WM state that ui_wm_dispatch_mouse can clear without reporting a
+ * control id (e.g. releasing outside a pressed button, or a click on empty
+ * space closing an open dropdown). Snapshot it around the dispatch so those
+ * transitions still trigger a repaint instead of leaving stale pixels. */
+static void snapshot_wm_visual_state(const demo_state_t* state, int* popup_open, int* pressed_any) {
+    int i;
+
+    *popup_open = 0;
+    *pressed_any = 0;
+    if (!state) {
+        return;
+    }
+
+    for (i = 0; i < state->wm.control_count; i++) {
+        const ui_control_t* control = &state->wm.controls[i];
+
+        if (control->id == 0 || !control->visible) {
+            continue;
+        }
+        if (control->type == UI_CONTROL_DROPDOWN && control->open) {
+            *popup_open = 1;
+        }
+        if (control->pressed) {
+            *pressed_any = 1;
+        }
+    }
+}
+
 static int explorer_window_is_active(demo_state_t* state, explorer_state_t** out_explorer) {
     explorer_state_t* explorer;
 
@@ -638,15 +666,29 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
         }
     }
 
-    activated = ui_wm_dispatch_mouse(&state->wm,
-        state->mouse.x,
-        state->mouse.y,
-        left_down,
-        left_pressed,
-        left_released,
-        &out_window_id,
-        &out_control_id,
-        &out_hit_close);
+    {
+        int pre_popup_open;
+        int pre_pressed_any;
+        int post_popup_open;
+        int post_pressed_any;
+
+        snapshot_wm_visual_state(state, &pre_popup_open, &pre_pressed_any);
+
+        activated = ui_wm_dispatch_mouse(&state->wm,
+            state->mouse.x,
+            state->mouse.y,
+            left_down,
+            left_pressed,
+            left_released,
+            &out_window_id,
+            &out_control_id,
+            &out_hit_close);
+
+        snapshot_wm_visual_state(state, &post_popup_open, &post_pressed_any);
+        if (pre_popup_open != post_popup_open || pre_pressed_any != post_pressed_any) {
+            state->layout_version++;
+        }
+    }
 
     if (out_control_id != 0 || activated) {
         state->layout_version++;

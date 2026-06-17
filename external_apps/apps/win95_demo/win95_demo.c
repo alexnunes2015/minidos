@@ -260,6 +260,71 @@ void update_clock_text(demo_state_t* state, const minidos_app_api_t* api) {
     state->clock_text[5] = '\0';
 }
 
+static ui_rect_t window_rect_by_id(const demo_state_t* state, int window_id) {
+    const ui_wm_window_t* win;
+
+    if (!state || window_id == 0) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    win = ui_wm_find_window_const(&state->wm, window_id);
+    if (!win || !win->visible || win->window.minimized) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    return win->window.bounds;
+}
+
+static void copy_window_title_by_id(const demo_state_t* state, int window_id, char* out, int out_len) {
+    const ui_wm_window_t* win;
+
+    if (!out || out_len <= 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!state || window_id == 0) {
+        return;
+    }
+
+    win = ui_wm_find_window_const(&state->wm, window_id);
+    if (!win || !win->window.title) {
+        return;
+    }
+
+    str_copy(out, win->window.title, out_len);
+}
+
+/* Bounds of the focused textinput, or an empty rect when none is focused.
+ * Used to damage the caret area when the blink phase flips. */
+static ui_rect_t focused_textinput_rect(const demo_state_t* state) {
+    const ui_control_t* control;
+    const ui_wm_window_t* win;
+
+    if (!state) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    control = ui_wm_find_control_const(&state->wm, state->wm.focused_control_id);
+    if (!control || control->type != UI_CONTROL_TEXTINPUT || !control->visible) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    win = ui_wm_find_window_const(&state->wm, control->window_id);
+    if (!win || !win->visible || win->window.minimized) {
+        return ui_rect_make(0, 0, 0, 0);
+    }
+
+    return ui_wm_control_visible_bounds(&state->wm, control);
+}
+
+static void add_desktop_item_dirty(ui_dirty_list_t* dirty, const demo_state_t* state, int item_index) {
+    if (!dirty || !state || item_index < 0 || item_index >= state->desktop_item_count) {
+        return;
+    }
+
+    ui_dirty_list_add(dirty, state->desktop_items[item_index].bounds);
+}
+
 void enter_desktop_home(const minidos_app_api_t* api) {
     if (!api) {
         return;
@@ -360,6 +425,7 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->resize_start_bounds = ui_rect_make(0, 0, 0, 0);
     state->drag_preview_bounds = ui_rect_make(0, 0, 0, 0);
     state->layout_version = 0;
+    state->caret_blink_phase = 0;
     state->start_menu_open = 0;
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
@@ -404,20 +470,33 @@ int app_main(const minidos_app_api_t* api) {
     render(api, &state);
 
     while (1) {
-        int event_mask = app_wait_event_timeout(api, state.mouse.seq, CLOCK_REFRESH_MS);
+        /* Wake often enough to animate the caret while a textinput is focused. */
+        int wait_ms = ui_rect_is_empty(focused_textinput_rect(&state))
+            ? CLOCK_REFRESH_MS : CARET_BLINK_POLL_MS;
+        int event_mask = app_wait_event_timeout(api, state.mouse.seq, wait_ms);
         int need_full_render = 0;
+        int need_partial_render = 0;
+        ui_dirty_list_t partial_dirty;
+
+        ui_dirty_list_init(&partial_dirty);
 
         if (event_mask & APP_EVENT_MOUSE) {
             app_mouse_state_t previous_mouse = state.mouse;
             ui_rect_t previous_window_rect = current_window_rect(&state);
             ui_rect_t previous_drag_rect = current_drag_preview_rect(&state);
             ui_rect_t previous_explorer_rect = explorer_window_rect(&state);
+            int previous_active_window_id = state.wm.active_window_id;
+            ui_rect_t previous_active_window_rect = window_rect_by_id(&state, previous_active_window_id);
+            char previous_active_title[EXPLORER_TITLE_LEN];
             int previous_layout_version = state.layout_version;
             int previous_start_menu_open = state.start_menu_open;
             int previous_start_button_pressed = state.start_button_pressed;
             int previous_start_menu_pressed_item = state.start_menu_pressed_item;
             int previous_start_menu_hot_item = state.start_menu_hot_item;
             int previous_selected_desktop_item = state.selected_desktop_item;
+
+            copy_window_title_by_id(&state, previous_active_window_id,
+                previous_active_title, (int)sizeof(previous_active_title));
             (void)app_mouse_state(api, &state.mouse);
             update_mouse_label_text(&state);
             if (handle_mouse(api, &state, &previous_mouse)) {
@@ -455,15 +534,65 @@ int app_main(const minidos_app_api_t* api) {
 
                 need_full_render = 1;
             }
-            if (previous_start_menu_open != state.start_menu_open
-                || previous_start_button_pressed != state.start_button_pressed
-                || previous_start_menu_pressed_item != state.start_menu_pressed_item
-                || previous_start_menu_hot_item != state.start_menu_hot_item
-                || previous_selected_desktop_item != state.selected_desktop_item
-                || previous_layout_version != state.layout_version
-                || !rect_equal(previous_window_rect, current_window_rect(&state))
-                || !rect_equal(previous_explorer_rect, explorer_window_rect(&state))
-                || !rect_equal(previous_drag_rect, current_drag_preview_rect(&state))) {
+
+            {
+                ui_rect_t current_window_rect_value = current_window_rect(&state);
+                ui_rect_t current_explorer_rect = explorer_window_rect(&state);
+                ui_rect_t current_drag_rect = current_drag_preview_rect(&state);
+                int current_active_window_id = state.wm.active_window_id;
+                ui_rect_t current_active_window_rect = window_rect_by_id(&state, current_active_window_id);
+                char current_active_title[EXPLORER_TITLE_LEN];
+                int menu_changed = previous_start_menu_open != state.start_menu_open
+                    || previous_start_button_pressed != state.start_button_pressed
+                    || previous_start_menu_pressed_item != state.start_menu_pressed_item
+                    || previous_start_menu_hot_item != state.start_menu_hot_item;
+                int desktop_selection_changed = previous_selected_desktop_item != state.selected_desktop_item;
+                int layout_changed = previous_layout_version != state.layout_version;
+                int main_window_changed = !rect_equal(previous_window_rect, current_window_rect_value);
+                int explorer_window_changed = !rect_equal(previous_explorer_rect, current_explorer_rect);
+                int active_window_changed = previous_active_window_id != current_active_window_id
+                    || !rect_equal(previous_active_window_rect, current_active_window_rect);
+                int title_changed;
+
+                copy_window_title_by_id(&state, current_active_window_id,
+                    current_active_title, (int)sizeof(current_active_title));
+                title_changed = !str_equal(previous_active_title, current_active_title);
+
+                if (menu_changed || !rect_equal(previous_drag_rect, current_drag_rect)) {
+                    need_full_render = 1;
+                }
+
+                if (desktop_selection_changed) {
+                    add_desktop_item_dirty(&partial_dirty, &state, previous_selected_desktop_item);
+                    add_desktop_item_dirty(&partial_dirty, &state, state.selected_desktop_item);
+                    need_partial_render = 1;
+                }
+
+                if (layout_changed || main_window_changed || explorer_window_changed
+                    || active_window_changed || title_changed) {
+                    ui_dirty_list_add(&partial_dirty, previous_window_rect);
+                    ui_dirty_list_add(&partial_dirty, current_window_rect_value);
+                    ui_dirty_list_add(&partial_dirty, previous_explorer_rect);
+                    ui_dirty_list_add(&partial_dirty, current_explorer_rect);
+                    ui_dirty_list_add(&partial_dirty, previous_active_window_rect);
+                    ui_dirty_list_add(&partial_dirty, current_active_window_rect);
+                    need_partial_render = 1;
+
+                    if (main_window_changed || explorer_window_changed) {
+                        ui_dirty_list_add(&partial_dirty, taskbar_rect(&state));
+                    } else {
+                        if (active_window_changed) {
+                            ui_dirty_list_add(&partial_dirty, taskbar_button_rect(&state, previous_active_window_id));
+                            ui_dirty_list_add(&partial_dirty, taskbar_button_rect(&state, current_active_window_id));
+                        }
+                        if (title_changed) {
+                            ui_dirty_list_add(&partial_dirty, taskbar_button_rect(&state, current_active_window_id));
+                        }
+                    }
+                }
+            }
+
+            if (need_partial_render && partial_dirty.count <= 0) {
                 need_full_render = 1;
             }
         }
@@ -484,7 +613,9 @@ int app_main(const minidos_app_api_t* api) {
             str_copy(previous_clock_text, state.clock_text, (int)sizeof(previous_clock_text));
             update_clock_text(&state, api);
             if (!str_equal(previous_clock_text, state.clock_text)) {
-                if (!need_full_render) {
+                if (need_partial_render) {
+                    ui_dirty_list_add(&partial_dirty, taskbar_clock_rect(&state));
+                } else if (!need_full_render) {
                     render_clock_update(api, &state);
                 } else {
                     need_full_render = 1;
@@ -492,8 +623,28 @@ int app_main(const minidos_app_api_t* api) {
             }
         }
 
+        /* Caret blink: the text box draws the caret from the current tick
+         * phase, but nothing damages its region when the phase flips while
+         * the UI is idle. Track the phase and repaint the focused textinput
+         * whenever it changes. */
+        {
+            unsigned int caret_phase = (app_get_ticks(api) / 20u) & 1u;
+
+            if (caret_phase != state.caret_blink_phase) {
+                ui_rect_t caret_rect = focused_textinput_rect(&state);
+
+                state.caret_blink_phase = caret_phase;
+                if (!need_full_render && !ui_rect_is_empty(caret_rect)) {
+                    ui_dirty_list_add(&partial_dirty, caret_rect);
+                    need_partial_render = 1;
+                }
+            }
+        }
+
         if (need_full_render) {
             render(api, &state);
+        } else if (need_partial_render) {
+            render_dirty_regions(api, &state, &partial_dirty);
         }
     }
 }
