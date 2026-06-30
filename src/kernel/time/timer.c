@@ -1,5 +1,6 @@
 #include "timer.h"
 #include "logger.h"
+#include "io.h"
 
 #define PIT_COMMAND_PORT 0x43
 #define PIT_CHANNEL0_PORT 0x40
@@ -9,10 +10,6 @@
 static volatile unsigned int g_timer_ticks = 0;
 static volatile unsigned int g_timer_hz = 0;
 static volatile int g_timer_ready = 0;
-
-static inline void outb(unsigned short port, unsigned char value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
 
 static inline unsigned int read_eflags(void) {
     unsigned int flags;

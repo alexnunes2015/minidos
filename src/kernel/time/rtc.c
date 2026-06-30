@@ -1,17 +1,8 @@
 #include "rtc.h"
+#include "io.h"
 
 #define CMOS_ADDR_PORT 0x70
 #define CMOS_DATA_PORT 0x71
-
-static inline void outb(unsigned short port, unsigned char val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline unsigned char inb(unsigned short port) {
-    unsigned char val;
-    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
-    return val;
-}
 
 static unsigned char rtc_read_reg(unsigned char reg) {
     outb(CMOS_ADDR_PORT, (unsigned char)(0x80 | reg));
