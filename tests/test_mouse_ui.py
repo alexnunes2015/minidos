@@ -5,7 +5,6 @@ import os
 import re
 import select
 import socket
-import subprocess
 import sys
 import tempfile
 import time
@@ -17,11 +16,25 @@ from qemu_harness import (
     read_until,
     repo_root,
     resolve_disk_path,
+    send_line,
     spawn_qemu,
     terminate_process,
     wait_for_marker_sequence,
     wait_for_shell_ready,
 )
+
+MOUSE_FAILURE_MARKERS = (
+    "MOUSE201",
+    "MOUSE202",
+    "MOUSE203",
+    "MOUSE204",
+)
+
+
+def _assert_mouse_initialization(log):
+    for marker in MOUSE_FAILURE_MARKERS:
+        if marker in log:
+            raise RuntimeError(f"mouse initialization entered degraded mode: {marker}")
 
 
 def _qmp_read_line(qmp_sock, timeout=2.0):
@@ -280,6 +293,7 @@ def _wait_for_app_ready(proc, name, timeout_s, *, echo):
 
 def _enter_startui_dir(proc, timeout_s, *, echo):
     for cmd in ("cd aios",):
+        send_line(proc, cmd)
         _wait_for_command_result(
             proc,
             cmd,
@@ -291,6 +305,7 @@ def _enter_startui_dir(proc, timeout_s, *, echo):
 
 def _return_to_root(proc, timeout_s, *, echo):
     for _ in range(1):
+        send_line(proc, "cd ..")
         _wait_for_command_result(
             proc,
             "cd ..",
@@ -349,7 +364,7 @@ def main():
         memory=args.memory,
         extra_args=["-qmp", f"unix:{qmp_socket},server=on,wait=off"],
     )
-    proc = spawn_qemu(qemu_cmd, stdin=subprocess.DEVNULL)
+    proc = spawn_qemu(qemu_cmd)
 
     qmp_sock = None
     try:
@@ -378,6 +393,7 @@ def main():
 
         _assert_no_win95ui_debug(log)
         _assert_video_init_marker(log)
+        _assert_mouse_initialization(log)
         screen_w, screen_h = _extract_video_geometry(log)
         if any(marker in log for marker in MOUSE_READY_MARKERS):
             mouse_log = ""
@@ -391,6 +407,7 @@ def main():
             if not mouse_matched:
                 raise RuntimeError("timeout waiting for mouse-ready marker")
             log += mouse_log
+        _assert_mouse_initialization(log)
         if any(marker in log for marker in KBD_READY_MARKERS):
             kbd_log = ""
         else:
@@ -407,7 +424,7 @@ def main():
         if "APPIN001" not in log:
             if _wait_for_default_gui(proc, args.cmd_timeout, echo=not args.quiet) is None:
                 _enter_startui_dir(proc, args.cmd_timeout, echo=not args.quiet)
-                _send_text_as_keys(qmp_sock, "startui\n", args.key_delay)
+                send_line(proc, "startui")
                 _wait_for_app_ready(proc, "startui", args.cmd_timeout, echo=not args.quiet)
 
         # Exercise repeated hover redraws over title bar/client before closing the window.
@@ -439,7 +456,7 @@ def main():
 
         _return_to_root(proc, args.cmd_timeout, echo=not args.quiet)
 
-        _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
+        send_line(proc, "ver")
         _wait_for_command_result(
             proc,
             "ver",
@@ -448,7 +465,7 @@ def main():
             echo=not args.quiet,
         )
 
-        _send_text_as_keys(qmp_sock, "dosshell\n", args.key_delay)
+        send_line(proc, "dosshell")
         _wait_for_app_ready(proc, "dosshell", args.cmd_timeout, echo=not args.quiet)
         _send_mouse_move(qmp_sock, 24, 12)
         _send_key(qmp_sock, "q")
@@ -460,7 +477,7 @@ def main():
         )
         if not matched:
             raise RuntimeError("timeout waiting for DOSSHELL app return")
-        _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
+        send_line(proc, "ver")
         _wait_for_command_result(
             proc,
             "ver",
@@ -469,7 +486,7 @@ def main():
             echo=not args.quiet,
         )
 
-        _send_text_as_keys(qmp_sock, "edit\n", args.key_delay)
+        send_line(proc, "edit")
         _wait_for_app_ready(proc, "edit", args.cmd_timeout, echo=not args.quiet)
         _send_mouse_move(qmp_sock, -18, 10)
         _send_key(qmp_sock, "esc")
@@ -481,7 +498,7 @@ def main():
         )
         if not matched:
             raise RuntimeError("timeout waiting for EDIT app return")
-        _send_text_as_keys(qmp_sock, "ver\n", args.key_delay)
+        send_line(proc, "ver")
         _wait_for_command_result(
             proc,
             "ver",

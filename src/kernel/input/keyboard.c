@@ -21,6 +21,7 @@ static unsigned char last_make_scancode = 0;
 static int last_make_extended = 0;
 static unsigned int last_make_tick = 0;
 static int last_make_valid = 0;
+static int poll_fallback_reported = 0;
 static char key_buffer[128];
 static int key_head = 0;
 static int key_tail = 0;
@@ -479,6 +480,10 @@ static int keyboard_poll_one_char(char* out) {
 
         c = keyboard_process_scancode(scancode);
         if (c && (!track_scancode || !keyboard_is_duplicate_make(scancode, extended, break_event))) {
+            if (!poll_fallback_reported) {
+                log_serial_raw("KBD200 keyboard polling fallback active\n");
+                poll_fallback_reported = 1;
+            }
             if (out) {
                 *out = c;
             }
@@ -509,6 +514,7 @@ void keyboard_init(void) {
     last_make_extended = 0;
     last_make_tick = 0;
     last_make_valid = 0;
+    poll_fallback_reported = 0;
     key_head = 0;
     key_tail = 0;
 

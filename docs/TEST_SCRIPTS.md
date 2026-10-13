@@ -105,6 +105,7 @@ Valida o caminho completo de rato para GUI:
 - espera `APPIN001`;
 - espera `APPRET001` depois do clique ou do input de saída;
 - injeta movimento relativo e clique esquerdo por `input-send-event`;
+- rejeita `MOUSE201`–`MOUSE204`, que indicam que o kernel desativou o rato durante a inicialização;
 - deriva a resolução ativa a partir do marcador `[vid] fb=...w=...h=...p=...b=...` e calcula o percurso do cursor a partir do centro do ecrã até ao botão `Fechar`, para o mesmo teste funcionar tanto no default `640x480` como nos fallbacks VESA maiores;
 - rejeita qualquer debug extra da GUI na serial durante a execução;
 - confirma que a app devolve controlo ao shell e que `ver` volta a ser aceite;
@@ -121,6 +122,14 @@ python3 tests/test_mouse_ui.py
 ```bash
 make test-mouse
 ```
+
+Para validar o caminho negativo de inicialização:
+
+```bash
+make test-mouse-failure
+```
+
+Este alvo recompila o kernel com `MOUSE_TEST_FORCE_FAIL`, espera `MOUSE201` e `SHELL100`, e falha se o rato anunciar presença ou aceitar um pacote depois de ser desativado.
 
 ### 10. `tests/test_storage_failure.py` - Validação de degradação de storage
 Valida o caminho de falha de storage onde `root_entries` inválido faz o kernel abortar com marcadores deterministas:
@@ -143,8 +152,17 @@ make test-storage-failure
 Este script valida a nova infraestrutura multithread do vídeo:
 - arranca o MiniDOS e aguarda a shell pronta
 - envia o comando `videostress` ao shell com parâmetros configuráveis
-- espera as mensagens `PTVIDEO100`, `PTVIDEO110` e `PTVIDEO200` para confirmar que os workers arrancaram e terminaram
-- garante que cada worker conclui as iterações e regista ticks/time para os benchmarks
+- espera `PTVIDEO100` e uma mensagem `PTVIDEO200` por worker iniciado para confirmar arranque e conclusão
+- aceita `PTVIDEO110` apenas quando os slots do scheduler limitam o número de workers
+- garante que cada worker conclui as iterações e regista ticks para comparação
+
+O contrato de conclusão é:
+
+```text
+PTVIDEO200 worker=0x........ ticks=0x........ iterations=0x........
+```
+
+Os três campos são valores hexadecimais de 32 bits, em maiúsculas e com oito dígitos. `ticks` mede a duração daquele worker; não existe um limite absoluto de performance neste teste porque a velocidade do host/QEMU varia.
 
 **Uso:**
 ```bash
@@ -159,7 +177,7 @@ python3 tests/test_video_stress.py
 Executa um cenário multi-disco/multi-partição crítico. O próprio teste:
 - cria discos virtuais de dados;
 - cria partições FAT16 com conteúdos distintos;
-- faz attach de vários discos IDE no QEMU;
+- mantém `minidos.img` no IDE `index=0` e liga o disco de dados gerado no `index=1` (as duas partições surgem como `B:` e `C:`);
 - valida enumeração de múltiplas letras de drive;
 - valida operações de gestão de ficheiros e isolamento entre volumes.
 
@@ -272,7 +290,35 @@ python3 tests/test_multitask_com.py
 make test-multitask-com
 ```
 
-### 13. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
+### 13. `tests/test_scheduler_fairness.py` - Regressão de fairness do scheduler
+
+Executa duas rodadas com três cargas concorrentes em `PTEST`: uma app CPU-bound (`PTCPU`), uma app bloqueante por eventos (`PTWAIT`) e uma app com child thread (`PTTHRD`). O teste exige os marcadores de início e conclusão de todas as cargas dentro do mesmo prazo, confirma que o grupo termina sem tarefas residuais em `top` e valida que a shell continua responsiva.
+
+**Uso:**
+```bash
+python3 tests/test_scheduler_fairness.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-scheduler-fairness
+```
+
+### 14. `tests/test_syscall_matrix.py` - Matriz de erros de syscall
+
+Instala uma fixture em ELF e `.COM` que chama syscalls com ponteiros fora da janela user, ranges inválidos, formato gráfico não suportado, batch acima do limite e número de syscall desconhecido. Cada caso exige a resposta de erro prevista, sem page fault nem alteração de controlo, e depois confirma `ver` no shell.
+
+**Uso:**
+```bash
+python3 tests/test_syscall_matrix.py
+```
+
+**Atalho via Makefile:**
+```bash
+make test-syscall-matrix
+```
+
+### 15. `tests/test_user_isolation.py` - Regressão de isolamento kernel/user
 Valida o contrato mínimo de isolamento para apps ELF e `.COM` em ring3:
 - instala `BADPTR.ELF`, `OLDMAP.ELF`, `USRFAULT.ELF`, `BADCOM.COM`, `OLDCOM.COM` e `USRFCOM.COM` na imagem;
 - força `A:` e confirma listagem via `elfls`;
@@ -291,11 +337,23 @@ python3 tests/test_user_isolation.py
 make test-user-isolation
 ```
 
-### 14. `tests/test_graphics_perf.py` - Regressão de performance gráfica
+### 16. `tests/test_user_cleanup.py` - Cleanup após fault de userland
+
+Valida sete faults consecutivos em ELF e `.COM`, verificando que cada execução reutiliza o mesmo PID, base física e tamanho de slot. Também lança uma fixture que cria um child thread e faulta o líder, confirmando que o grupo inteiro deixa de aparecer no `top` e que o slot volta a ser reutilizável.
+
+**Uso:**
+
+```bash
+make test-user-cleanup
+```
+
+### 17. `tests/test_graphics_perf.py` - Regressão de performance gráfica
 Valida as optimizações de performance do subsistema de vídeo:
 - **stride-align**: confirma que o kernel arranca e atinge o main loop sem erros de vídeo (o stride cacheline-aligned é um invariante de compilação para as resoluções standard).
-- **stress-render**: envia `videostress 2 60` ao shell e aguarda `PTVIDEO200` — confirma que dois render workers terminam sem deadlock nem starvation.
-- **shell-responsive**: após o videostress, envia `ver` e confirma que o shell ainda responde — valida que o rwlock não ficou preso.
+- **stress-render**: envia `videostress 2 60`, exige dois `PTVIDEO200` completos com workers distintos e `iterations=0x0000003C`, e confirma que ambos terminam sem deadlock nem starvation.
+- **shell-responsive**: após receber os dois marcadores completos, envia `ver` e confirma que o shell ainda responde — valida que o lock de vídeo não ficou preso.
+
+O campo `ticks` é recolhido como métrica determinística do kernel, mas não é comparado a um teto fixo. O teste mede completude/schema e mantém os números disponíveis para comparações em ambientes equivalentes.
 
 **Uso:**
 ```bash
@@ -312,6 +370,27 @@ make test-graphics
 **Build flags de debug:**
 - `DIRTY_RECT_DEBUG`: activa log serial de cada chamada a `video_note_dirty_locked` com coordenadas do rect marcado.
 
+### `tests/test_ui_runtime.py` - Contratos host da runtime gráfica
+
+Compila um harness C no host, sem arrancar QEMU, para validar o contrato entre `minidos_ui.h` e a ABI de aplicações:
+
+- filas de 1..64 rectângulos, ordem, flush antes de operações gráficas sensíveis e fallback para syscall 8 quando syscall 35 falha;
+- layout dos pixels packed little-endian, seleção explícita dos formatos de surface e fallback de linhas de listview para runs clipped quando o blit é rejeitado;
+- uma syscall 36 por texto clipped genérico, incluindo o flag de fundo transparente e fallback para runs;
+- decode BMP, ordem bottom-up, clips, wallpaper cache, fallback de ficheiro ausente e caminho de runs disponível quando a surface packed é rejeitada.
+
+**Uso:**
+
+```bash
+python3 tests/test_ui_runtime.py
+```
+
+**Atalho via Makefile:**
+
+```bash
+make test-ui-runtime
+```
+
 ### 15. `make verify-image` - Verificação estrutural da imagem
 Valida a imagem `minidos.img` fora do runtime:
 - tamanho da imagem (`128MB`);
@@ -325,6 +404,16 @@ Valida a imagem `minidos.img` fora do runtime:
 make verify-image
 ```
 
+### `make ci` - Gate Tier 3
+
+Mudanças cross-cutting ou prontas para release executam o gate completo definido em `docs/DEVELOPMENT_PROTOCOL.md`:
+
+```bash
+make ci
+```
+
+Para mudanças gráficas, execute também `make test-ui-runtime`, `make test-graphics` e `make test-mouse`. O primeiro já integra `make ci`, mas os dois testes QEMU focados ainda não fazem parte desse alvo.
+
 ## Características
 
 ✅ **Captura de Output** - Todos os comandos capturam a saída completa
@@ -337,6 +426,7 @@ make verify-image
 ✅ **User Isolation** - Cobertura de ring3 para ponteiros inválidos em syscall e faults de user mode com retorno ao shell
 ✅ **Large ELF Runtime** - Cobertura de slot user dinâmico para imagens ELF com `PT_LOAD memsz` acima de 1 MiB
 ✅ **Legacy COM Runtime** - Cobertura de `.COM` no mesmo runtime preemptivo de foreground/background usado por ELFs
+✅ **Graphics ABI** - Cobertura host de batching/fallback, formatos packed e texto clipped, mais stress/GUI em QEMU
 ✅ **Shared Harness** - Arranque/QEMU/timeouts centralizados em `tests/qemu_harness.py`
 
 ## Exemplo de Teste Completo
@@ -393,12 +483,17 @@ Todos os testes mostram a saída serial que inclui:
 - `[Stage2] Kernel loaded` - Kernel pronto
 - `[Stage2] Entering PM...` - Transição para modo protegido
 - `[kbd] scan set 1` / `[kbd] scan set 2` - Decoder do teclado alinhado com o modo do controlador PS/2 (set 1 = translation on, set 2 = translation off)
+- `KBD200` - Modo degradado: uma tecla foi consumida pelo fallback de polling; `make test-keyboard` deve falhar se este marker aparecer
 - `[mouse] PS/2 mouse enabled on IRQ12` - Porta auxiliar PS/2 ativa e reporting ligado
+- `MOUSE201` / `MOUSE202` / `MOUSE203` / `MOUSE204` - Falha observável de inicialização do rato; `make test-mouse` deve rejeitar estes markers
 - `[mouse] first packet received` - Primeiro pacote de rato observado em runtime
 - `APPIN001` / `APPRET001` - Contrato serial de entrada e retorno de apps interativas
 - `DISK021` - Nenhum volume de boot/partição válido foi detetado; o shell continua sem inventar `A:`
 - `APPFLT900` - Fault de userland contido à app/grupo atual
 - `PTBIG100` / `PTBIG190` / `PTBIG900` / `PTBIG901` - Regressão do loader ELF grande com slot user dinâmico
+- `PTVIDEO100 start workers=<w> iterations=<i> started=<s>` - Pedido de stress gráfico e quantidade de workers iniciados
+- `PTVIDEO110 limited by scheduler slots` - Scheduler não tinha slots para todos os workers pedidos
+- `PTVIDEO200 worker=0x........ ticks=0x........ iterations=0x........` - Métrica hexadecimal de conclusão emitida uma vez por worker gráfico
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled` - Caminho de interrupções ativo
 - `SCHED100` / `SCHED110` / `SCHED120` / `SCHED190` - Bootstrap e self-test positivo do scheduler/runtime
 - `SCHED150` / `SCHED900` - Armamento do teste negativo e fault de guard page identificado

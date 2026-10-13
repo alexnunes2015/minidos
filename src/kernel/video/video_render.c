@@ -263,43 +263,105 @@ void video_note_text_area(void) {
     video_note_dirty(text_origin_x, text_origin_y, text_cols * FONT_W, text_rows * FONT_H);
 }
 
-int video_blit_surface_desc(const void* d) {
-    /* Local mirror of app_gfx_surface_blit_t (must match runtime layout) */
-    typedef struct {
-        const unsigned char* buffer;
-        int width;
-        int height;
-        int stride;
-        int format;
-        int dest_x;
-        int dest_y;
-        int clip_x;
-        int clip_y;
-        int clip_w;
-        int clip_h;
-        int dest_w;
-        int dest_h;
-    } blit_desc_t;
+#define VIDEO_SURFACE_MAX_DIMENSION 16384
+#define VIDEO_SURFACE_COORD_LIMIT 32768
 
-    const blit_desc_t* b;
+static u32 read_u32_le(const unsigned char* p) {
+    return (u32)p[0]
+        | ((u32)p[1] << 8)
+        | ((u32)p[2] << 16)
+        | ((u32)p[3] << 24);
+}
+
+static u8 unpack_component(u32 packed, u8 size, u8 position) {
+    u32 max_value;
+    u32 value;
+
+    if (size == 0 || size > 8) {
+        return 0;
+    }
+    max_value = (1u << size) - 1u;
+    value = (packed >> position) & max_value;
+    return (u8)((value * 255u + (max_value >> 1)) / max_value);
+}
+
+static u32 read_draw_target_rgb_locked(int x, int y) {
+    if (backbuffer_ready) {
+        const volatile u32* pixel = (const volatile u32*)(const void*)(video_backbuffer
+            + (y * backbuffer_pitch) + (x * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
+        return *pixel & 0x00FFFFFFu;
+    }
+
+    {
+        int bytes = video_fb_bytes_per_pixel();
+        const volatile u8* pixel = fb + (y * fb_pitch) + (x * bytes);
+        u32 packed = (u32)pixel[0] | ((u32)pixel[1] << 8);
+        u8 r;
+        u8 g;
+        u8 b;
+
+        if (bytes >= 3) {
+            packed |= (u32)pixel[2] << 16;
+        }
+        if (bytes == 4) {
+            packed |= (u32)pixel[3] << 24;
+        }
+        r = unpack_component(packed, red_size, red_pos);
+        g = unpack_component(packed, green_size, green_pos);
+        b = unpack_component(packed, blue_size, blue_pos);
+        return ((u32)r << 16) | ((u32)g << 8) | (u32)b;
+    }
+}
+
+static u32 blend_rgb_source_over(u32 src, u32 dst, u32 alpha) {
+    u32 inverse = 255u - alpha;
+    u32 r = ((((src >> 16) & 0xFFu) * alpha)
+        + (((dst >> 16) & 0xFFu) * inverse) + 127u) / 255u;
+    u32 g = ((((src >> 8) & 0xFFu) * alpha)
+        + (((dst >> 8) & 0xFFu) * inverse) + 127u) / 255u;
+    u32 b = (((src & 0xFFu) * alpha)
+        + ((dst & 0xFFu) * inverse) + 127u) / 255u;
+    return (r << 16) | (g << 8) | b;
+}
+
+int video_blit_surface(const video_surface_blit_t* b) {
     int x0, y0, x1, y1;
     int dest_w;
     int dest_h;
     int py;
+    unsigned int row_bytes;
+    unsigned int remaining_rows;
 
-    if (!d || !graphics_mode) {
+    init_video_once();
+    if (!b || !graphics_mode) {
         return 0;
     }
-
-    b = (const blit_desc_t*)d;
-
-    if (!b->buffer || b->width <= 0 || b->height <= 0 || b->stride <= 0) {
+    if (!b->buffer
+        || b->width <= 0 || b->height <= 0
+        || b->width > VIDEO_SURFACE_MAX_DIMENSION
+        || b->height > VIDEO_SURFACE_MAX_DIMENSION
+        || b->stride <= 0
+        || (b->format != VIDEO_SURFACE_FORMAT_LEGACY_XRGB8888
+            && b->format != VIDEO_SURFACE_FORMAT_XRGB8888_LE
+            && b->format != VIDEO_SURFACE_FORMAT_ARGB8888_LE)) {
+        return 0;
+    }
+    row_bytes = (unsigned int)b->width * 4U;
+    remaining_rows = (unsigned int)(b->height - 1);
+    if ((unsigned int)b->stride < row_bytes
+        || remaining_rows > (0xFFFFFFFFU - row_bytes) / (unsigned int)b->stride) {
         return 0;
     }
 
     dest_w = (b->dest_w > 0) ? b->dest_w : b->width;
     dest_h = (b->dest_h > 0) ? b->dest_h : b->height;
-    if (dest_w <= 0 || dest_h <= 0) {
+    if (dest_w <= 0 || dest_h <= 0
+        || dest_w > VIDEO_SURFACE_MAX_DIMENSION
+        || dest_h > VIDEO_SURFACE_MAX_DIMENSION
+        || b->dest_x < -VIDEO_SURFACE_COORD_LIMIT || b->dest_x > VIDEO_SURFACE_COORD_LIMIT
+        || b->dest_y < -VIDEO_SURFACE_COORD_LIMIT || b->dest_y > VIDEO_SURFACE_COORD_LIMIT
+        || b->dest_x > 0x7FFFFFFF - dest_w
+        || b->dest_y > 0x7FFFFFFF - dest_h) {
         return 0;
     }
 
@@ -311,6 +373,14 @@ int video_blit_surface_desc(const void* d) {
 
     /* Apply clip rect when valid */
     if (b->clip_w > 0 && b->clip_h > 0) {
+        if (b->clip_w > VIDEO_SURFACE_MAX_DIMENSION
+            || b->clip_h > VIDEO_SURFACE_MAX_DIMENSION
+            || b->clip_x < -VIDEO_SURFACE_COORD_LIMIT || b->clip_x > VIDEO_SURFACE_COORD_LIMIT
+            || b->clip_y < -VIDEO_SURFACE_COORD_LIMIT || b->clip_y > VIDEO_SURFACE_COORD_LIMIT
+            || b->clip_x > 0x7FFFFFFF - b->clip_w
+            || b->clip_y > 0x7FFFFFFF - b->clip_h) {
+            return 0;
+        }
         if (b->clip_x             > x0) x0 = b->clip_x;
         if (b->clip_y             > y0) y0 = b->clip_y;
         if (b->clip_x + b->clip_w < x1) x1 = b->clip_x + b->clip_w;
@@ -329,23 +399,103 @@ int video_blit_surface_desc(const void* d) {
 
     video_lock();
 
-    for (py = y0; py < y1; py++) {
-        int px;
-        int src_y = ((py - b->dest_y) * b->height) / dest_h;
-        if (src_y >= b->height) {
-            src_y = b->height - 1;
-        }
-        const unsigned char* src_row = b->buffer + (unsigned int)(src_y * b->stride);
+    if (b->format == VIDEO_SURFACE_FORMAT_XRGB8888_LE
+        && dest_w == b->width && dest_h == b->height
+        && backbuffer_ready
+        && video_backbuffer_rect_fits(x0, y0, x1 - x0, y1 - y0)) {
+        int source_x = x0 - b->dest_x;
+        int source_y = y0 - b->dest_y;
+        int copy_w = x1 - x0;
 
-        for (px = x0; px < x1; px++) {
-            int src_x = ((px - b->dest_x) * b->width) / dest_w;
-            if (src_x >= b->width) {
-                src_x = b->width - 1;
+        for (py = 0; py < y1 - y0; py++) {
+            const unsigned char* src_bytes = b->buffer
+                + ((unsigned int)(source_y + py) * (unsigned int)b->stride)
+                + (unsigned int)(source_x * 4);
+            u32* dst = (u32*)(void*)(video_backbuffer
+                + ((y0 + py) * backbuffer_pitch) + (x0 * VIDEO_BACKBUFFER_BYTES_PER_PIXEL));
+            int px;
+
+            if ((((unsigned int)src_bytes | (unsigned int)b->stride) & 3U) == 0U) {
+                const u32* src = (const u32*)(const void*)src_bytes;
+                for (px = 0; px < copy_w; px++) {
+                    dst[px] = src[px] & 0x00FFFFFFu;
+                }
+            } else {
+                for (px = 0; px < copy_w; px++) {
+                    dst[px] = read_u32_le(src_bytes + (px * 4)) & 0x00FFFFFFu;
+                }
             }
-            /* XRGB8888: byte[0]=X, byte[1]=R, byte[2]=G, byte[3]=B */
-            const unsigned char* p = src_row + (unsigned int)(src_x * 4);
-            u32 rgb = ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
-            draw_pixel_locked(px, py, rgb);
+        }
+
+        video_note_dirty_locked(x0, y0, x1 - x0, y1 - y0);
+        video_unlock();
+        video_maybe_present_pending();
+        return 1;
+    }
+
+    {
+        int y_product = (y0 - b->dest_y) * b->height;
+        int src_y = y_product / dest_h;
+        int y_fraction = y_product % dest_h;
+        int y_whole_step = b->height / dest_h;
+        int y_fraction_step = b->height % dest_h;
+        int x_product = (x0 - b->dest_x) * b->width;
+        int src_x_start = x_product / dest_w;
+        int x_fraction_start = x_product % dest_w;
+        int x_whole_step = b->width / dest_w;
+        int x_fraction_step = b->width % dest_w;
+
+        for (py = y0; py < y1; py++) {
+            int px;
+            int src_x = src_x_start;
+            int x_fraction = x_fraction_start;
+            const unsigned char* src_row;
+
+            if (src_y >= b->height) {
+                src_y = b->height - 1;
+            }
+            src_row = b->buffer + ((unsigned int)src_y * (unsigned int)b->stride);
+
+            for (px = x0; px < x1; px++) {
+                const unsigned char* p;
+                u32 rgb;
+                u32 alpha = 255u;
+
+                if (src_x >= b->width) {
+                    src_x = b->width - 1;
+                }
+                p = src_row + (unsigned int)(src_x * 4);
+                if (b->format == VIDEO_SURFACE_FORMAT_LEGACY_XRGB8888) {
+                    rgb = ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
+                } else {
+                    u32 packed = read_u32_le(p);
+                    rgb = packed & 0x00FFFFFFu;
+                    if (b->format == VIDEO_SURFACE_FORMAT_ARGB8888_LE) {
+                        alpha = packed >> 24;
+                    }
+                }
+
+                if (alpha == 255u) {
+                    draw_pixel_locked(px, py, rgb);
+                } else if (alpha != 0u) {
+                    draw_pixel_locked(px, py,
+                        blend_rgb_source_over(rgb, read_draw_target_rgb_locked(px, py), alpha));
+                }
+
+                src_x += x_whole_step;
+                x_fraction += x_fraction_step;
+                if (x_fraction >= dest_w) {
+                    src_x++;
+                    x_fraction -= dest_w;
+                }
+            }
+
+            src_y += y_whole_step;
+            y_fraction += y_fraction_step;
+            if (y_fraction >= dest_h) {
+                src_y++;
+                y_fraction -= dest_h;
+            }
         }
     }
 
@@ -353,4 +503,8 @@ int video_blit_surface_desc(const void* d) {
     video_unlock();
     video_maybe_present_pending();
     return 1;
+}
+
+int video_blit_surface_desc(const void* blit_desc) {
+    return video_blit_surface((const video_surface_blit_t*)blit_desc);
 }

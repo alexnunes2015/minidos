@@ -88,6 +88,9 @@ explorer_state_t* explorer_for_control(demo_state_t* state, int control_id) {
             || explorer->forward_button_id == control_id
             || explorer->up_button_id == control_id
             || explorer->open_button_id == control_id
+            || explorer->newfolder_button_id == control_id
+            || explorer->rename_button_id == control_id
+            || explorer->delete_button_id == control_id
             || explorer->listview_id == control_id
             || explorer->path_label_id == control_id
             || explorer->path_value_id == control_id
@@ -199,7 +202,7 @@ static void explorer_set_count_text(explorer_state_t* explorer, int count, int d
     }
 
     if (drive_mode) {
-        suffix = (count == 1) ? " drive" : " drives";
+        suffix = (count == 1) ? " unidade" : " unidades";
     } else {
         suffix = (count == 1) ? " item" : " itens";
     }
@@ -210,6 +213,28 @@ static void explorer_set_count_text(explorer_state_t* explorer, int count, int d
     append_path_part(explorer->status_count_text, (int)sizeof(explorer->status_count_text), suffix);
 }
 
+static void explorer_update_selection_text(explorer_state_t* explorer) {
+    const ui_listview_item_t* item;
+
+    if (!explorer) {
+        return;
+    }
+
+    if (explorer->listview.selected_index < 0
+        || explorer->listview.selected_index >= explorer->listview.item_count) {
+        str_copy(explorer->status_extra_text,
+            explorer->showing_drives ? "O meu computador" : explorer->path_text,
+            (int)sizeof(explorer->status_extra_text));
+        return;
+    }
+
+    item = &explorer->listview.items[explorer->listview.selected_index];
+    explorer->status_extra_text[0] = '\0';
+    append_path_part(explorer->status_extra_text, (int)sizeof(explorer->status_extra_text),
+        explorer->showing_drives ? "Unidade: " : (item->is_dir ? "Pasta: " : "Ficheiro: "));
+    append_path_part(explorer->status_extra_text, (int)sizeof(explorer->status_extra_text), item->name);
+}
+
 static void explorer_update_texts(explorer_state_t* explorer) {
     int i;
 
@@ -218,8 +243,8 @@ static void explorer_update_texts(explorer_state_t* explorer) {
     }
 
     if (explorer->showing_drives) {
-        str_copy(explorer->title, "Computer", (int)sizeof(explorer->title));
-        str_copy(explorer->path_text, "Computer", (int)sizeof(explorer->path_text));
+        str_copy(explorer->title, "O meu computador", (int)sizeof(explorer->title));
+        str_copy(explorer->path_text, "O meu computador", (int)sizeof(explorer->path_text));
         return;
     }
 
@@ -397,6 +422,18 @@ static void explorer_update_button_states(demo_state_t* state, explorer_state_t*
     if (control) {
         control->enabled = has_selection;
     }
+    control = ui_wm_find_control(&state->wm, explorer->newfolder_button_id);
+    if (control) {
+        control->enabled = !explorer->showing_drives;
+    }
+    control = ui_wm_find_control(&state->wm, explorer->rename_button_id);
+    if (control) {
+        control->enabled = has_selection && !explorer->showing_drives;
+    }
+    control = ui_wm_find_control(&state->wm, explorer->delete_button_id);
+    if (control) {
+        control->enabled = has_selection && !explorer->showing_drives;
+    }
 }
 
 static int enter_explorer_dir(const minidos_app_api_t* api, const explorer_state_t* explorer) {
@@ -457,9 +494,9 @@ static void explorer_refresh_list(const minidos_app_api_t* api, demo_state_t* st
         explorer->listview.scroll_offset = 0;
         explorer->listview.prev_scroll_offset = 0;
         explorer_update_texts(explorer);
-        explorer_set_status(explorer, count > 0 ? "Enter para abrir um drive." : "Nenhum drive encontrado.");
+        explorer_set_status(explorer, count > 0 ? "Duplo clique ou Enter para abrir." : "Nenhuma unidade encontrada.");
         explorer_set_count_text(explorer, count, 1);
-        str_copy(explorer->status_extra_text, "Computer", (int)sizeof(explorer->status_extra_text));
+        explorer_update_selection_text(explorer);
         explorer_update_button_states(state, explorer);
         return;
     }
@@ -527,7 +564,7 @@ static void explorer_refresh_list(const minidos_app_api_t* api, demo_state_t* st
     } else {
         explorer_set_status(explorer, "Duplo clique ou Enter para abrir.");
     }
-    str_copy(explorer->status_extra_text, explorer->path_text, (int)sizeof(explorer->status_extra_text));
+    explorer_update_selection_text(explorer);
     explorer_update_button_states(state, explorer);
 }
 
@@ -538,27 +575,27 @@ static ui_rect_t explorer_default_bounds(const demo_state_t* state) {
     int y;
 
     if (!state) {
-        return ui_rect_make(80, 56, 430, 280);
+        return ui_rect_make(60, 48, 520, 340);
     }
 
-    w = state->sw - 120;
-    if (w > 430) {
-        w = 430;
+    w = state->sw - 80;
+    if (w > 560) {
+        w = 560;
     }
-    if (w < 300) {
-        w = 300;
+    if (w < 340) {
+        w = 340;
     }
 
-    h = state->sh - TASKBAR_H - 76;
-    if (h > 280) {
-        h = 280;
+    h = state->sh - TASKBAR_H - 84;
+    if (h > 360) {
+        h = 360;
     }
-    if (h < 180) {
-        h = 180;
+    if (h < 230) {
+        h = 230;
     }
 
     x = (state->sw - w) / 2;
-    y = 56;
+    y = 48;
     if (y + h > state->sh - TASKBAR_H - 4) {
         y = (state->sh - TASKBAR_H - 4) - h;
     }
@@ -626,11 +663,31 @@ void explorer_relayout_window(demo_state_t* state, int window_id) {
     if (control) {
         control->bounds = ui_rect_make(open_x, nav_y, 54, 22);
     }
+    {
+        int actions_x = 72;
+        int show_actions = (up_x - actions_x - 6) >= 184;
+
+        control = ui_wm_find_control(&state->wm, explorer->newfolder_button_id);
+        if (control) {
+            control->bounds = ui_rect_make(actions_x, nav_y, 56, 22);
+            control->visible = show_actions;
+        }
+        control = ui_wm_find_control(&state->wm, explorer->rename_button_id);
+        if (control) {
+            control->bounds = ui_rect_make(actions_x + 58, nav_y, 68, 22);
+            control->visible = show_actions;
+        }
+        control = ui_wm_find_control(&state->wm, explorer->delete_button_id);
+        if (control) {
+            control->bounds = ui_rect_make(actions_x + 128, nav_y, 56, 22);
+            control->visible = show_actions;
+        }
+    }
     control = ui_wm_find_control(&state->wm, explorer->path_label_id);
     if (control) {
         control->bounds = ui_rect_make(12, EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + 6, 56, UI_CHAR_H);
     }
-    field_w = up_x - 80;
+    field_w = client_w - 86;
     if (field_w < 80) {
         field_w = 80;
     }
@@ -639,20 +696,21 @@ void explorer_relayout_window(demo_state_t* state, int window_id) {
         control->bounds = ui_rect_make(74, EXPLORER_MENU_H + EXPLORER_TOOLBAR_H + 4, field_w, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->status_label_id);
-    status_left_w = client_w - 252;
-    if (status_left_w < 72) {
-        status_left_w = 72;
+    status_left_w = client_w - 228;
+    if (status_left_w < 84) {
+        status_left_w = 84;
     }
     if (control) {
-        control->bounds = ui_rect_make(12, status_y, status_left_w, 16);
+        control->bounds = ui_rect_make(8, status_y, status_left_w, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->status_count_id);
     if (control) {
-        control->bounds = ui_rect_make(client_w - 252, status_y, 96, 16);
+        control->bounds = ui_rect_make(12 + status_left_w, status_y, 84, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->status_extra_id);
     if (control) {
-        control->bounds = ui_rect_make(client_w - 152, status_y, 140, 16);
+        control->bounds = ui_rect_make(100 + status_left_w, status_y,
+            client_w - status_left_w - 108, 16);
     }
     control = ui_wm_find_control(&state->wm, explorer->listview_id);
     if (control) {
@@ -749,9 +807,9 @@ static void explorer_ensure_window(demo_state_t* state, explorer_state_t* explor
         if (up_x < 70) {
             up_x = 70;
         }
-        status_left_w = client_w - 252;
-        if (status_left_w < 72) {
-            status_left_w = 72;
+        status_left_w = client_w - 228;
+        if (status_left_w < 84) {
+            status_left_w = 84;
         }
 
         explorer->path_label_id = ui_wm_add_label(&state->wm, explorer->window_id,
@@ -764,13 +822,20 @@ static void explorer_ensure_window(demo_state_t* state, explorer_state_t* explor
             ui_rect_make(up_x, nav_y, 54, 22), "Subir");
         explorer->open_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
             ui_rect_make(open_x, nav_y, 54, 22), "Abrir");
+        explorer->newfolder_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
+            ui_rect_make(72, nav_y, 56, 22), "Novo");
+        explorer->rename_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
+            ui_rect_make(130, nav_y, 68, 22), "Renomear");
+        explorer->delete_button_id = ui_wm_add_button(&state->wm, explorer->window_id,
+            ui_rect_make(200, nav_y, 56, 22), "Apagar");
         explorer->status_label_id = ui_wm_add_label(&state->wm, explorer->window_id,
-            ui_rect_make(12, status_y, status_left_w, 16), explorer->status_text);
+            ui_rect_make(8, status_y, status_left_w, 16), explorer->status_text);
         explorer->status_count_id = ui_wm_add_label(&state->wm, explorer->window_id,
-            ui_rect_make(client_w - 252, status_y, 96, 16), explorer->status_count_text);
+            ui_rect_make(12 + status_left_w, status_y, 84, 16), explorer->status_count_text);
         explorer->status_extra_id = ui_wm_add_label(&state->wm, explorer->window_id,
-            ui_rect_make(client_w - 152, status_y, 140, 16), explorer->status_extra_text);
-        field_w = up_x - 80;
+            ui_rect_make(100 + status_left_w, status_y,
+                client_w - status_left_w - 108, 16), explorer->status_extra_text);
+        field_w = client_w - 86;
         if (field_w < 80) {
             field_w = 80;
         }
@@ -825,6 +890,9 @@ void explorer_init(explorer_state_t* explorer) {
     explorer->forward_button_id = 0;
     explorer->up_button_id = 0;
     explorer->open_button_id = 0;
+    explorer->newfolder_button_id = 0;
+    explorer->rename_button_id = 0;
+    explorer->delete_button_id = 0;
     explorer->listview_id = 0;
     explorer->visible = 0;
     explorer->showing_drives = 0;
@@ -962,6 +1030,7 @@ void explorer_select_item_in(demo_state_t* state, explorer_state_t* explorer, in
     explorer->listview.selected_index = item_index;
     ui_listview_ensure_visible(&explorer->listview);
     explorer_set_active(state, explorer);
+    explorer_update_selection_text(explorer);
     explorer_update_button_states(state, explorer);
     bump_layout(state);
 }
@@ -989,6 +1058,7 @@ void explorer_move_selection_in(demo_state_t* state, explorer_state_t* explorer,
         explorer->listview.selected_index = next;
         ui_listview_ensure_visible(&explorer->listview);
         explorer_set_active(state, explorer);
+        explorer_update_selection_text(explorer);
         explorer_update_button_states(state, explorer);
         bump_layout(state);
     }
@@ -1068,8 +1138,14 @@ int explorer_open_selected_in(const minidos_app_api_t* api, demo_state_t* state,
         return 1;
     }
 
-    if (!item->is_dir || explorer->depth >= EXPLORER_MAX_DEPTH) {
-        explorer_set_status(explorer, item->is_dir ? "Profundidade maxima atingida." : "Abrir ficheiros vem a seguir.");
+    if (!item->is_dir) {
+        int opened = open_file_viewer(api, state, explorer, item->name);
+        bump_layout(state);
+        return opened;
+    }
+
+    if (explorer->depth >= EXPLORER_MAX_DEPTH) {
+        explorer_set_status(explorer, "Profundidade maxima atingida.");
         bump_layout(state);
         return 0;
     }
@@ -1095,7 +1171,7 @@ int explorer_go_up_in(const minidos_app_api_t* api, demo_state_t* state, explore
 
     explorer_set_active(state, explorer);
     if (explorer->showing_drives) {
-        explorer_set_status(explorer, "Ja esta em Computer.");
+        explorer_set_status(explorer, "Ja esta em O meu computador.");
         bump_layout(state);
         return 0;
     }
@@ -1373,4 +1449,113 @@ int open_desktop_folder(const minidos_app_api_t* api, demo_state_t* state, int i
     }
 
     return explorer_open_desktop_folder(api, state, item->name);
+}
+
+const ui_listview_item_t* explorer_selected_item(const explorer_state_t* explorer) {
+    if (!explorer
+        || explorer->listview.selected_index < 0
+        || explorer->listview.selected_index >= explorer->listview.item_count) {
+        return 0;
+    }
+    return &explorer->listview.items[explorer->listview.selected_index];
+}
+
+int explorer_enter_current_dir(const minidos_app_api_t* api, const explorer_state_t* explorer) {
+    if (!api || !explorer || explorer->showing_drives) {
+        return 0;
+    }
+    return enter_explorer_dir(api, explorer);
+}
+
+int explorer_exec_new_folder(const minidos_app_api_t* api, demo_state_t* state,
+    explorer_state_t* explorer, const char* name) {
+    int ok;
+
+    if (!api || !state || !explorer || !name || name[0] == '\0' || explorer->showing_drives) {
+        return 0;
+    }
+    if (!enter_explorer_dir(api, explorer)) {
+        update_status_text(state, "Falha ao abrir a pasta.");
+        return 0;
+    }
+    ok = app_mkdir(api, name) != 0;
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, ok ? "Pasta criada." : "Falha ao criar pasta.");
+    bump_layout(state);
+    return ok;
+}
+
+int explorer_exec_rename(const minidos_app_api_t* api, demo_state_t* state,
+    explorer_state_t* explorer, const char* old_name, const char* new_name) {
+    int ok;
+
+    if (!api || !state || !explorer || !old_name || !new_name
+        || old_name[0] == '\0' || new_name[0] == '\0' || explorer->showing_drives) {
+        return 0;
+    }
+    if (!enter_explorer_dir(api, explorer)) {
+        update_status_text(state, "Falha ao abrir a pasta.");
+        return 0;
+    }
+    ok = app_rename_entry(api, old_name, new_name) != 0;
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, ok ? "Item renomeado." : "Falha ao renomear.");
+    bump_layout(state);
+    return ok;
+}
+
+int explorer_exec_delete(const minidos_app_api_t* api, demo_state_t* state,
+    explorer_state_t* explorer, const char* name) {
+    int ok;
+
+    if (!api || !state || !explorer || !name || name[0] == '\0' || explorer->showing_drives) {
+        return 0;
+    }
+    if (!enter_explorer_dir(api, explorer)) {
+        update_status_text(state, "Falha ao abrir a pasta.");
+        return 0;
+    }
+    ok = app_delete_entry(api, name) != 0;
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, ok ? "Item apagado." : "Falha ao apagar.");
+    bump_layout(state);
+    return ok;
+}
+
+int explorer_exec_clip(const minidos_app_api_t* api, demo_state_t* state,
+    explorer_state_t* explorer, const char* name, int mode) {
+    int ok;
+
+    if (!api || !state || !explorer || !name || name[0] == '\0' || explorer->showing_drives) {
+        return 0;
+    }
+    if (!enter_explorer_dir(api, explorer)) {
+        update_status_text(state, "Falha ao abrir a pasta.");
+        return 0;
+    }
+    ok = app_clip_set(api, name, mode) != 0;
+    if (ok) {
+        update_status_text(state, mode == 2 ? "Cortado." : "Copiado.");
+    } else {
+        update_status_text(state, "Apenas ficheiros podem ser copiados.");
+    }
+    bump_layout(state);
+    return ok;
+}
+
+int explorer_exec_paste(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer) {
+    int ok;
+
+    if (!api || !state || !explorer || explorer->showing_drives) {
+        return 0;
+    }
+    if (!enter_explorer_dir(api, explorer)) {
+        update_status_text(state, "Falha ao abrir a pasta.");
+        return 0;
+    }
+    ok = app_clip_paste(api, "") != 0;
+    explorer_refresh_list(api, state, explorer);
+    update_status_text(state, ok ? "Colado." : "Nada para colar.");
+    bump_layout(state);
+    return ok;
 }

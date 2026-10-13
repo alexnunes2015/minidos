@@ -124,7 +124,7 @@ def main():
             disk_a,
             extra_args=[
                 "-drive",
-                f"file={disk_b},format=raw,if=ide,index=0",
+                f"file={disk_b},format=raw,if=ide,index=1",
             ],
         )
         proc = spawn_qemu(qemu_cmd)

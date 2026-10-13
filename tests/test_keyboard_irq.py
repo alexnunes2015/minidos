@@ -177,6 +177,9 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
     if not matched:
         raise RuntimeError(f"timeout waiting for command acceptance: {cmd}")
 
+    if "KBD200" in log:
+        raise RuntimeError("keyboard input used the polling fallback instead of IRQ1")
+
     if not any(pattern in log for pattern in expected_patterns):
         extra, matched = read_until(proc, expected_patterns, timeout_s, echo=echo)
         if not matched:
@@ -192,6 +195,11 @@ def _wait_for_command_result(proc, cmd, expected_patterns, timeout_s, *, echo):
             raise RuntimeError(f"missing expected output {pattern!r} for command {cmd!r}")
 
     return log
+
+
+def _assert_irq_keyboard_path(log):
+    if "KBD200" in log:
+        raise RuntimeError("keyboard input used the polling fallback instead of IRQ1")
 
 def _wait_for_default_gui(proc, timeout_s, *, echo):
     log_after, matched = read_until(
@@ -269,12 +277,15 @@ def main():
                 return 0
             raise
 
-        kbd_log, kbd_matched = wait_for_marker_sequence(
-            proc,
-            [KBD_READY_MARKERS],
-            args.ready_timeout,
-            echo=not args.quiet,
-        )
+        if any(marker in log for marker in KBD_READY_MARKERS):
+            kbd_log, kbd_matched = "", True
+        else:
+            kbd_log, kbd_matched = wait_for_marker_sequence(
+                proc,
+                [KBD_READY_MARKERS],
+                args.ready_timeout,
+                echo=not args.quiet,
+            )
         if not kbd_matched:
             raise RuntimeError("timeout waiting for keyboard-ready marker")
         log += kbd_log
@@ -299,6 +310,7 @@ def main():
         )
         if not matched:
             raise RuntimeError("timeout waiting for top table header")
+        _assert_irq_keyboard_path(log_after)
         if "shell" not in log_after:
             extra, matched = read_until(
                 proc,

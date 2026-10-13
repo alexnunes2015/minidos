@@ -83,9 +83,16 @@ void mouse_init(void) {
     g_mouse_state.x = width / 2;
     g_mouse_state.y = height / 2;
 
+#ifdef MOUSE_TEST_FORCE_FAIL
+    log_serial_raw("MOUSE201 controller-busy\n");
+    log_serial_raw("[mouse] controller busy, mouse disabled\n");
+    return;
+#endif
+
     ps2_drain_output(32);
 
     if (!ps2_wait_input_empty()) {
+        log_serial_raw("MOUSE201 controller-busy\n");
         log_serial_raw("[mouse] controller busy, mouse disabled\n");
         return;
     }
@@ -95,6 +102,7 @@ void mouse_init(void) {
     command_byte |= 0x02;
     command_byte &= (unsigned char)~0x20U;
     if (!ps2_write_controller_command_byte(command_byte)) {
+        log_serial_raw("MOUSE202 command-byte-update-failed\n");
         log_serial_raw("[mouse] command byte update failed\n");
         return;
     }
@@ -102,11 +110,13 @@ void mouse_init(void) {
     ps2_drain_output(32);
 
     if (!ps2_write_aux_device(0xF6) || !mouse_expect_ack()) {
+        log_serial_raw("MOUSE203 default-settings-ack-missing\n");
         log_serial_raw("[mouse] default-settings ACK missing\n");
         return;
     }
 
     if (!ps2_write_aux_device(0xF4) || !mouse_expect_ack()) {
+        log_serial_raw("MOUSE204 enable-data-ack-missing\n");
         log_serial_raw("[mouse] enable-data ACK missing\n");
         return;
     }

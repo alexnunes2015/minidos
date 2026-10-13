@@ -8,10 +8,10 @@ typedef struct {
 } start_menu_entry_t;
 
 static const start_menu_entry_t g_start_menu_items[START_MENU_ITEM_COUNT] = {
-    {"Programas", "Apps e demos", WIN95_ICON_TERMINAL},
-    {"Documentos", "Ficheiros e notas", WIN95_ICON_NOTEPAD},
-    {"Definicoes", "Tema e video", WIN95_ICON_SETTINGS},
-    {"Ajuda", "Dicas rapidas", WIN95_ICON_COMPUTER},
+    {"Programs", "Apps and DOS tools", WIN95_ICON_TERMINAL},
+    {"Documents", "Files and notes", WIN95_ICON_NOTEPAD},
+    {"Settings", "Display and system", WIN95_ICON_SETTINGS},
+    {"Help", "MiniDOS 95 guide", WIN95_ICON_COMPUTER},
 };
 
 void draw_drag_outline(const minidos_app_api_t* api, const demo_state_t* state) {
@@ -365,7 +365,7 @@ static void draw_start_button_clipped(const minidos_app_api_t* api, const demo_s
         pressed ? theme->face : theme->light, clip);
     draw_logo_mark_clipped(api, inner.x + 4, inner.y + 4, 3, pressed, clip);
     ui_draw_text_clipped(api, inner.x + 16 + (pressed ? 1 : 0), inner.y + 4 + (pressed ? 1 : 0),
-        "Iniciar", theme->text, button_bg, clip);
+        "Start", theme->text, button_bg, clip);
 }
 
 static void draw_task_button_clipped(const minidos_app_api_t* api, const demo_state_t* state,
@@ -506,10 +506,12 @@ static void draw_tray_clipped(const minidos_app_api_t* api, const demo_state_t* 
 
     icon_rect = ui_rect_make(inner.x + TASKBAR_TRAY_GAP, inner.y + 2, TASKBAR_TRAY_ICON_W, 16);
     draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_SPEAKER, inner_clip);
+    icon_rect = ui_rect_make(inner.x + TASKBAR_TRAY_GAP + 20, inner.y + 2, 18, 16);
+    draw_win95_icon_clipped(api, icon_rect, WIN95_ICON_NETWORK, inner_clip);
 
-    clock_inner = ui_rect_make(inner.x + TASKBAR_TRAY_ICON_W + (TASKBAR_TRAY_GAP * 2),
+    clock_inner = ui_rect_make(inner.x + TASKBAR_TRAY_ICON_W + 20 + (TASKBAR_TRAY_GAP * 2),
         inner.y,
-        inner.w - (TASKBAR_TRAY_ICON_W + (TASKBAR_TRAY_GAP * 3)),
+        inner.w - (TASKBAR_TRAY_ICON_W + 20 + (TASKBAR_TRAY_GAP * 3)),
         inner.h);
     draw_text_centered_in_rect_clipped(api, clock_inner, state->clock_text, theme->text, bg, clip);
 }
@@ -535,7 +537,7 @@ void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_fill_rect(api, ui_rect_make(menu.x + 2, menu.y + 2, menu.w, menu.h), ui_rgb(48, 48, 48));
     ui_draw_panel(api, theme, menu, 1);
     fill_vertical_gradient(api, strip, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
-    draw_vertical_text(api, strip, "AIOS 95", theme->title_active_text, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
+    draw_vertical_text(api, strip, "MiniDOS", theme->title_active_text, ui_rgb(0, 0, 104), ui_rgb(0, 96, 192));
     draw_logo_mark(api, strip.x + 5, strip.y + strip.h - 20, 5, 0);
 
     draw_start_menu_item(api, state, START_MENU_ITEM_PROGRAMAS, g_start_menu_items[START_MENU_ITEM_PROGRAMAS].label);
@@ -547,7 +549,7 @@ void draw_start_menu(const minidos_app_api_t* api, const demo_state_t* state) {
     ui_fill_rect(api, ui_rect_make(divider.x, divider.y + 1, divider.w, 1), theme->light);
 
     exit_button.bounds = exit_rect;
-    exit_button.label = "Voltar para DOS";
+    exit_button.label = "Back to DOS";
     exit_button.pressed = (state->start_menu_pressed_item == START_MENU_ITEM_BACK_TO_DOS);
     exit_button.focused = (state->start_menu_hot_item == START_MENU_ITEM_BACK_TO_DOS);
     exit_button.enabled = 1;

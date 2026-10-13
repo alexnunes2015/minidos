@@ -2,16 +2,16 @@
 #include "win95_demo.h"
 
 static const char* const g_showcase_speed_items[] = {
-    "Lento",
-    "Normal",
-    "Turbo",
+    "Centered",
+    "Tile",
+    "Stretch",
 };
 
 static const char* const g_showcase_menu_items[] = {
-    "Novo ficheiro",
-    "Copiar",
-    "Colar",
-    "Propriedades",
+    "Windows Classic",
+    "High Contrast",
+    "MiniDOS Teal",
+    "Properties",
 };
 
 void str_copy(char* dst, const char* src, int max_len) {
@@ -72,7 +72,7 @@ void update_mouse_label_text(demo_state_t* state) {
     }
 
     str_copy(state->mouse_text,
-        state->mouse.present ? "Mouse PS/2 ativo" : "Mouse PS/2 nao detetado",
+        state->mouse.present ? "PS/2 mouse active" : "PS/2 mouse not detected",
         (int)sizeof(state->mouse_text));
 
     control = ui_wm_find_control(&state->wm, state->label_mouse_id);
@@ -98,15 +98,13 @@ void update_status_text(demo_state_t* state, const char* text) {
 void update_value_label_text(demo_state_t* state) {
     ui_control_t* control;
     ui_control_t* dropdown;
-    ui_control_t* menu;
     ui_control_t* scrollbar;
     ui_control_t* sound;
     ui_control_t* grid;
     ui_control_t* classic;
-    const char* speed = "-";
-    const char* action = "-";
-    const char* theme = "Cloud";
-    const char* sound_state = "off";
+    const char* wallpaper = "-";
+    const char* theme = "Teal";
+    const char* icons_state = "off";
     const char* grid_state = "off";
     char value[96];
     int i = 0;
@@ -117,23 +115,19 @@ void update_value_label_text(demo_state_t* state) {
     }
 
     dropdown = ui_wm_find_control(&state->wm, state->dropdown_speed_id);
-    menu = ui_wm_find_control(&state->wm, state->menu_actions_id);
     scrollbar = ui_wm_find_control(&state->wm, state->scrollbar_zoom_id);
     sound = ui_wm_find_control(&state->wm, state->checkbox_sound_id);
     grid = ui_wm_find_control(&state->wm, state->checkbox_grid_id);
     classic = ui_wm_find_control(&state->wm, state->radio_theme_classic_id);
 
     if (dropdown && dropdown->items && dropdown->selected_index >= 0 && dropdown->selected_index < dropdown->item_count) {
-        speed = dropdown->items[dropdown->selected_index];
-    }
-    if (menu && menu->items && menu->selected_index >= 0 && menu->selected_index < menu->item_count) {
-        action = menu->items[menu->selected_index];
+        wallpaper = dropdown->items[dropdown->selected_index];
     }
     if (scrollbar) {
         zoom = scrollbar->value;
     }
     if (sound && sound->checked) {
-        sound_state = "on";
+        icons_state = "on";
     }
     if (grid && grid->checked) {
         grid_state = "on";
@@ -142,14 +136,14 @@ void update_value_label_text(demo_state_t* state) {
         theme = "Classic";
     }
 
-    while (i < (int)sizeof(value) - 1 && "Tema:"[i] != '\0') {
-        value[i] = "Tema:"[i];
+    while (i < (int)sizeof(value) - 1 && "Theme:"[i] != '\0') {
+        value[i] = "Theme:"[i];
         i++;
     }
     value[i++] = ' ';
     str_copy(&value[i], theme, (int)sizeof(value) - i);
     i = ui_strlen(value);
-    str_copy(&value[i], "  Zoom:", (int)sizeof(value) - i);
+    str_copy(&value[i], "  Size:", (int)sizeof(value) - i);
     i = ui_strlen(value);
     value[i++] = ' ';
     value[i++] = (char)('0' + ((zoom / 10) % 10));
@@ -157,22 +151,17 @@ void update_value_label_text(demo_state_t* state) {
     value[i++] = '%';
     value[i++] = ' ';
     value[i++] = ' ';
-    str_copy(&value[i], "Vel:", (int)sizeof(value) - i);
+    str_copy(&value[i], "Wallpaper:", (int)sizeof(value) - i);
     i = ui_strlen(value);
     value[i++] = ' ';
-    str_copy(&value[i], speed, (int)sizeof(value) - i);
+    str_copy(&value[i], wallpaper, (int)sizeof(value) - i);
     i = ui_strlen(value);
-    str_copy(&value[i], "  Menu:", (int)sizeof(value) - i);
-    i = ui_strlen(value);
-    value[i++] = ' ';
-    str_copy(&value[i], action, (int)sizeof(value) - i);
-    i = ui_strlen(value);
-    str_copy(&value[i], "  Som:", (int)sizeof(value) - i);
+    str_copy(&value[i], "  Icons:", (int)sizeof(value) - i);
     i = ui_strlen(value);
     value[i++] = ' ';
-    str_copy(&value[i], sound_state, (int)sizeof(value) - i);
+    str_copy(&value[i], icons_state, (int)sizeof(value) - i);
     i = ui_strlen(value);
-    str_copy(&value[i], "  Grelha:", (int)sizeof(value) - i);
+    str_copy(&value[i], "  Grid:", (int)sizeof(value) - i);
     i = ui_strlen(value);
     value[i++] = ' ';
     str_copy(&value[i], grid_state, (int)sizeof(value) - i);
@@ -204,35 +193,35 @@ void create_showcase_window(demo_state_t* state) {
         bounds.y = 8;
     }
 
-    state->window_id = ui_wm_create_window_ex(&state->wm, bounds, "Componentes UI", 1, 1, 1);
+    state->window_id = ui_wm_create_window_ex(&state->wm, bounds, "Display Properties", 1, 1, 1);
     state->label_mouse_id = ui_wm_add_label(&state->wm, state->window_id,
-        ui_rect_make(18, 56, 472, 16), "Mouse");
+        ui_rect_make(18, 56, 472, 16), "Desktop preview and pointer status");
     state->label_status_id = ui_wm_add_label(&state->wm, state->window_id,
         ui_rect_make(18, 286, 472, 16), state->status_text);
     state->label_value_id = ui_wm_add_label(&state->wm, state->window_id,
         ui_rect_make(18, 266, 472, 16), "");
     state->input_id = ui_wm_add_textinput(&state->wm, state->window_id,
-        ui_rect_make(18, 76, 204, 24), state->input_text, (int)sizeof(state->input_text));
+        ui_rect_make(18, 80, 204, 24), state->input_text, (int)sizeof(state->input_text));
     state->dropdown_speed_id = ui_wm_add_dropdown(&state->wm, state->window_id,
-        ui_rect_make(246, 76, 156, 24), g_showcase_speed_items,
+        ui_rect_make(246, 80, 156, 24), g_showcase_speed_items,
         (int)(sizeof(g_showcase_speed_items) / sizeof(g_showcase_speed_items[0])), 1);
     state->checkbox_sound_id = ui_wm_add_checkbox(&state->wm, state->window_id,
-        ui_rect_make(18, 132, 176, 20), "Ativar sons", 1);
+        ui_rect_make(18, 132, 176, 20), "Show icons", 1);
     state->checkbox_grid_id = ui_wm_add_checkbox(&state->wm, state->window_id,
-        ui_rect_make(18, 156, 176, 20), "Mostrar grelha", 0);
+        ui_rect_make(18, 156, 176, 20), "Show grid", 0);
     state->radio_theme_classic_id = ui_wm_add_radio(&state->wm, state->window_id,
-        ui_rect_make(246, 132, 156, 20), "Tema Classic", 1, 1);
+        ui_rect_make(246, 132, 156, 20), "Classic", 1, 1);
     state->radio_theme_cloud_id = ui_wm_add_radio(&state->wm, state->window_id,
-        ui_rect_make(246, 156, 156, 20), "Tema Cloud", 1, 0);
+        ui_rect_make(246, 156, 156, 20), "Teal", 1, 0);
     state->menu_actions_id = ui_wm_add_menu(&state->wm, state->window_id,
         ui_rect_make(18, 180, 176, 76), g_showcase_menu_items,
         (int)(sizeof(g_showcase_menu_items) / sizeof(g_showcase_menu_items[0])), 0);
     state->scrollbar_zoom_id = ui_wm_add_scrollbar(&state->wm, state->window_id,
         ui_rect_make(446, 76, 22, 180), 0, 20, 4, 8);
     state->button_ok_id = ui_wm_add_button(&state->wm, state->window_id,
-        ui_rect_make(246, 180, 90, 24), "Aplicar");
+        ui_rect_make(246, 180, 90, 24), "Apply");
     state->button_cancel_id = ui_wm_add_button(&state->wm, state->window_id,
-        ui_rect_make(344, 180, 90, 24), "Fechar");
+        ui_rect_make(344, 180, 90, 24), "Close");
     ui_wm_set_focus_control(&state->wm, state->input_id);
     sync_showcase_state(state);
 }
@@ -344,48 +333,8 @@ void enter_desktop_home(const minidos_app_api_t* api) {
 
 void draw_text_transparent_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
     unsigned int fg, ui_rect_t clip) {
-    int i;
-    int row;
-    int col;
-
-    if (!api || !text) {
-        return;
-    }
-
-    for (i = 0; text[i] != '\0'; i++) {
-        ui_rect_t char_rect = ui_rect_make(x + (i * UI_CHAR_W), y, UI_CHAR_W, UI_CHAR_H);
-        const unsigned char* glyph;
-
-        if (text[i] < 32 || text[i] > 126) {
-            continue;
-        }
-        if (ui_rect_is_empty(ui_rect_intersect(char_rect, clip))) {
-            continue;
-        }
-
-        glyph = ui_font_8x8[text[i] - 32];
-        for (row = 0; row < UI_CHAR_H; row++) {
-            unsigned char bits = glyph[row];
-            for (col = 0; col < UI_CHAR_W; col++) {
-                if (!(bits & (0x80u >> col))) {
-                    continue;
-                }
-
-                {
-                    app_gfx_rect_t pixel_rect;
-                    pixel_rect.x = char_rect.x + col;
-                    pixel_rect.y = char_rect.y + row;
-                    pixel_rect.w = 1;
-                    pixel_rect.h = 1;
-                    pixel_rect.color = fg;
-                    if (!ui_rect_contains(&clip, pixel_rect.x, pixel_rect.y)) {
-                        continue;
-                    }
-                    (void)app_gfx_rect(api, &pixel_rect);
-                }
-            }
-        }
-    }
+    /* Keep the Win95 UI font pixel-identical while batching each glyph row. */
+    ui_draw_text_transparent_runs_clipped(api, x, y, text, fg, clip);
 }
 
 void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
@@ -435,6 +384,7 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     state->last_desktop_click_ticks = 0;
     state->desktop_item_count = 0;
     explorer_init_all(state);
+    fileops_init(state);
     (void)ui_screen_size(api, &state->sw, &state->sh);
 
     ui_wm_init(&state->wm, ui_theme_classic());
@@ -452,8 +402,8 @@ void init_demo(demo_state_t* state, const minidos_app_api_t* api) {
     update_clock_text(state, api);
     update_status_text(state,
         state->mouse.present
-            ? "Janela de teste aberta. Experimenta os componentes."
-            : "Sem mouse. Teclado continua funcional.");
+            ? "Display Properties opened."
+            : "No mouse detected. Keyboard remains active.");
     sync_showcase_state(state);
 }
 
@@ -494,17 +444,27 @@ int app_main(const minidos_app_api_t* api) {
             int previous_start_menu_pressed_item = state.start_menu_pressed_item;
             int previous_start_menu_hot_item = state.start_menu_hot_item;
             int previous_selected_desktop_item = state.selected_desktop_item;
+            int previous_overlay = ctx_menu_is_open(&state) || modal_is_active(&state);
+            int overlay_active;
 
             copy_window_title_by_id(&state, previous_active_window_id,
                 previous_active_title, (int)sizeof(previous_active_title));
             (void)app_mouse_state(api, &state.mouse);
             update_mouse_label_text(&state);
             if (handle_mouse(api, &state, &previous_mouse)) {
-                app_gfx_clear(api, 0x000000u);
+                ui_clear(api, 0x000000u);
                 ui_present(api);
                 return 0;
             }
-            if (state.mouse.x != previous_mouse.x || state.mouse.y != previous_mouse.y) {
+            overlay_active = ctx_menu_is_open(&state) || modal_is_active(&state);
+            if (previous_overlay || overlay_active) {
+                /* An overlay (context menu / dialog) is or was on screen; it
+                 * paints above everything, so force a full redraw and skip the
+                 * partial-motion fast paths that would corrupt it. */
+                need_full_render = 1;
+            }
+            if (!previous_overlay && !overlay_active
+                && (state.mouse.x != previous_mouse.x || state.mouse.y != previous_mouse.y)) {
                 ui_rect_t previous_cursor_rect = cursor_rect_at(previous_mouse.x, previous_mouse.y);
                 ui_rect_t current_cursor_rect = cursor_rect_at(state.mouse.x, state.mouse.y);
                 ui_rect_t next_window_rect = current_window_rect(&state);
@@ -601,7 +561,7 @@ int app_main(const minidos_app_api_t* api) {
             char c = 0;
             while (app_get_char_nonblock(api, &c)) {
                 if (handle_keyboard(api, &state, c)) {
-                    app_gfx_clear(api, 0x000000u);
+                    ui_clear(api, 0x000000u);
                     ui_present(api);
                     return 0;
                 }

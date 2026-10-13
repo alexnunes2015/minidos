@@ -7,6 +7,8 @@ OBJCOPY = objcopy
 QEMU = qemu-system-i386
 GDB = gdb
 
+.DEFAULT_GOAL := all
+
 BOOT_DIR = src/boot
 KERNEL_DIR = src/kernel
 KERNEL_CORE_DIR = $(KERNEL_DIR)/core
@@ -64,7 +66,7 @@ endef
 
 # Ensure drive.o is included
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-user-isolation full-test
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-mouse test-mouse-failure test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-scheduler-fairness test-syscall-matrix test-user-isolation test-user-cleanup full-test
 
 -include $(KERNEL_DEPS)
 
@@ -115,12 +117,13 @@ $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Kernel ELF with symbols
-$(BUILD_DIR)/kernel.elf: $(KERNEL_ASM) $(KERNEL_OBJECTS)
-	$(LD) $(LDFLAGS) -o $@ $^
+$(BUILD_DIR)/kernel.elf: $(KERNEL_ASM) $(KERNEL_OBJECTS) $(KERNEL_CORE_DIR)/kernel.ld
+	$(LD) $(LDFLAGS) -o $@ $(KERNEL_ASM) $(KERNEL_OBJECTS)
 
 # Kernel flat binary used by the bootloader
 $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
+
 
 # Disk image - create 1.44MB FAT12 floppy image
 minidos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin scripts/build_disk.sh $(APP_RUNTIME_SOURCES) $(APP_SOURCES) $(CURSOR_ASSETS) $(ICON_ASSETS)
@@ -173,6 +176,11 @@ test-keyboard-soft: minidos.img
 test-mouse: minidos.img
 	TMPDIR="$(CURDIR)/build" python3 tests/test_mouse_ui.py
 
+test-mouse-failure:
+	$(MAKE) clean
+	$(MAKE) EXTRA_CFLAGS=-DMOUSE_TEST_FORCE_FAIL all
+	python3 tests/test_mouse_failure.py
+
 test-phase3: minidos.img
 	python3 tests/test_phase3.py
 
@@ -188,8 +196,17 @@ test-multitask: minidos.img
 test-multitask-com: minidos.img
 	python3 tests/test_multitask_com.py
 
+test-scheduler-fairness: minidos.img
+	python3 tests/test_scheduler_fairness.py
+
+test-syscall-matrix: minidos.img
+	python3 tests/test_syscall_matrix.py
+
 test-user-isolation: minidos.img
 	python3 tests/test_user_isolation.py
+
+test-user-cleanup: minidos.img
+	python3 tests/test_user_cleanup.py
 
 test-storage-failure: minidos.img
 	python3 tests/test_storage_failure.py
@@ -209,7 +226,10 @@ full-test:
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
 	$(MAKE) test-multitask-com
+	$(MAKE) test-scheduler-fairness
+	$(MAKE) test-syscall-matrix
 	$(MAKE) test-user-isolation
+	$(MAKE) test-user-cleanup
 	$(MAKE) test-storage-failure
 
 ci:
@@ -226,7 +246,10 @@ ci:
 	$(MAKE) test-phase4
 	$(MAKE) test-multitask
 	$(MAKE) test-multitask-com
+	$(MAKE) test-scheduler-fairness
+	$(MAKE) test-syscall-matrix
 	$(MAKE) test-user-isolation
+	$(MAKE) test-user-cleanup
 	$(MAKE) test-storage-failure
 
 test: test-help test-ver test-drives
@@ -267,4 +290,4 @@ test-graphics:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-user-isolation full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial test-graphics
+.PHONY: all clean run run-no-reboot run-trace run-gdb gdb-kernel verify-image ci phase0-check test-paging test-keyboard test-keyboard-soft test-ui-runtime test-mouse test-phase3 test-phase4 test-phase5 test-large-elf test-multitask test-multitask-com test-scheduler-fairness test-syscall-matrix test-user-isolation test-user-cleanup full-test test test-help test-ver test-drives test-dir test-rmdir test-runner test-interactive test-serial test-graphics

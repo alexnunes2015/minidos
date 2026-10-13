@@ -427,7 +427,7 @@ void open_start_menu(demo_state_t* state) {
     state->start_button_pressed = 0;
     state->start_menu_pressed_item = START_MENU_ITEM_NONE;
     state->start_menu_hot_item = START_MENU_ITEM_NONE;
-    update_status_text(state, "Menu Iniciar aberto.");
+    update_status_text(state, "Start menu opened.");
 }
 
 void close_start_menu(demo_state_t* state, const char* reason) {
@@ -466,19 +466,19 @@ int handle_start_menu_action(demo_state_t* state, int action_id) {
     }
 
     if (action_id == START_MENU_ITEM_PROGRAMAS) {
-        close_start_menu(state, "Programas destacados na shell grafica.");
+        close_start_menu(state, "Programs are pinned on the desktop.");
         return 0;
     }
     if (action_id == START_MENU_ITEM_DOCUMENTOS) {
-        close_start_menu(state, "Documentos prontos para navegar.");
+        close_start_menu(state, "Documents are ready to browse.");
         return 0;
     }
     if (action_id == START_MENU_ITEM_DEFINICOES) {
-        close_start_menu(state, "Definicoes em estilo classico.");
+        close_start_menu(state, "Classic settings selected.");
         return 0;
     }
     if (action_id == START_MENU_ITEM_AJUDA) {
-        close_start_menu(state, "Ajuda: arrasta a janela e usa o Iniciar.");
+        close_start_menu(state, "Help: drag windows and use Start.");
         return 0;
     }
     if (action_id == START_MENU_ITEM_BACK_TO_DOS) {

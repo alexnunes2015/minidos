@@ -154,11 +154,6 @@ biosdisk_real_mode_entry:
 
     call biosdisk_pic_to_bios
 
-    mov al, 'A'
-    call biosdisk_serial_putc
-    mov al, 'B'
-    call biosdisk_serial_putc
-
     mov bx, [biosdisk_buffer_offset - _start]
     mov ax, [biosdisk_buffer_segment - _start]
     mov es, ax
@@ -173,16 +168,11 @@ biosdisk_real_mode_entry:
     shl al, 6
     or cl, al
 
-    mov al, 'C'
-    call biosdisk_serial_putc
     mov al, 1
     mov ah, [biosdisk_rw_command - _start]
     sti
     int 0x13
     cli
-    mov al, 'D'
-    call biosdisk_serial_putc
-
     mov ax, REALMODE_CODE_SEG
     mov ds, ax
     jc .io_failed
@@ -194,11 +184,6 @@ biosdisk_real_mode_entry:
 
 .io_done:
     call biosdisk_pic_to_kernel
-
-    mov al, 'E'
-    call biosdisk_serial_putc
-    mov al, 'F'
-    call biosdisk_serial_putc
 
     cli
     lgdt [thunk_gdt_desc - _start]

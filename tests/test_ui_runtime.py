@@ -27,15 +27,103 @@ static int draw_sequence = 0;
 static int test_status = 1;
 static char last_text[128];
 static int gfx_text_calls = 0;
+static int gfx_text_clipped_calls = 0;
 static int gfx_rect_calls = 0;
+static int gfx_rect_legacy_calls = 0;
+static int gfx_rect_batch_calls = 0;
 static int gfx_surface_blit_calls = 0;
 static app_gfx_surface_blit_t last_surface_blit;
+static app_gfx_text_clipped_t last_text_clipped;
+static char last_text_clipped_value[128];
 static unsigned int stub_ticks = 0;
 static int clip_check_enabled = 0;
 static int clip_check_failed = 0;
 static ui_rect_t clip_check_rect;
 
+#define STUB_RECT_LOG_MAX 512
+#define STUB_BATCH_LOG_MAX 64
+#define STUB_EVENT_LOG_MAX 1024
+
+enum {
+    STUB_EVENT_RECT_BATCH = 1,
+    STUB_EVENT_RECT = 2,
+    STUB_EVENT_TEXT = 3,
+    STUB_EVENT_TEXT_CLIPPED = 4,
+    STUB_EVENT_SURFACE = 5,
+    STUB_EVENT_PRESENT = 6,
+};
+
+static app_gfx_rect_t stub_rect_log[STUB_RECT_LOG_MAX];
+static int stub_rect_log_count = 0;
+static unsigned int stub_batch_size_log[STUB_BATCH_LOG_MAX];
+static int stub_batch_size_log_count = 0;
+static int stub_event_log[STUB_EVENT_LOG_MAX];
+static int stub_event_log_count = 0;
+static int stub_rect_batch_result = 1;
+static int stub_text_clipped_result = 1;
+static int stub_surface_blit_result = 1;
+
 static void run_all_tests(void);
+
+static void stub_record_event(int event) {
+    if (stub_event_log_count < STUB_EVENT_LOG_MAX) {
+        stub_event_log[stub_event_log_count++] = event;
+    }
+}
+
+static void stub_check_rect(const app_gfx_rect_t* rect) {
+    if (!rect) {
+        return;
+    }
+    if (stub_rect_log_count < STUB_RECT_LOG_MAX) {
+        stub_rect_log[stub_rect_log_count++] = *rect;
+    }
+    if (clip_check_enabled) {
+        if (rect->x < clip_check_rect.x
+            || rect->y < clip_check_rect.y
+            || rect->x + rect->w > clip_check_rect.x + clip_check_rect.w
+            || rect->y + rect->h > clip_check_rect.y + clip_check_rect.h) {
+            clip_check_failed = 1;
+        }
+    }
+}
+
+static void stub_record_text(const char* text) {
+    if (!text) {
+        return;
+    }
+
+    snprintf(last_text, sizeof(last_text), "%s", text);
+    if (strcmp(text, "Solo") == 0) {
+        saw_single_title = 1;
+    } else if (strcmp(text, "Back") == 0 && back_order == 0) {
+        back_order = ++draw_sequence;
+    } else if (strcmp(text, "Front") == 0 && front_order == 0) {
+        front_order = ++draw_sequence;
+    }
+}
+
+static void stub_graphics_reset(void) {
+    ui_gfx_rect_batch_reset();
+    last_text[0] = '\0';
+    last_text_clipped_value[0] = '\0';
+    memset(&last_text_clipped, 0, sizeof(last_text_clipped));
+    memset(&last_surface_blit, 0, sizeof(last_surface_blit));
+    gfx_text_calls = 0;
+    gfx_text_clipped_calls = 0;
+    gfx_rect_calls = 0;
+    gfx_rect_legacy_calls = 0;
+    gfx_rect_batch_calls = 0;
+    gfx_surface_blit_calls = 0;
+    stub_rect_log_count = 0;
+    stub_batch_size_log_count = 0;
+    stub_event_log_count = 0;
+    stub_rect_batch_result = 1;
+    stub_text_clipped_result = 1;
+    stub_surface_blit_result = 1;
+    clip_check_enabled = 0;
+    clip_check_failed = 0;
+}
 
 static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsigned int a2) {
     (void)a1;
@@ -45,33 +133,62 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
         const app_gfx_text_t* text = (const app_gfx_text_t*)a0;
 
         gfx_text_calls++;
+        stub_record_event(STUB_EVENT_TEXT);
         if (!text || !text->text) {
             return 1;
         }
+        stub_record_text(text->text);
+        return 1;
+    }
 
-        snprintf(last_text, sizeof(last_text), "%s", text->text);
+    if (num == MINIDOS_SYSCALL_GFX_TEXT_CLIPPED) {
+        const app_gfx_text_clipped_t* text = (const app_gfx_text_clipped_t*)a0;
 
-        if (strcmp(text->text, "Solo") == 0) {
-            saw_single_title = 1;
-        } else if (strcmp(text->text, "Back") == 0 && back_order == 0) {
-            back_order = ++draw_sequence;
-        } else if (strcmp(text->text, "Front") == 0 && front_order == 0) {
-            front_order = ++draw_sequence;
+        gfx_text_clipped_calls++;
+        stub_record_event(STUB_EVENT_TEXT_CLIPPED);
+        if (text) {
+            last_text_clipped = *text;
+            if (text->text) {
+                snprintf(last_text_clipped_value, sizeof(last_text_clipped_value), "%s", text->text);
+                stub_record_text(text->text);
+            }
+            if (clip_check_enabled
+                && (text->clip_x != clip_check_rect.x
+                    || text->clip_y != clip_check_rect.y
+                    || text->clip_w != clip_check_rect.w
+                    || text->clip_h != clip_check_rect.h)) {
+                clip_check_failed = 1;
+            }
         }
+        return stub_text_clipped_result;
     }
 
     if (num == MINIDOS_SYSCALL_GFX_RECT) {
         const app_gfx_rect_t* rect = (const app_gfx_rect_t*)a0;
 
         gfx_rect_calls++;
-        if (clip_check_enabled && rect) {
-            if (rect->x < clip_check_rect.x
-                || rect->y < clip_check_rect.y
-                || rect->x + rect->w > clip_check_rect.x + clip_check_rect.w
-                || rect->y + rect->h > clip_check_rect.y + clip_check_rect.h) {
-                clip_check_failed = 1;
+        gfx_rect_legacy_calls++;
+        stub_record_event(STUB_EVENT_RECT);
+        stub_check_rect(rect);
+        return 1;
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_RECT_BATCH) {
+        const app_gfx_rect_batch_t* batch = (const app_gfx_rect_batch_t*)a0;
+        unsigned int i;
+
+        gfx_rect_batch_calls++;
+        stub_record_event(STUB_EVENT_RECT_BATCH);
+        if (batch && stub_batch_size_log_count < STUB_BATCH_LOG_MAX) {
+            stub_batch_size_log[stub_batch_size_log_count++] = batch->count;
+        }
+        if (stub_rect_batch_result > 0 && batch && batch->rects) {
+            for (i = 0; i < batch->count; i++) {
+                gfx_rect_calls++;
+                stub_check_rect(&batch->rects[i]);
             }
         }
+        return stub_rect_batch_result;
     }
 
     if (num == MINIDOS_SYSCALL_GFX_SURFACE_BLIT) {
@@ -80,6 +197,13 @@ static int stub_syscall(unsigned int num, unsigned int a0, unsigned int a1, unsi
             last_surface_blit = *blit;
         }
         gfx_surface_blit_calls++;
+        stub_record_event(STUB_EVENT_SURFACE);
+        return stub_surface_blit_result;
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_PRESENT) {
+        stub_record_event(STUB_EVENT_PRESENT);
+        return 1;
     }
 
     if (num == MINIDOS_SYSCALL_GET_TICKS) {
@@ -96,6 +220,7 @@ static int test_single_window_sparse_zorder(void) {
     int i;
 
     api.syscall = stub_syscall;
+    stub_graphics_reset();
     saw_single_title = 0;
 
     ui_wm_init(&wm, ui_theme_classic());
@@ -124,9 +249,9 @@ static int test_text_box_clips_overflow(void) {
 
     api.syscall = stub_syscall;
     theme = ui_theme_classic();
-    last_text[0] = '\0';
+    stub_graphics_reset();
 
-    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 0);
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 7, 0);
     if (strcmp(last_text, "EFG") != 0) {
         fprintf(stderr, "text box overflow was not clipped to visible suffix: '%s'\n", last_text);
         return 0;
@@ -144,14 +269,16 @@ static int test_text_box_draws_focus_cursor(void) {
     api.syscall = stub_syscall;
     theme = ui_theme_classic();
 
+    stub_graphics_reset();
     stub_ticks = 0;
-    gfx_rect_calls = 0;
-    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 0);
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 3, 0);
+    (void)ui_gfx_rect_batch_flush(&api);
     unfocused_rects = gfx_rect_calls;
 
+    stub_graphics_reset();
     stub_ticks = 0;
-    gfx_rect_calls = 0;
-    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 1);
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 3, 1);
+    (void)ui_gfx_rect_batch_flush(&api);
     focused_rects = gfx_rect_calls;
 
     if (focused_rects <= unfocused_rects) {
@@ -159,11 +286,36 @@ static int test_text_box_draws_focus_cursor(void) {
         return 0;
     }
 
+    stub_graphics_reset();
     stub_ticks = 20;
-    gfx_rect_calls = 0;
-    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 1);
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 84, 24), "ABC", 3, 1);
+    (void)ui_gfx_rect_batch_flush(&api);
     if (gfx_rect_calls >= focused_rects) {
         fprintf(stderr, "focused text box cursor did not blink off\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_text_box_tracks_caret_position(void) {
+    minidos_app_api_t api;
+    ui_theme_t theme;
+
+    api.syscall = stub_syscall;
+    theme = ui_theme_classic();
+
+    stub_graphics_reset();
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 2, 0);
+    if (strcmp(last_text, "ABC") != 0) {
+        fprintf(stderr, "text box did not show text around an interior caret: '%s'\n", last_text);
+        return 0;
+    }
+
+    stub_graphics_reset();
+    ui_draw_text_box(&api, &theme, ui_rect_make(0, 0, 36, 24), "ABCDEFG", 4, 0);
+    if (strcmp(last_text, "BCD") != 0) {
+        fprintf(stderr, "text box did not scroll with the interior caret: '%s'\n", last_text);
         return 0;
     }
 
@@ -174,17 +326,22 @@ static int test_text_clipped_partial_cell_does_not_overdraw(void) {
     minidos_app_api_t api;
 
     api.syscall = stub_syscall;
-    gfx_text_calls = 0;
-    gfx_rect_calls = 0;
+    stub_graphics_reset();
+    stub_text_clipped_result = -1;
     clip_check_enabled = 1;
     clip_check_failed = 0;
     clip_check_rect = ui_rect_make(13, 22, 2, 3);
 
     ui_draw_text_clipped(&api, 10, 20, "A", 0xFFFFFFu, 0x000000u, clip_check_rect);
+    (void)ui_gfx_rect_batch_flush(&api);
 
     clip_check_enabled = 0;
     if (gfx_text_calls != 0) {
         fprintf(stderr, "partial clipped text used whole-cell text syscall\n");
+        return 0;
+    }
+    if (gfx_text_clipped_calls != 1) {
+        fprintf(stderr, "partial clipped text fallback did not try the clipped-text syscall\n");
         return 0;
     }
     if (gfx_rect_calls <= 0) {
@@ -206,6 +363,7 @@ static int test_listview_clipped_uses_surface_clip(void) {
 
     api.syscall = stub_syscall;
     theme = ui_theme_classic();
+    stub_graphics_reset();
     ui_listview_init(&listview, 40);
     listview.item_count = 1;
     listview.selected_index = 0;
@@ -214,8 +372,6 @@ static int test_listview_clipped_uses_surface_clip(void) {
     listview.items[0].is_dir = 0;
     listview.items[0].icon_color = 0;
 
-    gfx_surface_blit_calls = 0;
-    memset(&last_surface_blit, 0, sizeof(last_surface_blit));
     ui_draw_listview_clipped(&api, &g_ui_listview_line_buf,
         ui_rect_make(10, 20, 120, 40), &listview, &theme,
         ui_rect_make(15, 25, 7, 6));
@@ -230,6 +386,64 @@ static int test_listview_clipped_uses_surface_clip(void) {
         fprintf(stderr, "clipped listview blit used wrong clip: %d,%d %dx%d\n",
             last_surface_blit.clip_x, last_surface_blit.clip_y,
             last_surface_blit.clip_w, last_surface_blit.clip_h);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_listview_surface_rejection_falls_back_to_clipped_runs(void) {
+    minidos_app_api_t api;
+    ui_theme_t theme;
+    ui_listview_item_t item;
+    ui_rect_t clip = ui_rect_make(10, 20, 8, 3);
+    int row;
+
+    api.syscall = stub_syscall;
+    theme = ui_theme_classic();
+    memset(&item, 0, sizeof(item));
+    snprintf(item.name, sizeof(item.name), "%s", "ITEM.TXT");
+    stub_graphics_reset();
+    stub_surface_blit_result = -1;
+    clip_check_enabled = 1;
+    clip_check_rect = clip;
+
+    ui_draw_listview_line_clipped(&api, &g_ui_listview_line_buf,
+        10, 20, 120, &item, 1, 0, &theme, clip);
+    (void)ui_gfx_rect_batch_flush(&api);
+
+    clip_check_enabled = 0;
+    if (gfx_surface_blit_calls != 1
+        || last_surface_blit.format != APP_SURFACE_FORMAT_XRGB8888_LE
+        || last_surface_blit.clip_x != clip.x || last_surface_blit.clip_y != clip.y
+        || last_surface_blit.clip_w != clip.w || last_surface_blit.clip_h != clip.h) {
+        fprintf(stderr, "listview fallback did not first attempt the packed clipped blit\n");
+        return 0;
+    }
+    if (clip_check_failed || gfx_rect_batch_calls != 1
+        || gfx_rect_legacy_calls != 0 || gfx_rect_calls != 6
+        || stub_rect_log_count != 6) {
+        fprintf(stderr, "listview surface rejection did not produce six clipped color runs\n");
+        return 0;
+    }
+    for (row = 0; row < 3; row++) {
+        const app_gfx_rect_t* indicator = &stub_rect_log[row * 2];
+        const app_gfx_rect_t* selection = &stub_rect_log[row * 2 + 1];
+
+        if (indicator->x != 10 || indicator->y != 20 + row
+            || indicator->w != 3 || indicator->h != 1
+            || indicator->color != theme.light
+            || selection->x != 13 || selection->y != 20 + row
+            || selection->w != 5 || selection->h != 1
+            || selection->color != theme.selection_bg) {
+            fprintf(stderr, "listview fallback changed run order or packed colors on row %d\n", row);
+            return 0;
+        }
+    }
+    if (stub_event_log_count != 2
+        || stub_event_log[0] != STUB_EVENT_SURFACE
+        || stub_event_log[1] != STUB_EVENT_RECT_BATCH) {
+        fprintf(stderr, "listview fallback emitted an unexpected command sequence\n");
         return 0;
     }
 
@@ -273,6 +487,47 @@ static int test_checkbox_and_radio_keyboard_dispatch(void) {
     radio_b = ui_wm_find_control_const(&wm, radio_b_id);
     if (!checkbox || !radio_a || !radio_b || !checkbox->checked || radio_a->checked || !radio_b->checked) {
         fprintf(stderr, "checkbox/radio keyboard state incorrect\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_textinput_caret_keyboard_navigation(void) {
+    ui_window_manager_t wm;
+    int window_id;
+    int input_id;
+    char input[16] = "ABCD";
+    const ui_control_t* control;
+
+    ui_wm_init(&wm, ui_theme_classic());
+    window_id = ui_wm_create_window(&wm, ui_rect_make(10, 10, 220, 120), "Input", 1);
+    input_id = ui_wm_add_textinput(&wm, window_id, ui_rect_make(8, 8, 120, 20), input, (int)sizeof(input));
+    if (input_id <= 0) {
+        fprintf(stderr, "failed to create text input\n");
+        return 0;
+    }
+
+    ui_wm_set_focus_control(&wm, input_id);
+    if (!ui_wm_dispatch_key(&wm, 0x15) || !ui_wm_dispatch_key(&wm, 0x15)
+        || !ui_wm_dispatch_key(&wm, 'X')) {
+        fprintf(stderr, "text input did not accept left-arrow insertion\n");
+        return 0;
+    }
+    control = ui_wm_find_control_const(&wm, input_id);
+    if (!control || strcmp(input, "ABXCD") != 0 || control->caret_pos != 3 || control->text_len != 5) {
+        fprintf(stderr, "left-arrow insertion did not preserve text around the caret\n");
+        return 0;
+    }
+
+    if (!ui_wm_dispatch_key(&wm, 8) || !ui_wm_dispatch_key(&wm, 0x16)
+        || !ui_wm_dispatch_key(&wm, 'Y')) {
+        fprintf(stderr, "text input did not accept right-arrow insertion\n");
+        return 0;
+    }
+    control = ui_wm_find_control_const(&wm, input_id);
+    if (!control || strcmp(input, "ABCYD") != 0 || control->caret_pos != 4 || control->text_len != 5) {
+        fprintf(stderr, "right-arrow insertion did not preserve text around the caret\n");
         return 0;
     }
 
@@ -538,6 +793,7 @@ static int test_multi_window_draw_order(void) {
     int i;
 
     api.syscall = stub_syscall;
+    stub_graphics_reset();
     back_order = 0;
     front_order = 0;
     draw_sequence = 0;
@@ -585,7 +841,7 @@ static int test_cursor_batches_horizontal_runs(void) {
     int i;
 
     api.syscall = stub_syscall;
-    gfx_rect_calls = 0;
+    stub_graphics_reset();
 
     for (i = 0; i < UI_CURSOR_BITMAP_WIDTH * UI_CURSOR_BITMAP_HEIGHT; i++) {
         if (ui_cursor_bitmap[i] != UI_CURSOR_PIXEL_TRANSPARENT) {
@@ -594,6 +850,7 @@ static int test_cursor_batches_horizontal_runs(void) {
     }
 
     ui_draw_cursor(&api, 32, 24, 0xFFFFFFu, 0x000000u);
+    (void)ui_gfx_rect_batch_flush(&api);
     if (gfx_rect_calls <= 0) {
         fprintf(stderr, "cursor draw did not emit any rects\n");
         return 0;
@@ -601,6 +858,259 @@ static int test_cursor_batches_horizontal_runs(void) {
     if (gfx_rect_calls >= visible_pixels) {
         fprintf(stderr, "cursor draw still uses per-pixel rects (rects=%d pixels=%d)\n",
             gfx_rect_calls, visible_pixels);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_rect_batch_flushes_at_capacity_in_order(void) {
+    minidos_app_api_t api;
+    unsigned int i;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+
+    for (i = 0; i < APP_GFX_RECT_BATCH_MAX; i++) {
+        ui_fill_rect(&api, ui_rect_make((int)i, (int)i + 10, 1, 1), 0x100000u + i);
+    }
+
+    if (gfx_rect_batch_calls != 1
+        || stub_batch_size_log_count != 1
+        || stub_batch_size_log[0] != APP_GFX_RECT_BATCH_MAX) {
+        fprintf(stderr, "full rectangle queue did not auto-flush one %u-entry batch\n",
+            (unsigned int)APP_GFX_RECT_BATCH_MAX);
+        return 0;
+    }
+    if (g_ui_gfx_rect_batch.count != 0U) {
+        fprintf(stderr, "rectangle queue remained full after its capacity flush\n");
+        return 0;
+    }
+
+    ui_fill_rect(&api, ui_rect_make(100, 110, 2, 3), 0xABCDEFu);
+    (void)ui_gfx_rect_batch_flush(&api);
+
+    if (gfx_rect_batch_calls != 2
+        || stub_batch_size_log_count != 2
+        || stub_batch_size_log[1] != 1U
+        || gfx_rect_calls != (int)APP_GFX_RECT_BATCH_MAX + 1
+        || gfx_rect_legacy_calls != 0) {
+        fprintf(stderr, "rectangle batch boundary counts were incorrect\n");
+        return 0;
+    }
+    for (i = 0; i < APP_GFX_RECT_BATCH_MAX; i++) {
+        if (stub_rect_log[i].x != (int)i
+            || stub_rect_log[i].y != (int)i + 10
+            || stub_rect_log[i].color != 0x100000u + i) {
+            fprintf(stderr, "rectangle batch changed submission order at index %u\n", i);
+            return 0;
+        }
+    }
+    if (stub_rect_log[APP_GFX_RECT_BATCH_MAX].x != 100
+        || stub_rect_log[APP_GFX_RECT_BATCH_MAX].color != 0xABCDEFu) {
+        fprintf(stderr, "rectangle after capacity boundary was not preserved\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_rect_batch_falls_back_to_legacy_in_order(void) {
+    minidos_app_api_t api;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+    stub_rect_batch_result = -1;
+
+    ui_fill_rect(&api, ui_rect_make(4, 5, 6, 7), 0x112233u);
+    ui_fill_rect(&api, ui_rect_make(8, 9, 10, 11), 0x445566u);
+    if (!ui_gfx_rect_batch_flush(&api)) {
+        fprintf(stderr, "legacy rectangle fallback reported failure\n");
+        return 0;
+    }
+
+    if (gfx_rect_batch_calls != 1 || gfx_rect_legacy_calls != 2 || gfx_rect_calls != 2) {
+        fprintf(stderr, "rejected rectangle batch did not fall back exactly once per rectangle\n");
+        return 0;
+    }
+    if (stub_rect_log_count != 2
+        || stub_rect_log[0].x != 4 || stub_rect_log[0].color != 0x112233u
+        || stub_rect_log[1].x != 8 || stub_rect_log[1].color != 0x445566u) {
+        fprintf(stderr, "legacy rectangle fallback changed submission order\n");
+        return 0;
+    }
+    if (stub_event_log_count != 3
+        || stub_event_log[0] != STUB_EVENT_RECT_BATCH
+        || stub_event_log[1] != STUB_EVENT_RECT
+        || stub_event_log[2] != STUB_EVENT_RECT) {
+        fprintf(stderr, "legacy rectangle fallback emitted an unexpected command sequence\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_rect_batch_flushes_before_ordered_operations(void) {
+    minidos_app_api_t api;
+    ui_wallpaper_surface_t* surface = &g_ui_wallpaper_surface;
+
+    api.syscall = stub_syscall;
+
+    stub_graphics_reset();
+    ui_fill_rect(&api, ui_rect_make(1, 2, 3, 4), 0x010203u);
+    ui_draw_text(&api, 5, 6, "Text", 0xFFFFFFu, 0x000000u);
+    if (stub_event_log_count != 2
+        || stub_event_log[0] != STUB_EVENT_RECT_BATCH
+        || stub_event_log[1] != STUB_EVENT_TEXT) {
+        fprintf(stderr, "rectangle batch was not flushed before text\n");
+        return 0;
+    }
+
+    stub_graphics_reset();
+    surface->valid = 1;
+    surface->width = 1;
+    surface->height = 1;
+    surface->stride = 4;
+    ui_fill_rect(&api, ui_rect_make(7, 8, 9, 10), 0x040506u);
+    if (!ui_wallpaper_surface_blit_scaled(&api, 0, 0, 1, 1, -1, 0, 0, 0)) {
+        fprintf(stderr, "surface helper unexpectedly rejected a valid cached surface\n");
+        return 0;
+    }
+    if (stub_event_log_count != 2
+        || stub_event_log[0] != STUB_EVENT_RECT_BATCH
+        || stub_event_log[1] != STUB_EVENT_SURFACE) {
+        fprintf(stderr, "rectangle batch was not flushed before surface blit\n");
+        return 0;
+    }
+
+    stub_graphics_reset();
+    ui_fill_rect(&api, ui_rect_make(11, 12, 13, 14), 0x070809u);
+    ui_present(&api);
+    if (stub_event_log_count != 2
+        || stub_event_log[0] != STUB_EVENT_RECT_BATCH
+        || stub_event_log[1] != STUB_EVENT_PRESENT) {
+        fprintf(stderr, "rectangle batch was not flushed before present\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_clipped_text_uses_one_syscall(void) {
+    minidos_app_api_t api;
+    ui_rect_t clip = ui_rect_make(13, 22, 17, 9);
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+    clip_check_enabled = 1;
+    clip_check_rect = clip;
+
+    ui_draw_text_clipped(&api, 10, 20, "AB", 0xAABBCCu, 0x112233u, clip);
+
+    clip_check_enabled = 0;
+    if (gfx_text_clipped_calls != 1 || gfx_text_calls != 0 || gfx_rect_calls != 0) {
+        fprintf(stderr, "clipped text did not use exactly one clipped-text syscall\n");
+        return 0;
+    }
+    if (stub_event_log_count != 1 || stub_event_log[0] != STUB_EVENT_TEXT_CLIPPED) {
+        fprintf(stderr, "clipped text emitted extra graphics commands\n");
+        return 0;
+    }
+    if (clip_check_failed
+        || strcmp(last_text_clipped_value, "AB") != 0
+        || last_text_clipped.x != 10 || last_text_clipped.y != 20
+        || last_text_clipped.fg != 0xAABBCCu
+        || last_text_clipped.bg != 0x112233u
+        || last_text_clipped.flags != 0U) {
+        fprintf(stderr, "clipped text descriptor fields were not preserved\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_transparent_clipped_text_sets_flag(void) {
+    minidos_app_api_t api;
+    ui_rect_t clip = ui_rect_make(3, 4, 20, 8);
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+
+    ui_draw_text_transparent_clipped(&api, 1, 2, "Glass", 0xFEDCBAu, clip);
+
+    if (gfx_text_clipped_calls != 1 || gfx_text_calls != 0 || gfx_rect_calls != 0
+        || strcmp(last_text_clipped_value, "Glass") != 0
+        || last_text_clipped.bg != 0U
+        || last_text_clipped.flags != APP_GFX_TEXT_TRANSPARENT_BG) {
+        fprintf(stderr, "transparent clipped text did not set its ABI flag in one syscall\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_clipped_text_empty_clip_is_noop(void) {
+    minidos_app_api_t api;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+
+    ui_draw_text_clipped(&api, 10, 20, "Hidden", 0xFFFFFFu, 0x000000u,
+        ui_rect_make(10, 20, 0, 8));
+
+    if (stub_event_log_count != 0
+        || gfx_text_clipped_calls != 0 || gfx_text_calls != 0
+        || gfx_surface_blit_calls != 0 || gfx_rect_calls != 0
+        || gfx_rect_batch_calls != 0) {
+        fprintf(stderr, "opaque clipped text emitted graphics commands for an empty clip\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_transparent_clipped_text_empty_clip_is_noop(void) {
+    minidos_app_api_t api;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+
+    ui_draw_text_transparent_clipped(&api, 10, 20, "Hidden", 0xFFFFFFu,
+        ui_rect_make(10, 20, 8, 0));
+
+    if (stub_event_log_count != 0
+        || gfx_text_clipped_calls != 0 || gfx_text_calls != 0
+        || gfx_surface_blit_calls != 0 || gfx_rect_calls != 0
+        || gfx_rect_batch_calls != 0) {
+        fprintf(stderr, "transparent clipped text emitted graphics commands for an empty clip\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_bitmap_clipped_empty_clip_is_noop(void) {
+    minidos_app_api_t api;
+    ui_wallpaper_surface_t* surface = &g_ui_wallpaper_surface;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+    surface->valid = 1;
+    surface->width = 2;
+    surface->height = 2;
+    surface->stride = 8;
+    ui_path_copy(surface->path, "EMPTY.BMP");
+
+    if (!ui_draw_bitmap_clipped(&api, "EMPTY.BMP", 0, 0, 320, 200,
+            ui_rect_make(100, 100, 0, 0))) {
+        fprintf(stderr, "empty bitmap clip should be a successful no-op\n");
+        return 0;
+    }
+    if (stub_event_log_count != 0
+        || gfx_text_clipped_calls != 0 || gfx_text_calls != 0
+        || gfx_surface_blit_calls != 0 || gfx_rect_calls != 0
+        || gfx_rect_batch_calls != 0) {
+        fprintf(stderr, "clipped bitmap emitted graphics commands for an empty clip\n");
         return 0;
     }
 
@@ -684,17 +1194,17 @@ static int make_minimal_bmp_24bpp(unsigned char* buf, int buf_size,
 
 static int test_surface_blit_syscall_dispatched(void) {
     minidos_app_api_t api;
-    static unsigned char pixels[16]; /* 2x2 XRGB8888 */
+    static unsigned char pixels[16]; /* 2x2 packed ARGB8888_LE */
     app_gfx_surface_blit_t blit;
 
     api.syscall = stub_syscall;
-    gfx_surface_blit_calls = 0;
+    stub_graphics_reset();
 
     blit.buffer = pixels;
     blit.width  = 2;
     blit.height = 2;
     blit.stride = 8;
-    blit.format = APP_SURFACE_FORMAT_XRGB8888;
+    blit.format = APP_SURFACE_FORMAT_ARGB8888_LE;
     blit.dest_x = 0;
     blit.dest_y = 0;
     blit.clip_x = -1;
@@ -713,6 +1223,7 @@ static int test_surface_blit_syscall_dispatched(void) {
     if (last_surface_blit.buffer != pixels
         || last_surface_blit.width != 2
         || last_surface_blit.height != 2
+        || last_surface_blit.format != APP_SURFACE_FORMAT_ARGB8888_LE
         || last_surface_blit.dest_w != 8
         || last_surface_blit.dest_h != 6) {
         fprintf(stderr, "surface blit descriptor fields not passed correctly\n");
@@ -722,6 +1233,7 @@ static int test_surface_blit_syscall_dispatched(void) {
 }
 
 static int test_wallpaper_surface_decode_bmp(void) {
+    minidos_app_api_t api;
     static unsigned char bmp_buf[80];
     ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
     int bmp_size;
@@ -734,6 +1246,9 @@ static int test_wallpaper_surface_decode_bmp(void) {
         fprintf(stderr, "failed to build minimal BMP\n");
         return 0;
     }
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
 
     /* Reset surface cache */
     s->valid = 0;
@@ -756,29 +1271,9 @@ static int test_wallpaper_surface_decode_bmp(void) {
     s->valid = 0;
     s->path[0] = '\0';
 
-    /* Manually call the decode loop that ui_wallpaper_surface_load would do */
-    {
-        int w = 2, h = 2, x, y;
-        const unsigned char* pixel_base = g_ui_bitmap_cache.data + g_ui_bitmap_cache.data_offset;
-        if ((unsigned)(w * h * 4) > UI_WALLPAPER_SURFACE_MAX_BYTES) {
-            fprintf(stderr, "surface too large\n");
-            return 0;
-        }
-        for (y = 0; y < h; y++) {
-            int row_index = 1 - y; /* bottom-up BMP, top_down=0 */
-            const unsigned char* src_row = pixel_base + (unsigned)row_index * g_ui_bitmap_cache.row_stride;
-            unsigned char* dst_row = s->pixels + (unsigned)(y * w * 4);
-            for (x = 0; x < w; x++) {
-                const unsigned char* px = src_row + (unsigned)x * 3;
-                dst_row[x * 4 + 0] = 0;
-                dst_row[x * 4 + 1] = px[2];
-                dst_row[x * 4 + 2] = px[1];
-                dst_row[x * 4 + 3] = px[0];
-            }
-        }
-        s->width = w; s->height = h; s->stride = w * 4;
-        ui_path_copy(s->path, "TEST.BMP");
-        s->valid = 1;
+    if (!ui_wallpaper_surface_load(&api, "TEST.BMP")) {
+        fprintf(stderr, "wallpaper surface decode failed\n");
+        return 0;
     }
 
     /* Verify decoded surface: row 0 should be blue (from bottom row of bottom-up BMP) */
@@ -788,16 +1283,16 @@ static int test_wallpaper_surface_decode_bmp(void) {
         fprintf(stderr, "surface not marked valid after decode\n");
         return 0;
     }
-    /* y=0 row: blue pixel -> XRGB8888: X=0, R=0, G=0, B=FF */
-    if (s->pixels[1] != 0x00u || s->pixels[3] != 0xFFu) {
-        fprintf(stderr, "decoded surface pixel mismatch: R=%02x B=%02x (expected R=00 B=FF)\n",
-            (unsigned)s->pixels[1], (unsigned)s->pixels[3]);
+    /* y=0 row: blue 0x000000FF -> little-endian bytes [B,G,R,X]. */
+    if (s->pixels[0] != 0xFFu || s->pixels[1] != 0x00u
+        || s->pixels[2] != 0x00u || s->pixels[3] != 0x00u) {
+        fprintf(stderr, "decoded blue pixel is not packed [B,G,R,X]\n");
         return 0;
     }
-    /* y=1 row: red pixel -> XRGB8888: X=0, R=FF, G=0, B=0 */
-    if (s->pixels[8 + 1] != 0xFFu || s->pixels[8 + 3] != 0x00u) {
-        fprintf(stderr, "decoded surface pixel mismatch: R=%02x B=%02x (expected R=FF B=00)\n",
-            (unsigned)s->pixels[8 + 1], (unsigned)s->pixels[8 + 3]);
+    /* y=1 row: red 0x00FF0000 -> little-endian bytes [B,G,R,X]. */
+    if (s->pixels[8] != 0x00u || s->pixels[9] != 0x00u
+        || s->pixels[10] != 0xFFu || s->pixels[11] != 0x00u) {
+        fprintf(stderr, "decoded red pixel is not packed [B,G,R,X]\n");
         return 0;
     }
     return 1;
@@ -808,6 +1303,7 @@ static int test_wallpaper_surface_fallback_on_invalid(void) {
     int result;
 
     api.syscall = stub_syscall;
+    stub_graphics_reset();
 
     /* Reset surface cache */
     g_ui_wallpaper_surface.valid = 0;
@@ -839,8 +1335,7 @@ static int test_wallpaper_surface_scaled_blit_uses_dest_size(void) {
     ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
 
     api.syscall = stub_syscall;
-    gfx_surface_blit_calls = 0;
-    memset(&last_surface_blit, 0, sizeof(last_surface_blit));
+    stub_graphics_reset();
 
     s->valid = 1;
     strcpy(s->path, "WALL.BMP");
@@ -868,9 +1363,85 @@ static int test_wallpaper_surface_scaled_blit_uses_dest_size(void) {
         return 0;
     }
 
+    if (last_surface_blit.format != APP_SURFACE_FORMAT_XRGB8888_LE) {
+        fprintf(stderr, "wallpaper surface did not use packed XRGB8888_LE\n");
+        return 0;
+    }
+
     if (last_surface_blit.clip_x != 10 || last_surface_blit.clip_y != 20
         || last_surface_blit.clip_w != 30 || last_surface_blit.clip_h != 40) {
         fprintf(stderr, "scaled wallpaper blit did not preserve clip rect\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+static int test_wallpaper_surface_rejection_falls_back_to_scaled_runs(void) {
+    minidos_app_api_t api;
+    ui_wallpaper_surface_t* surface = &g_ui_wallpaper_surface;
+    ui_rect_t clip = ui_rect_make(11, 20, 2, 2);
+    static const unsigned char pixels[16] = {
+        0x00, 0x00, 0xFF, 0x00, /* red */
+        0x00, 0xFF, 0x00, 0x00, /* green */
+        0xFF, 0x00, 0x00, 0x00, /* blue */
+        0xFF, 0xFF, 0xFF, 0x00, /* white */
+    };
+    static const unsigned int expected_colors[4] = {
+        0xFF0000u, 0x00FF00u, 0x0000FFu, 0xFFFFFFu,
+    };
+    int i;
+
+    api.syscall = stub_syscall;
+    stub_graphics_reset();
+    stub_surface_blit_result = -1;
+    surface->valid = 1;
+    surface->width = 2;
+    surface->height = 2;
+    surface->stride = 8;
+    memcpy(surface->pixels, pixels, sizeof(pixels));
+    clip_check_enabled = 1;
+    clip_check_rect = clip;
+
+    if (!ui_wallpaper_surface_blit_scaled(&api, 10, 20, 4, 2,
+            clip.x, clip.y, clip.w, clip.h)) {
+        fprintf(stderr, "wallpaper packed-blit rejection did not enter its rectangle fallback\n");
+        return 0;
+    }
+    (void)ui_gfx_rect_batch_flush(&api);
+    clip_check_enabled = 0;
+
+    if (gfx_surface_blit_calls != 1
+        || last_surface_blit.format != APP_SURFACE_FORMAT_XRGB8888_LE
+        || last_surface_blit.dest_x != 10 || last_surface_blit.dest_y != 20
+        || last_surface_blit.dest_w != 4 || last_surface_blit.dest_h != 2
+        || last_surface_blit.clip_x != clip.x || last_surface_blit.clip_y != clip.y
+        || last_surface_blit.clip_w != clip.w || last_surface_blit.clip_h != clip.h) {
+        fprintf(stderr, "wallpaper fallback did not first attempt the requested packed blit\n");
+        return 0;
+    }
+    if (clip_check_failed || gfx_rect_batch_calls != 1
+        || gfx_rect_legacy_calls != 0 || gfx_rect_calls != 4
+        || stub_rect_log_count != 4) {
+        fprintf(stderr, "wallpaper surface rejection did not produce four clipped color runs\n");
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        const app_gfx_rect_t* rect = &stub_rect_log[i];
+        int expected_x = 11 + (i & 1);
+        int expected_y = 20 + (i / 2);
+
+        if (rect->x != expected_x || rect->y != expected_y
+            || rect->w != 1 || rect->h != 1
+            || rect->color != expected_colors[i]) {
+            fprintf(stderr, "wallpaper fallback changed scaling order or color at run %d\n", i);
+            return 0;
+        }
+    }
+    if (stub_event_log_count != 2
+        || stub_event_log[0] != STUB_EVENT_SURFACE
+        || stub_event_log[1] != STUB_EVENT_RECT_BATCH) {
+        fprintf(stderr, "wallpaper fallback emitted an unexpected command sequence\n");
         return 0;
     }
 
@@ -890,11 +1461,43 @@ static void run_all_tests(void) {
         test_status = 1;
         return;
     }
+    if (!test_text_box_tracks_caret_position()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_textinput_caret_keyboard_navigation()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_clipped_text_uses_one_syscall()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_transparent_clipped_text_sets_flag()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_clipped_text_empty_clip_is_noop()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_transparent_clipped_text_empty_clip_is_noop()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_bitmap_clipped_empty_clip_is_noop()) {
+        test_status = 1;
+        return;
+    }
     if (!test_text_clipped_partial_cell_does_not_overdraw()) {
         test_status = 1;
         return;
     }
     if (!test_listview_clipped_uses_surface_clip()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_listview_surface_rejection_falls_back_to_clipped_runs()) {
         test_status = 1;
         return;
     }
@@ -930,6 +1533,14 @@ static void run_all_tests(void) {
         test_status = 1;
         return;
     }
+    if (!test_rect_batch_falls_back_to_legacy_in_order()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_rect_batch_flushes_before_ordered_operations()) {
+        test_status = 1;
+        return;
+    }
     if (!test_surface_blit_syscall_dispatched()) {
         test_status = 1;
         return;
@@ -946,10 +1557,44 @@ static void run_all_tests(void) {
         test_status = 1;
         return;
     }
+    if (!test_wallpaper_surface_rejection_falls_back_to_scaled_runs()) {
+        test_status = 1;
+        return;
+    }
+    if (!test_rect_batch_flushes_at_capacity_in_order()) {
+        test_status = 1;
+        return;
+    }
 
     puts("ui runtime regression tests passed");
     test_status = 0;
 }
+"""
+
+
+ABI_TEST_SOURCE = r"""
+#include "minidos_app.h"
+
+#define ABI_ASSERT(name, condition) typedef char name[(condition) ? 1 : -1]
+
+ABI_ASSERT(abi_pointer_is_32_bit, sizeof(void*) == 4);
+ABI_ASSERT(abi_rect_size, sizeof(app_gfx_rect_t) == 20);
+ABI_ASSERT(abi_rect_color_offset, __builtin_offsetof(app_gfx_rect_t, color) == 16);
+ABI_ASSERT(abi_rect_batch_size, sizeof(app_gfx_rect_batch_t) == 8);
+ABI_ASSERT(abi_rect_batch_count_offset, __builtin_offsetof(app_gfx_rect_batch_t, count) == 4);
+ABI_ASSERT(abi_text_clipped_size, sizeof(app_gfx_text_clipped_t) == 40);
+ABI_ASSERT(abi_text_clipped_text_offset, __builtin_offsetof(app_gfx_text_clipped_t, text) == 8);
+ABI_ASSERT(abi_text_clipped_flags_offset, __builtin_offsetof(app_gfx_text_clipped_t, flags) == 36);
+ABI_ASSERT(abi_surface_blit_size, sizeof(app_gfx_surface_blit_t) == 52);
+ABI_ASSERT(abi_surface_blit_format_offset, __builtin_offsetof(app_gfx_surface_blit_t, format) == 16);
+ABI_ASSERT(abi_surface_blit_dest_h_offset, __builtin_offsetof(app_gfx_surface_blit_t, dest_h) == 48);
+ABI_ASSERT(abi_rect_batch_syscall_id, MINIDOS_SYSCALL_GFX_RECT_BATCH == 35);
+ABI_ASSERT(abi_text_clipped_syscall_id, MINIDOS_SYSCALL_GFX_TEXT_CLIPPED == 36);
+ABI_ASSERT(abi_legacy_surface_format, APP_SURFACE_FORMAT_XRGB8888 == 0);
+ABI_ASSERT(abi_packed_xrgb_surface_format, APP_SURFACE_FORMAT_XRGB8888_LE == 1);
+ABI_ASSERT(abi_packed_argb_surface_format, APP_SURFACE_FORMAT_ARGB8888_LE == 2);
+ABI_ASSERT(abi_transparent_text_flag, APP_GFX_TEXT_TRANSPARENT_BG == 1);
+ABI_ASSERT(abi_rect_batch_capacity, APP_GFX_RECT_BATCH_MAX == 64);
 """
 
 
@@ -959,10 +1604,26 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="minidos-ui-runtime-") as tmpdir:
         source_path = os.path.join(tmpdir, "ui_runtime_test.c")
+        abi_source_path = os.path.join(tmpdir, "ui_runtime_abi_test.c")
         binary_path = os.path.join(tmpdir, "ui_runtime_test")
 
         with open(source_path, "w", encoding="ascii") as f:
             f.write(textwrap.dedent(TEST_SOURCE))
+        with open(abi_source_path, "w", encoding="ascii") as f:
+            f.write(textwrap.dedent(ABI_TEST_SOURCE))
+
+        abi_compile_cmd = [
+            "gcc",
+            "-m32",
+            "-Wall",
+            "-Wextra",
+            "-std=c99",
+            "-ffreestanding",
+            "-fsyntax-only",
+            f"-I{runtime_dir}",
+            abi_source_path,
+        ]
+        subprocess.run(abi_compile_cmd, cwd=root, check=True)
 
         compile_cmd = [
             "gcc",

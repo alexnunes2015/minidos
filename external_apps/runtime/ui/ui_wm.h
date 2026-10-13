@@ -288,6 +288,8 @@ static inline void ui_draw_window(const minidos_app_api_t* api, const ui_theme_t
     {
         /* Keep long titles inside the title bar and clear of the caption buttons. */
         ui_rect_t title_text_clip = title_rect;
+        const char* title = window->title ? window->title : "";
+        ui_rect_t title_text_rect;
         int reserved = 0;
 
         if (window->has_close_button && title_rect.w >= 20) {
@@ -300,8 +302,14 @@ static inline void ui_draw_window(const minidos_app_api_t* api, const ui_theme_t
         if (title_text_clip.w < 0) {
             title_text_clip.w = 0;
         }
-        ui_draw_text_clipped(api, title_rect.x + title_text_x, title_rect.y + 4,
-            window->title ? window->title : "", title_fg, title_bg, title_text_clip);
+        title_text_rect = ui_rect_make(title_rect.x + title_text_x, title_rect.y + 4,
+            ui_strlen(title) * UI_CHAR_W, UI_CHAR_H);
+        if (ui_rect_contains_rect(&title_text_clip, &title_text_rect)) {
+            ui_draw_text(api, title_text_rect.x, title_text_rect.y, title, title_fg, title_bg);
+        } else {
+            ui_draw_text_clipped(api, title_text_rect.x, title_text_rect.y,
+                title, title_fg, title_bg, title_text_clip);
+        }
     }
 
     client_rect = ui_window_client_rect(window);
@@ -633,6 +641,7 @@ static inline ui_control_t* ui_wm_alloc_control(ui_window_manager_t* wm, int typ
     control->text_buffer = 0;
     control->text_buffer_len = 0;
     control->text_len = 0;
+    control->caret_pos = 0;
     control->visible = 1;
     control->enabled = 1;
     control->focused = 0;
@@ -693,6 +702,7 @@ static inline int ui_wm_add_textinput(ui_window_manager_t* wm, int window_id, ui
     control->text_buffer = text_buffer;
     control->text_buffer_len = text_buffer_len;
     control->text_len = len;
+    control->caret_pos = len;
     return control->id;
 }
 
@@ -1149,6 +1159,7 @@ static inline int ui_wm_dispatch_mouse(ui_window_manager_t* wm, int x, int y, in
 
 static inline int ui_wm_dispatch_key(ui_window_manager_t* wm, char key) {
     ui_control_t* focused;
+    int i;
 
     if (!wm || wm->focused_control_id == 0) {
         return 0;
@@ -1222,10 +1233,35 @@ static inline int ui_wm_dispatch_key(ui_window_manager_t* wm, char key) {
         return 0;
     }
 
+    if (focused->caret_pos < 0) {
+        focused->caret_pos = 0;
+    } else if (focused->caret_pos > focused->text_len) {
+        focused->caret_pos = focused->text_len;
+    }
+
+    if (key == 0x15) {
+        if (focused->caret_pos > 0) {
+            focused->caret_pos--;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (key == 0x16) {
+        if (focused->caret_pos < focused->text_len) {
+            focused->caret_pos++;
+            return 1;
+        }
+        return 0;
+    }
+
     if (key == 8) {
-        if (focused->text_len > 0) {
+        if (focused->caret_pos > 0) {
+            for (i = focused->caret_pos - 1; i < focused->text_len; i++) {
+                focused->text_buffer[i] = focused->text_buffer[i + 1];
+            }
             focused->text_len--;
-            focused->text_buffer[focused->text_len] = '\0';
+            focused->caret_pos--;
             return 1;
         }
         return 0;
@@ -1233,8 +1269,11 @@ static inline int ui_wm_dispatch_key(ui_window_manager_t* wm, char key) {
 
     if (key >= 32 && key <= 126) {
         if (focused->text_len < (focused->text_buffer_len - 1)) {
-            focused->text_buffer[focused->text_len++] = key;
-            focused->text_buffer[focused->text_len] = '\0';
+            for (i = focused->text_len; i >= focused->caret_pos; i--) {
+                focused->text_buffer[i + 1] = focused->text_buffer[i];
+            }
+            focused->text_buffer[focused->caret_pos++] = key;
+            focused->text_len++;
             return 1;
         }
     }
@@ -1463,7 +1502,8 @@ static inline void ui_wm_draw(const minidos_app_api_t* api, const ui_window_mana
                     button.enabled = control->enabled;
                     ui_draw_button(api, &wm->theme, &button);
                 } else if (control->type == UI_CONTROL_TEXTINPUT) {
-                    ui_draw_text_box(api, &wm->theme, abs_bounds, control->text ? control->text : "", control->focused);
+                    ui_draw_text_box(api, &wm->theme, abs_bounds, control->text ? control->text : "",
+                        control->caret_pos, control->focused);
                 } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
                     ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &wm->theme);
                 } else if (control->type == UI_CONTROL_CHECKBOX) {
@@ -1606,9 +1646,9 @@ static inline void ui_wm_redraw_dirty(const minidos_app_api_t* api,
                 button.focused = control->focused;
                 button.enabled = control->enabled;
                 ui_draw_button(api, &wm->theme, &button);
-            } else if (control->type == UI_CONTROL_TEXTINPUT) {
-                ui_draw_text_box(api, &wm->theme, abs_bounds,
-                    control->text ? control->text : "", control->focused);
+                } else if (control->type == UI_CONTROL_TEXTINPUT) {
+                    ui_draw_text_box(api, &wm->theme, abs_bounds,
+                    control->text ? control->text : "", control->caret_pos, control->focused);
             } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
                 ui_draw_listview(api, &g_ui_listview_line_buf, abs_bounds, control->listview, &wm->theme);
             } else if (control->type == UI_CONTROL_CHECKBOX) {

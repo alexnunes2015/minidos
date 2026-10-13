@@ -34,6 +34,7 @@
 #define BOOT_DRIVE_SPT_ADDR      0x0506
 #define BOOT_DRIVE_HEADS_ADDR    0x0508
 #define BOOT_GEOMETRY_VALID_FLAG 0x02
+#define BOOT_BIOS_VOLUME_FLAG    0x04
 #define BIOS_SECTOR_SIZE         512
 #define ATA_WAIT_SPLASH_POLL_MASK 0x0FFFu
 
@@ -101,7 +102,7 @@ typedef struct {
     unsigned short sectors_per_track;
     unsigned short heads;
     unsigned int total_sectors;
-    int is_floppy;
+    int is_boot_volume;
     int geometry_valid;
 } boot_media_t;
 
@@ -127,7 +128,7 @@ static int ata_disk_id_to_physical(unsigned char disk_id, unsigned char* ata_id)
         return -1;
     }
 
-    if (boot_media.is_floppy) {
+    if (boot_media.is_boot_volume) {
         if (disk_id == 0) {
             return -1;
         }
@@ -275,7 +276,7 @@ static int boot_floppy_lba_to_chs(
     if (!cylinder || !head || !sector) {
         return -1;
     }
-    if (!boot_media.is_floppy || sectors_per_track == 0 || heads == 0) {
+    if (!boot_media.is_boot_volume || sectors_per_track == 0 || heads == 0) {
         return -1;
     }
     if (boot_media.total_sectors != 0 && lba >= boot_media.total_sectors) {
@@ -312,13 +313,11 @@ static int boot_floppy_rw_sector(unsigned int lba, unsigned char* buffer, int wr
         return rc == 0 ? 0 : -1;
     }
 
-    log_serial_raw("DISK101 floppy-read-start\n");
     rc = biosdisk_boot_read_sector(boot_media.drive_number, cylinder, head, sector);
     if (rc != 0) {
-        log_serial_raw("DISK102 floppy-read-fail\n");
+        log_serial_raw("DISK102 bios-read-fail\n");
         return -1;
     }
-    log_serial_raw("DISK103 floppy-read-ok\n");
     for (int i = 0; i < BIOS_SECTOR_SIZE; i++) {
         buffer[i] = biosdisk_transfer_buffer[i];
     }
@@ -411,6 +410,51 @@ static int disk_write_lba_internal(const ata_target_t* target, unsigned int lba,
     return 0;
 }
 
+static void disk_init_bios_boot_volume(void) {
+    unsigned char boot_sector[BIOS_SECTOR_SIZE];
+
+    if (!boot_media.geometry_valid) {
+        boot_media.sectors_per_track = 18;
+        boot_media.heads = 2;
+        boot_media.geometry_valid = 1;
+    }
+
+    if (boot_floppy_rw_sector(0, boot_sector, 0) == 0) {
+        unsigned int total16;
+        unsigned int total32;
+
+        log_serial_raw("DISK120 bios-boot-sector-ready\n");
+        total16 = read_le16(boot_sector + 19);
+        total32 = read_le32(boot_sector + 32);
+        if (boot_media.sectors_per_track == 0) {
+            boot_media.sectors_per_track = read_le16(boot_sector + 24);
+        }
+        if (boot_media.heads == 0) {
+            boot_media.heads = read_le16(boot_sector + 26);
+        }
+        boot_media.total_sectors = total16 != 0 ? total16 : total32;
+    }
+}
+
+static int ata_primary_matches_boot_sector(void) {
+    ata_target_t target;
+    unsigned char ata_sector[BIOS_SECTOR_SIZE];
+    volatile unsigned char* bios_boot_sector = (volatile unsigned char*)0x7C00;
+
+    if ((ata_presence_mask & 0x01U) == 0 || ata_decode_physical_target(0, &target) != 0) {
+        return 0;
+    }
+    if (disk_read_lba_internal(&target, 0, ata_sector) != 0) {
+        return 0;
+    }
+    for (unsigned int i = 0; i < BIOS_SECTOR_SIZE; i++) {
+        if (ata_sector[i] != bios_boot_sector[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void disk_init() {
     unsigned char boot_flags;
 
@@ -419,33 +463,13 @@ void disk_init() {
     boot_media.sectors_per_track = read_phys_u16(BOOT_DRIVE_SPT_ADDR);
     boot_media.heads = read_phys_u16(BOOT_DRIVE_HEADS_ADDR);
     boot_media.total_sectors = 0;
-    boot_media.is_floppy = boot_media.drive_number < 0x80;
     boot_flags = read_phys_u8(BOOT_DRIVE_FLAGS_ADDR);
+    boot_media.is_boot_volume = (boot_flags & BOOT_BIOS_VOLUME_FLAG) != 0;
     boot_media.geometry_valid = (boot_flags & BOOT_GEOMETRY_VALID_FLAG) != 0;
     ata_presence_mask = 0;
 
-    if (boot_media.is_floppy) {
-        unsigned char boot_sector[BIOS_SECTOR_SIZE];
-
-        if (!boot_media.geometry_valid) {
-            boot_media.sectors_per_track = 18;
-            boot_media.heads = 2;
-            boot_media.geometry_valid = 1;
-        }
-
-        if (boot_floppy_rw_sector(0, boot_sector, 0) == 0) {
-            log_serial_raw("DISK120 floppy-boot-sector-ready\n");
-            unsigned int total16 = read_le16(boot_sector + 19);
-            unsigned int total32 = read_le32(boot_sector + 32);
-
-            if (boot_media.sectors_per_track == 0) {
-                boot_media.sectors_per_track = read_le16(boot_sector + 24);
-            }
-            if (boot_media.heads == 0) {
-                boot_media.heads = read_le16(boot_sector + 26);
-            }
-            boot_media.total_sectors = total16 != 0 ? total16 : total32;
-        }
+    if (boot_media.is_boot_volume) {
+        disk_init_bios_boot_volume();
     }
 
     for (unsigned char ata_id = 0; ata_id < 4; ata_id++) {
@@ -454,11 +478,19 @@ void disk_init() {
             ata_presence_mask |= (unsigned char)(1u << ata_id);
         }
     }
+
+    /* Some BIOSes report USB mass storage as DL=0x80 without EDD's USB
+     * descriptor.  Compare ATA LBA0 with the sector BIOS actually loaded:
+     * a mismatch means the boot volume must stay on the BIOS thunk. */
+    if (!boot_media.is_boot_volume && !ata_primary_matches_boot_sector()) {
+        boot_media.is_boot_volume = 1;
+        disk_init_bios_boot_volume();
+    }
     log_serial_raw("DISK190 disk-init-ok\n");
 }
 
 int disk_boot_media_is_floppy(void) {
-    return boot_media.is_floppy;
+    return boot_media.is_boot_volume;
 }
 
 unsigned int disk_boot_media_total_sectors(void) {
@@ -468,7 +500,7 @@ unsigned int disk_boot_media_total_sectors(void) {
 int disk_is_present(unsigned char disk_id) {
     unsigned char ata_id;
 
-    if (boot_media.is_floppy && disk_id == 0) {
+    if (boot_media.is_boot_volume && disk_id == 0) {
         return 1;
     }
     if (ata_disk_id_to_physical(disk_id, &ata_id) != 0) {
@@ -480,7 +512,7 @@ int disk_is_present(unsigned char disk_id) {
 int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
     ata_target_t target;
 
-    if (boot_media.is_floppy && disk_id == 0) {
+    if (boot_media.is_boot_volume && disk_id == 0) {
         return boot_floppy_rw_sector(lba, buffer, 0);
     }
     if (!disk_is_present(disk_id)) {
@@ -501,7 +533,7 @@ int disk_read_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned ch
 int disk_write_lba_from_disk(unsigned char disk_id, unsigned int lba, unsigned char* buffer) {
     ata_target_t target;
 
-    if (boot_media.is_floppy && disk_id == 0) {
+    if (boot_media.is_boot_volume && disk_id == 0) {
         return boot_floppy_rw_sector(lba, buffer, 1);
     }
     if (!disk_is_present(disk_id)) {

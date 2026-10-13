@@ -1,4 +1,5 @@
 #include "win95_demo.h"
+#include "win95_icons.h"
 
 static void draw_inset_field_clipped(const minidos_app_api_t* api, const ui_theme_t* theme,
     ui_rect_t rect, ui_rect_t clip) {
@@ -71,6 +72,37 @@ static void draw_text_right_clipped(const minidos_app_api_t* api, int x, int y,
     ui_draw_text_clipped(api, x, y, visible, fg, bg, clip);
 }
 
+static void draw_text_range_clipped(const minidos_app_api_t* api, int x, int y,
+    const char* text, unsigned int fg, unsigned int bg, int start, int max_chars, ui_rect_t clip) {
+    char visible[128];
+    int len;
+    int i;
+
+    if (!api || !text || max_chars <= 0) {
+        return;
+    }
+
+    len = ui_strlen(text);
+    if (start < 0) {
+        start = 0;
+    }
+    if (start >= len) {
+        return;
+    }
+    len -= start;
+    if (len > max_chars) {
+        len = max_chars;
+    }
+    if (len >= (int)sizeof(visible)) {
+        len = (int)sizeof(visible) - 1;
+    }
+    for (i = 0; i < len; i++) {
+        visible[i] = text[start + i];
+    }
+    visible[len] = '\0';
+    ui_draw_text_clipped(api, x, y, visible, fg, bg, clip);
+}
+
 static void draw_button_clipped(const minidos_app_api_t* api, const ui_theme_t* theme,
     const ui_button_t* button, ui_rect_t clip) {
     ui_rect_t inner;
@@ -105,11 +137,12 @@ static void draw_button_clipped(const minidos_app_api_t* api, const ui_theme_t* 
 }
 
 static void draw_text_box_clipped(const minidos_app_api_t* api, const ui_theme_t* theme,
-    ui_rect_t rect, const char* text, int focused, ui_rect_t clip) {
+    ui_rect_t rect, const char* text, int caret_pos, int focused, ui_rect_t clip) {
     unsigned int fill;
     int max_chars;
     int len = 0;
-    int visible_len = 0;
+    int start = 0;
+    int caret_column = 0;
     int cursor_x;
     unsigned int ticks;
 
@@ -125,15 +158,20 @@ static void draw_text_box_clipped(const minidos_app_api_t* api, const ui_theme_t
     if (text) {
         len = ui_strlen(text);
         max_chars = (rect.w - 8) / UI_CHAR_W;
-        draw_text_right_clipped(api, rect.x + 4, rect.y + 4, text, theme->field_text, fill, max_chars, clip);
         if (max_chars > 0) {
-            visible_len = len > max_chars ? max_chars : len;
+            if (caret_pos < 0 || caret_pos > len) {
+                caret_pos = len;
+            }
+            start = caret_pos > max_chars ? caret_pos - max_chars : 0;
+            caret_column = caret_pos - start;
+            draw_text_range_clipped(api, rect.x + 4, rect.y + 4, text,
+                theme->field_text, fill, start, max_chars, clip);
         }
     }
 
     ticks = app_get_ticks(api);
     if (focused && (((ticks / 20u) & 1u) == 0u)) {
-        cursor_x = rect.x + 4 + (visible_len * UI_CHAR_W);
+        cursor_x = rect.x + 4 + (caret_column * UI_CHAR_W);
         if (cursor_x > rect.x + rect.w - 3) {
             cursor_x = rect.x + rect.w - 3;
         }
@@ -426,6 +464,8 @@ static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const dem
     ui_rect_t toolbar_clip;
     ui_rect_t sidebar_text_clip;
     ui_rect_t divider;
+    ui_rect_t divider2;
+    ui_rect_t list_frame;
     char line1[52];
     char line2[52];
     char line3[52];
@@ -453,15 +493,21 @@ static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const dem
 
     ui_fill_rect_clipped(api, menu, theme->face, clip);
     ui_fill_rect_clipped(api, ui_rect_make(menu.x, menu.y + menu.h - 1, menu.w, 1), theme->shadow, clip);
-    ui_draw_text_clipped(api, menu.x + 8, menu.y + 5, "File   Edit   View   Go   Favorites   Help",
+    ui_draw_text_clipped(api, menu.x + 8, menu.y + 5, "Ficheiro   Editar   Ver   Ir   Ajuda",
         theme->text, theme->face, menu_clip);
 
     ui_draw_panel_clipped(api, theme, toolbar, 1, clip);
-    divider = ui_rect_make(toolbar.x + 90, toolbar.y + 3, 2, toolbar.h - 6);
+    ui_fill_rect_clipped(api, ui_rect_make(toolbar.x + 4, toolbar.y + 4, 1, toolbar.h - 8), theme->shadow, clip);
+    ui_fill_rect_clipped(api, ui_rect_make(toolbar.x + 5, toolbar.y + 4, 1, toolbar.h - 8), theme->light, clip);
+    divider = ui_rect_make(toolbar.x + 68, toolbar.y + 3, 2, toolbar.h - 6);
     ui_fill_rect_clipped(api, ui_rect_make(divider.x, divider.y, 1, divider.h), theme->shadow, clip);
     ui_fill_rect_clipped(api, ui_rect_make(divider.x + 1, divider.y, 1, divider.h), theme->light, clip);
-    ui_draw_text_clipped(api, divider.x + 8, toolbar.y + 6, "Navegacao",
-        theme->text, theme->face, toolbar_clip);
+    divider2 = ui_rect_make(toolbar.x + toolbar.w - 130, toolbar.y + 3, 2, toolbar.h - 6);
+    if (divider2.x > divider.x + 12) {
+        ui_fill_rect_clipped(api, ui_rect_make(divider2.x, divider2.y, 1, divider2.h), theme->shadow, clip);
+        ui_fill_rect_clipped(api, ui_rect_make(divider2.x + 1, divider2.y, 1, divider2.h), theme->light, clip);
+    }
+    (void)toolbar_clip;
 
     ui_fill_rect_clipped(api, addr, theme->face, clip);
     ui_fill_rect_clipped(api, ui_rect_make(addr.x, addr.y + addr.h - 1, addr.w, 1), theme->shadow, clip);
@@ -476,37 +522,56 @@ static void draw_explorer_chrome_clipped(const minidos_app_api_t* api, const dem
             selected_item = &explorer->listview.items[explorer->listview.selected_index];
         }
         if (!explorer || explorer->showing_drives) {
-            str_copy(line1, "Computer", (int)sizeof(line1));
-            str_copy(line2, "Selecione um drive.", (int)sizeof(line2));
-            str_copy(line3, "Back/Forward: [ ]", (int)sizeof(line3));
-            str_copy(line4, "Enter abre.", (int)sizeof(line4));
+            str_copy(line1, "O meu computador", (int)sizeof(line1));
+            str_copy(line2, "Unidades disponiveis", (int)sizeof(line2));
+            if (selected_item) {
+                set_prefixed_line(line3, (int)sizeof(line3), "Unidade: ", selected_item->name);
+                str_copy(line4, "Duplo clique para abrir.", (int)sizeof(line4));
+            } else {
+                str_copy(line3, "Selecione uma unidade.", (int)sizeof(line3));
+                str_copy(line4, "Enter tambem abre.", (int)sizeof(line4));
+            }
         } else if (selected_item && selected_item->is_dir) {
-            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
-            set_prefixed_line(line2, (int)sizeof(line2), "Pasta: ", selected_item->name);
-            str_copy(line3, "Enter abre a pasta.", (int)sizeof(line3));
-            str_copy(line4, "Backspace sobe.", (int)sizeof(line4));
+            str_copy(line1, "Pastas", (int)sizeof(line1));
+            set_prefixed_line(line2, (int)sizeof(line2), "Local: ", explorer->path_text);
+            set_prefixed_line(line3, (int)sizeof(line3), "Pasta: ", selected_item->name);
+            str_copy(line4, "Enter abre a pasta.", (int)sizeof(line4));
         } else if (selected_item) {
-            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
-            set_prefixed_line(line2, (int)sizeof(line2), "Ficheiro: ", selected_item->name);
-            str_copy(line3, "Abertura de ficheiros", (int)sizeof(line3));
-            str_copy(line4, "sera adicionada.", (int)sizeof(line4));
+            str_copy(line1, "Pastas", (int)sizeof(line1));
+            set_prefixed_line(line2, (int)sizeof(line2), "Local: ", explorer->path_text);
+            set_prefixed_line(line3, (int)sizeof(line3), "Ficheiro: ", selected_item->name);
+            str_copy(line4, "Enter abre o ficheiro.", (int)sizeof(line4));
         } else {
-            set_prefixed_line(line1, (int)sizeof(line1), "Local: ", explorer->path_text);
-            str_copy(line2, "Selecione um item.", (int)sizeof(line2));
-            str_copy(line3, "Duplo clique ou Enter.", (int)sizeof(line3));
-            str_copy(line4, "Backspace sobe.", (int)sizeof(line4));
+            str_copy(line1, "Pastas", (int)sizeof(line1));
+            set_prefixed_line(line2, (int)sizeof(line2), "Local: ", explorer->path_text);
+            str_copy(line3, "Selecione um item.", (int)sizeof(line3));
+            str_copy(line4, "Backspace sobe uma pasta.", (int)sizeof(line4));
         }
 
         ui_draw_panel_clipped(api, theme, sidebar, 0, clip);
         sidebar_text_clip = ui_rect_intersect(ui_rect_inset(sidebar, 3), clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 10, line1,
+        draw_win95_icon_clipped(api, ui_rect_make(sidebar.x + 8, sidebar.y + 7, 28, 24),
+            WIN95_ICON_FOLDER_OPEN, clip);
+        ui_draw_text_clipped(api, sidebar.x + 42, sidebar.y + 12, line1,
             theme->text, theme->face, sidebar_text_clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 22, line2,
+        ui_fill_rect_clipped(api, ui_rect_make(sidebar.x + 7, sidebar.y + 37, sidebar.w - 14, 1),
+            theme->shadow, clip);
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 47, line2,
             theme->text, theme->face, sidebar_text_clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 34, line3,
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 61, line3,
             theme->shadow, theme->face, sidebar_text_clip);
-        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 46, line4,
+        ui_draw_text_clipped(api, sidebar.x + 10, sidebar.y + 75, line4,
             theme->shadow, theme->face, sidebar_text_clip);
+    }
+
+    if (explorer) {
+        const ui_control_t* list_control = ui_wm_find_control_const(&state->wm, explorer->listview_id);
+        if (list_control) {
+            ui_rect_t list_bounds = ui_wm_control_visible_bounds(&state->wm, list_control);
+            list_frame = ui_rect_make(list_bounds.x - 2, list_bounds.y - 2,
+                list_bounds.w + 4, list_bounds.h + 4);
+            ui_bevel_rect_clipped(api, list_frame, theme->shadow, theme->light, clip);
+        }
     }
 }
 
@@ -648,6 +713,8 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
             const explorer_state_t* explorer = explorer_for_window((demo_state_t*)state, win->id);
             if (explorer) {
                 draw_explorer_chrome_clipped(api, state, win, rect);
+            } else if (viewer_owns_window(state, win->id)) {
+                draw_viewer_chrome_clipped(api, state, win, rect);
             } else if (win->id == state->window_id) {
                 draw_showcase_chrome_clipped(api, state, win, rect);
             }
@@ -680,6 +747,11 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
                     ui_draw_text_clipped(api, abs_bounds.x + 4, text_y,
                         control->text ? control->text : "",
                         state->wm.theme.field_text, state->wm.theme.field_bg, text_clip);
+                } else if (explorer && control->id == explorer->path_label_id) {
+                    text_clip = ui_rect_intersect(abs_bounds, rect);
+                    ui_draw_text_clipped(api, abs_bounds.x, text_y,
+                        control->text ? control->text : "",
+                        state->wm.theme.text, state->wm.theme.face, text_clip);
                 } else if (explorer && (control->id == explorer->status_label_id
                     || control->id == explorer->status_count_id
                     || control->id == explorer->status_extra_id)) {
@@ -704,7 +776,7 @@ void redraw_region(const minidos_app_api_t* api, const demo_state_t* state, ui_r
                 draw_button_clipped(api, &state->wm.theme, &button, rect);
             } else if (control->type == UI_CONTROL_TEXTINPUT) {
                 draw_text_box_clipped(api, &state->wm.theme, ui_wm_control_visible_bounds(&state->wm, control),
-                    control->text ? control->text : "", control->focused, rect);
+                    control->text ? control->text : "", control->caret_pos, control->focused, rect);
             } else if (control->type == UI_CONTROL_LISTVIEW && control->listview) {
                 const explorer_state_t* explorer = explorer_for_control((demo_state_t*)state, control->id);
                 if (explorer) {
@@ -933,6 +1005,9 @@ void render_dirty_regions(const minidos_app_api_t* api, const demo_state_t* stat
         draw_start_menu(api, state);
     }
 
+    draw_ctx_menu(api, state);
+    draw_modal(api, state);
+
     draw_resize_hint(api, state);
     draw_drag_outline(api, state);
 
@@ -953,6 +1028,8 @@ void render(const minidos_app_api_t* api, const demo_state_t* state) {
 
     draw_taskbar_overlay(api, state);
     draw_start_menu(api, state);
+    draw_ctx_menu(api, state);
+    draw_modal(api, state);
     draw_resize_hint(api, state);
     draw_drag_outline(api, state);
 

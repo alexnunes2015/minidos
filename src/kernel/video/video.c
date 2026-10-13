@@ -2,6 +2,7 @@
 #include "logger.h"
 #include "serial.h"
 #include "scheduler.h"
+#include "timer.h"
 
 #define VIDEO_BOOT_STATE_MAGIC 0x56494430u
 #define VIDEO_LOCK_OWNER_NONE (-2)
@@ -313,8 +314,51 @@ static void video_update_dirty_union(int x, int y, int w, int h) {
 }
 
 static void video_record_dirty_rect(int x, int y, int w, int h) {
+    int i;
+
     if (dirty_overflow) {
         return;
+    }
+
+    i = 0;
+    while (i < dirty_rect_count) {
+        video_dirty_rect_t* current = &dirty_rects[i];
+        int current_right = current->x + current->w;
+        int current_bottom = current->y + current->h;
+        int right = x + w;
+        int bottom = y + h;
+        int merge_horizontal = current->y == y && current->h == h
+            && current->x <= right && x <= current_right;
+        int merge_vertical = current->x == x && current->w == w
+            && current->y <= bottom && y <= current_bottom;
+
+        if (current->x <= x && current->y <= y
+            && current_right >= right && current_bottom >= bottom) {
+            return;
+        }
+
+        if ((x <= current->x && y <= current->y
+                && right >= current_right && bottom >= current_bottom)
+            || merge_horizontal || merge_vertical) {
+            int union_x = x < current->x ? x : current->x;
+            int union_y = y < current->y ? y : current->y;
+            int union_right = right > current_right ? right : current_right;
+            int union_bottom = bottom > current_bottom ? bottom : current_bottom;
+            int j;
+
+            x = union_x;
+            y = union_y;
+            w = union_right - union_x;
+            h = union_bottom - union_y;
+            for (j = i + 1; j < dirty_rect_count; j++) {
+                dirty_rects[j - 1] = dirty_rects[j];
+            }
+            dirty_rect_count--;
+            i = 0;
+            continue;
+        }
+
+        i++;
     }
 
     if (dirty_rect_count < VIDEO_DIRTY_RECT_CAPACITY) {
@@ -622,16 +666,43 @@ void video_clear_color(unsigned int rgb) {
 }
 
 void video_fill_rect(int x, int y, int w, int h, unsigned int rgb) {
+    video_rect_t rect;
+
     init_video_once();
     if (!graphics_mode || w <= 0 || h <= 0) {
         return;
     }
 
+    rect.x = x;
+    rect.y = y;
+    rect.w = w;
+    rect.h = h;
+    rect.rgb = rgb;
+    (void)video_fill_rect_batch(&rect, 1);
+}
+
+int video_fill_rect_batch(const video_rect_t* rects, int count) {
+    int i;
+
+    init_video_once();
+    if (!graphics_mode || !rects || count <= 0) {
+        return 0;
+    }
+
+    for (i = 0; i < count; i++) {
+        if (rects[i].w <= 0 || rects[i].h <= 0) {
+            return 0;
+        }
+    }
+
     video_lock();
-    fill_rect_rgb_locked(x, y, w, h, rgb);
-    video_note_dirty_locked(x, y, w, h);
+    for (i = 0; i < count; i++) {
+        fill_rect_rgb_locked(rects[i].x, rects[i].y, rects[i].w, rects[i].h, rects[i].rgb);
+        video_note_dirty_locked(rects[i].x, rects[i].y, rects[i].w, rects[i].h);
+    }
     video_unlock();
     video_maybe_present_pending();
+    return 1;
 }
 
 int video_draw_indexed_image_centered(const unsigned char* pixels, int width, int height, const unsigned char* palette) {
@@ -725,9 +796,12 @@ typedef struct {
 } video_stress_job_t;
 
 static video_stress_job_t g_video_stress_jobs[VIDEO_STRESS_MAX_WORKERS];
+static volatile int g_video_stress_log_lock = 0;
 
 static void video_stress_worker(void* raw_job) {
     video_stress_job_t* job = (video_stress_job_t*)raw_job;
+    unsigned int start_ticks;
+    unsigned int elapsed_ticks;
     if (!job) {
         scheduler_exit_current_task();
     }
@@ -737,6 +811,8 @@ static void video_stress_worker(void* raw_job) {
     if (width <= 0 || height <= 0 || job->iterations <= 0) {
         scheduler_exit_current_task();
     }
+
+    start_ticks = timer_is_ready() ? timer_get_ticks() : 0U;
 
     for (int i = 0; i < job->iterations; i++) {
         int size = 16 + (i % 96);
@@ -756,7 +832,18 @@ static void video_stress_worker(void* raw_job) {
         scheduler_yield();
     }
 
-    log_serial_raw("PTVIDEO200\n");
+    elapsed_ticks = timer_is_ready() ? (unsigned int)(timer_get_ticks() - start_ticks) : 0U;
+    while (__sync_lock_test_and_set(&g_video_stress_log_lock, 1)) {
+        scheduler_yield();
+    }
+    log_serial_raw("PTVIDEO200 worker=");
+    serial_print_hex((unsigned int)job->id);
+    log_serial_raw(" ticks=");
+    serial_print_hex(elapsed_ticks);
+    log_serial_raw(" iterations=");
+    serial_print_hex((unsigned int)job->iterations);
+    log_serial_raw("\n");
+    __sync_lock_release(&g_video_stress_log_lock);
     scheduler_exit_current_task();
 }
 

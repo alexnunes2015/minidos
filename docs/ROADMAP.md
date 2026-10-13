@@ -76,7 +76,7 @@ Referência de execução detalhada:
 Status: delivered em 15/02/2026.
 
 Fragile:
-- O teclado ainda mantém fallback por polling durante a estabilização do caminho por IRQ.
+- O teclado ainda mantém fallback por polling durante a estabilização do caminho por IRQ; quando ele consome uma tecla, emite `KBD200`, e `make test-keyboard` falha se o cenário normal depender desse fallback. Falhas de inicialização do rato agora são observáveis (`MOUSE201`–`MOUSE204`) e têm regressão negativa em `make test-mouse-failure`.
 
 Uncovered:
 - A fase não lista ainda uma matriz dedicada de marcadores de panic/degraded mode por classe de exceção.
@@ -162,7 +162,7 @@ Fragile:
 - A confiança operacional ainda depende fortemente de markers de self-test no boot e do cenário de referência em QEMU.
 
 Uncovered:
-- Starvation, cleanup adversarial e cenários mais amplos de erro de syscall/scheduler continuam fora da cobertura listada aqui.
+- Cleanup adversarial além das regressões `make test-user-cleanup` e `make test-scheduler-fairness`, além de cenários mais amplos de erro de syscall/scheduler, continuam fora da cobertura listada aqui.
 
 Entregas finais:
 - Estrutura de processo (`process_t`) com PID, estado, contexto salvo, stacks de kernel dedicadas e stack de user por app.
@@ -172,6 +172,8 @@ Entregas finais:
 - Foreground e background de apps ELF/COM unificados no scheduler, inclusive child threads de userland.
 - Falhas de user mode agora terminam apenas a app/grupo ofensora, com retorno controlado ao shell.
 - Regressão automatizada adicional de isolamento (`tests/test_user_isolation.py` / `make test-user-isolation`) cobrindo ponteiros inválidos em syscall e `#PF` de user mode em ambos os formatos.
+- Regressão automatizada de fairness (`tests/test_scheduler_fairness.py` / `make test-scheduler-fairness`) cobrindo duas rodadas com cargas CPU-bound, bloqueante e child thread, incluindo conclusão sem starvation e shell responsiva.
+- Matriz automatizada de erros de syscall (`tests/test_syscall_matrix.py` / `make test-syscall-matrix`) cobrindo ELF e `.COM`, ponteiros/ranges inválidos, formato gráfico rejeitado e syscall desconhecida, com retorno posterior ao shell.
 
 Baseline anterior entregue:
 - Estrutura de processo adicionada (`process_t`) com PID, estado e contexto mínimo salvo (`ESP`).

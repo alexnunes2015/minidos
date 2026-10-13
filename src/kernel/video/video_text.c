@@ -318,13 +318,119 @@ void draw_string_custom(int col, int row, const char* s, u32 fg, u32 bg) {
     }
 }
 
-void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigned int bg) {
+static int video_draw_text_impl(int x, int y, const char* text, unsigned int fg,
+    unsigned int bg, int clip_x, int clip_y, int clip_w, int clip_h,
+    unsigned int flags, int require_full_glyphs) {
     int px;
     int py;
     int start_x;
     int i;
-    int len;
+    int clip_right;
+    int clip_bottom;
+    int dirty_left = 0;
+    int dirty_top = 0;
+    int dirty_right = 0;
+    int dirty_bottom = 0;
+    int drew_pixel = 0;
 
+    init_video_once();
+    if (!text || (flags & ~((unsigned int)VIDEO_TEXT_TRANSPARENT_BG)) != 0U) {
+        return 0;
+    }
+    if (!graphics_mode) {
+        print_string(text);
+        return 1;
+    }
+
+    if (clip_w <= 0 || clip_h <= 0) {
+        clip_x = 0;
+        clip_y = 0;
+        clip_w = fb_width;
+        clip_h = fb_height;
+    } else if (clip_x > 0x7FFFFFFF - clip_w || clip_y > 0x7FFFFFFF - clip_h) {
+        return 0;
+    }
+    clip_right = clip_x + clip_w;
+    clip_bottom = clip_y + clip_h;
+    if (clip_x < 0) {
+        clip_x = 0;
+    }
+    if (clip_y < 0) {
+        clip_y = 0;
+    }
+    if (clip_right > fb_width) {
+        clip_right = fb_width;
+    }
+    if (clip_bottom > fb_height) {
+        clip_bottom = fb_height;
+    }
+    if (clip_x >= clip_right || clip_y >= clip_bottom) {
+        return 1;
+    }
+
+    start_x = x;
+    px = x;
+    py = y;
+    video_lock();
+    for (i = 0; text[i] != '\0'; i++) {
+        if (text[i] == '\n') {
+            py += FONT_H;
+            px = start_x;
+            continue;
+        }
+        if (!require_full_glyphs
+            || (px >= clip_x && py >= clip_y
+                && px + FONT_W <= clip_right && py + FONT_H <= clip_bottom)) {
+            const u8* glyph = glyph_for_char(text[i]);
+            int gy;
+            int gx;
+            for (gy = 0; gy < FONT_H; gy++) {
+                u8 bits = glyph[gy];
+                for (gx = 0; gx < FONT_W; gx++) {
+                    int draw_x = px + gx;
+                    int draw_y = py + gy;
+                    int foreground = (bits & (1u << (7 - gx))) != 0;
+
+                    if (draw_x < clip_x || draw_x >= clip_right
+                        || draw_y < clip_y || draw_y >= clip_bottom
+                        || (!foreground && (flags & VIDEO_TEXT_TRANSPARENT_BG) != 0U)) {
+                        continue;
+                    }
+                    draw_pixel_locked(draw_x, draw_y, foreground ? (u32)fg : (u32)bg);
+                    if (!drew_pixel) {
+                        dirty_left = draw_x;
+                        dirty_top = draw_y;
+                        dirty_right = draw_x + 1;
+                        dirty_bottom = draw_y + 1;
+                        drew_pixel = 1;
+                    } else {
+                        if (draw_x < dirty_left) dirty_left = draw_x;
+                        if (draw_y < dirty_top) dirty_top = draw_y;
+                        if (draw_x + 1 > dirty_right) dirty_right = draw_x + 1;
+                        if (draw_y + 1 > dirty_bottom) dirty_bottom = draw_y + 1;
+                    }
+                }
+            }
+        }
+        px += FONT_W;
+    }
+    if (drew_pixel) {
+        video_note_dirty_locked(dirty_left, dirty_top,
+            dirty_right - dirty_left, dirty_bottom - dirty_top);
+    }
+    video_unlock();
+    video_maybe_present_pending();
+    return 1;
+}
+
+int video_draw_text_clipped(int x, int y, const char* text, unsigned int fg,
+    unsigned int bg, int clip_x, int clip_y, int clip_w, int clip_h,
+    unsigned int flags) {
+    return video_draw_text_impl(x, y, text, fg, bg, clip_x, clip_y,
+        clip_w, clip_h, flags, 0);
+}
+
+void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigned int bg) {
     init_video_once();
     if (!text) {
         return;
@@ -335,43 +441,14 @@ void video_draw_text_at(int x, int y, const char* text, unsigned int fg, unsigne
     }
     if (x < 0) {
         x = 0;
+    } else if (x > fb_width) {
+        x = fb_width;
     }
     if (y < 0) {
         y = 0;
+    } else if (y > fb_height) {
+        y = fb_height;
     }
-
-    start_x = x;
-    px = x;
-    py = y;
-    len = 0;
-    for (i = 0; text[i] != '\0'; i++) {
-        if (text[i] == '\n') {
-            py += FONT_H;
-            px = start_x;
-            continue;
-        }
-        if (px >= 0 && py >= 0 && px + FONT_W <= fb_width && py + FONT_H <= fb_height) {
-            const u8* glyph = glyph_for_char(text[i]);
-            int gy;
-            int gx;
-            for (gy = 0; gy < FONT_H; gy++) {
-                u8 bits = glyph[gy];
-                for (gx = 0; gx < FONT_W; gx++) {
-                    u32 color = (bits & (1u << (7 - gx))) ? (u32)fg : (u32)bg;
-                    draw_pixel(px + gx, py + gy, color);
-                }
-            }
-        }
-        px += FONT_W;
-        len++;
-    }
-    {
-        int w = len * FONT_W;
-        int h = FONT_H;
-        if (w <= 0) {
-            w = FONT_W;
-        }
-        video_note_dirty(x, y, w, h);
-    }
-    video_maybe_present_pending();
+    (void)video_draw_text_impl(x, y, text, fg, bg, 0, 0,
+        fb_width, fb_height, 0U, 1);
 }

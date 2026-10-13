@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "io.h"
 #include "serial.h"
 #include "logger.h"
 #include "video.h"
@@ -85,16 +86,6 @@ static int interrupt_handlers_ready = 0;
 static int page_fault_in_progress = 0;
 
 extern unsigned char thunk_gdt_tss[];
-
-static inline unsigned char inb(unsigned short port) {
-    unsigned char value;
-    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-static inline void outb(unsigned short port, unsigned char value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
 
 static inline unsigned int read_cr2(void) {
     unsigned int value;

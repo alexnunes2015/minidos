@@ -9,7 +9,9 @@ Validates:
 """
 import argparse
 import os
+import re
 import sys
+import time
 
 from qemu_harness import (
     build_floppy_qemu_cmd,
@@ -19,6 +21,33 @@ from qemu_harness import (
     spawn_qemu,
     terminate_process,
 )
+
+
+WORKER_DONE_RE = re.compile(
+    r"PTVIDEO200 worker=0x([0-9A-F]{8}) ticks=0x([0-9A-F]{8}) iterations=0x([0-9A-F]{8})"
+)
+
+
+def wait_for_worker_completions(proc, expected, timeout):
+    log = ""
+    deadline = time.time() + timeout
+
+    while log.count("PTVIDEO200") < expected and time.time() < deadline:
+        remaining = deadline - time.time()
+        chunk, _ = read_until(proc, ["PTVIDEO200"], max(0.1, remaining))
+        log += chunk
+        if not chunk:
+            break
+    return log, log.count("PTVIDEO200") >= expected
+
+
+def worker_schema_valid(log, expected, iterations):
+    matches = WORKER_DONE_RE.findall(log)
+    if len(matches) < expected:
+        return False
+    worker_ids = {int(worker, 16) for worker, _, _ in matches}
+    iteration_values = [int(value, 16) for _, _, value in matches]
+    return len(worker_ids) >= expected and all(value == iterations for value in iteration_values[:expected])
 
 
 def run_stride_align_test(disk_path, qemu, memory, timeout):
@@ -68,8 +97,10 @@ def run_stress_render_test(disk_path, qemu, memory, timeout):
 
         send_line(proc, "videostress 2 60")
 
-        log2, matched2 = read_until(proc, ["PTVIDEO200"], timeout)
-        full_log = log + log2
+        log2, matched2 = wait_for_worker_completions(proc, 2, timeout)
+        send_line(proc, "ver")
+        tail, _ = read_until(proc, ["MiniDOS"], 10.0)
+        full_log = log + log2 + tail
 
         required = ["PTVIDEO100", "PTVIDEO200"]
         for marker in required:
@@ -77,6 +108,10 @@ def run_stress_render_test(disk_path, qemu, memory, timeout):
                 print(f"\nERROR [stress-render]: marker not found: {marker}", file=sys.stderr)
                 print(full_log, file=sys.stderr)
                 return 1
+        if not matched2 or not worker_schema_valid(full_log, 2, 60):
+            print("\nERROR [stress-render]: malformed or incomplete PTVIDEO200 worker metrics", file=sys.stderr)
+            print(full_log, file=sys.stderr)
+            return 1
         print("[stress-render] PASS")
         return 0
     finally:
@@ -99,14 +134,18 @@ def run_shell_responsive_after_stress(disk_path, qemu, memory, timeout):
             return 1
 
         send_line(proc, "videostress 2 60")
-        log2, matched2 = read_until(proc, ["PTVIDEO200"], timeout)
+        log2, matched2 = wait_for_worker_completions(proc, 2, timeout)
         if not matched2:
-            print("\nERROR [shell-responsive]: PTVIDEO200 not seen", file=sys.stderr)
+            print("\nERROR [shell-responsive]: not all PTVIDEO200 markers were seen", file=sys.stderr)
             print(log + log2, file=sys.stderr)
             return 1
 
         send_line(proc, "ver")
         log3, matched3 = read_until(proc, ["MiniDOS"], 10.0)
+        if not worker_schema_valid(log2 + log3, 2, 60):
+            print("\nERROR [shell-responsive]: malformed PTVIDEO200 worker metrics", file=sys.stderr)
+            print(log2 + log3, file=sys.stderr)
+            return 1
         if not matched3:
             print("\nERROR [shell-responsive]: shell did not respond to ver after stress", file=sys.stderr)
             print(log3, file=sys.stderr)

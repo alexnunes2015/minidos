@@ -2,8 +2,8 @@
 # Create MiniDOS 128MB FAT16 disk image
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISK_IMG="$ROOT_DIR/minidos.img"
-DISK_KB=$((128 * 1024))
+DISK_IMG="${MINIDOS_DISK_IMG:-$ROOT_DIR/minidos.img}"
+DISK_KB="${MINIDOS_DISK_KB:-$((128 * 1024))}"
 DISK_SECTORS=$((DISK_KB * 2))
 RESERVED_SECTORS=256
 KERNEL_LOAD_SECTOR=5

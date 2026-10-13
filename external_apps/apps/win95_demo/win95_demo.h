@@ -52,6 +52,11 @@
 #define EXPLORER_GRID_ICON_H 30
 #define EXPLORER_MAX_WINDOWS (UI_WM_MAX_WINDOWS - 1)
 #define EXPLORER_HISTORY_MAX 12
+#define CTX_MENU_MAX_ITEMS 8
+#define CTX_MENU_ITEM_H 18
+#define CTX_MENU_W 148
+#define VIEWER_MAX_BYTES 4096
+#define MODAL_INPUT_MAX 32
 #define TASK_BUTTON_MIN_W 24
 #define TASK_BUTTON_MAX_W 170
 #define WINDOW_RESIZE_MARGIN 5
@@ -61,6 +66,30 @@
 #define RESIZE_EDGE_RIGHT 2
 #define RESIZE_EDGE_TOP 4
 #define RESIZE_EDGE_BOTTOM 8
+
+/* Context-menu actions and modal-dialog file operations. */
+enum {
+    CTX_ACTION_OPEN = 1,
+    CTX_ACTION_CUT,
+    CTX_ACTION_COPY,
+    CTX_ACTION_PASTE,
+    CTX_ACTION_DELETE,
+    CTX_ACTION_RENAME,
+    CTX_ACTION_NEWFOLDER,
+};
+
+enum {
+    MODAL_NONE = 0,
+    MODAL_PROMPT = 1,
+    MODAL_CONFIRM = 2,
+};
+
+enum {
+    FILEOP_NONE = 0,
+    FILEOP_NEWFOLDER,
+    FILEOP_RENAME,
+    FILEOP_DELETE,
+};
 
 enum {
     START_MENU_ITEM_PROGRAMAS = 0,
@@ -87,6 +116,9 @@ typedef struct {
     int forward_button_id;
     int up_button_id;
     int open_button_id;
+    int newfolder_button_id;
+    int rename_button_id;
+    int delete_button_id;
     int listview_id;
     int visible;
     int showing_drives;
@@ -160,6 +192,27 @@ typedef struct {
     int desktop_item_count;
     desktop_item_t desktop_items[DESKTOP_MAX_ITEMS];
     int active_explorer_index;
+    /* Right-click context menu (overlay). */
+    int ctx_menu_open;
+    int ctx_menu_x;
+    int ctx_menu_y;
+    int ctx_menu_item_count;
+    int ctx_menu_hot;
+    int ctx_menu_actions[CTX_MENU_MAX_ITEMS];
+    int ctx_menu_explorer_window;
+    /* Modal dialog (new folder / rename / delete confirm). */
+    int modal_kind;
+    int modal_action;
+    int modal_explorer_window;
+    char modal_title[32];
+    char modal_message[64];
+    char modal_input[MODAL_INPUT_MAX];
+    char modal_target[32];
+    /* Text file viewer window. */
+    int viewer_window_id;
+    int viewer_len;
+    char viewer_title[40];
+    char viewer_text[VIEWER_MAX_BYTES];
     char mouse_text[48];
     char status_text[96];
     char value_text[128];
@@ -216,6 +269,37 @@ void explorer_move_selection_in(demo_state_t* state, explorer_state_t* explorer,
 void explorer_relayout_window(demo_state_t* state, int window_id);
 void draw_explorer_grid(const minidos_app_api_t* api, const demo_state_t* state,
     const explorer_state_t* explorer, ui_rect_t bounds, ui_rect_t clip);
+
+/* Explorer file operations (win95_explorer.c). */
+const ui_listview_item_t* explorer_selected_item(const explorer_state_t* explorer);
+int explorer_enter_current_dir(const minidos_app_api_t* api, const explorer_state_t* explorer);
+int explorer_exec_new_folder(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer, const char* name);
+int explorer_exec_rename(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer, const char* old_name, const char* new_name);
+int explorer_exec_delete(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer, const char* name);
+int explorer_exec_clip(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer, const char* name, int mode);
+int explorer_exec_paste(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer);
+
+/* Context menu, modal dialogs and text viewer (win95_fileops.c). */
+void fileops_init(demo_state_t* state);
+int ctx_menu_is_open(const demo_state_t* state);
+void ctx_menu_open_for(demo_state_t* state, explorer_state_t* explorer, int x, int y);
+void ctx_menu_dismiss(demo_state_t* state);
+ui_rect_t ctx_menu_rect(const demo_state_t* state);
+int ctx_menu_hit_test(const demo_state_t* state, int x, int y);
+void ctx_menu_handle_mouse(const minidos_app_api_t* api, demo_state_t* state, int x, int y, int left_pressed);
+void draw_ctx_menu(const minidos_app_api_t* api, const demo_state_t* state);
+void fileops_request_new_folder(demo_state_t* state, explorer_state_t* explorer);
+void fileops_request_rename(demo_state_t* state, explorer_state_t* explorer);
+void fileops_request_delete(demo_state_t* state, explorer_state_t* explorer);
+int modal_is_active(const demo_state_t* state);
+void modal_handle_mouse(const minidos_app_api_t* api, demo_state_t* state, int x, int y, int left_pressed);
+void modal_handle_key(const minidos_app_api_t* api, demo_state_t* state, char c);
+void draw_modal(const minidos_app_api_t* api, const demo_state_t* state);
+int open_file_viewer(const minidos_app_api_t* api, demo_state_t* state, explorer_state_t* explorer, const char* name);
+int viewer_owns_window(const demo_state_t* state, int window_id);
+void viewer_close_window(demo_state_t* state, int window_id);
+void draw_viewer_chrome_clipped(const minidos_app_api_t* api, const demo_state_t* state,
+    const ui_wm_window_t* win, ui_rect_t clip);
 
 ui_rect_t taskbar_rect(const demo_state_t* state);
 ui_rect_t start_button_rect(const demo_state_t* state);

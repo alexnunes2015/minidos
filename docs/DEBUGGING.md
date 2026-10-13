@@ -10,7 +10,15 @@ make phase0-check
 make test-phase5
 make test-large-elf
 make test-multitask-com
+make test-scheduler-fairness
+make test-syscall-matrix
 make test-user-isolation
+make test-user-cleanup
+make test-ui-runtime
+make test-graphics
+make test-mouse
+make test-mouse-failure
+make ci
 make run-no-reboot
 make run-trace
 make run-gdb
@@ -24,7 +32,15 @@ make gdb-kernel
 - `make test-phase5`: validates the phase-5 scheduler runtime plus the negative guard-page fault path.
 - `make test-large-elf`: validates the dynamic userland slot path with an ELF whose mapped memory exceeds the old 1 MiB limit.
 - `make test-multitask-com`: validates background `.COM` apps on the same scheduler/user-mode runtime used by ELFs.
+- `make test-scheduler-fairness`: runs two mixed-workload rounds and confirms CPU-bound, blocked, and child-thread apps all complete without starvation.
+- `make test-syscall-matrix`: exercises invalid pointers, ranges, formats, and unknown syscall numbers in both ELF and COM, then confirms the shell resumes.
 - `make test-user-isolation`: validates ring3 ELF/COM containment for bad syscall pointers, stale low-memory app VAs, and direct user-mode page faults.
+- `make test-user-cleanup`: repeats background ELF/COM faults, validates PID/physical-slot reuse, and checks that a faulted leader plus child group disappears from `top`.
+- `make test-ui-runtime`: compiles/runs the host-side UI runtime contract tests, including rectangle batching/fallback, packed surface layout/run fallback, and generic clipped-text dispatch.
+- `make test-graphics`: rebuilds the image and validates video startup, the per-worker `PTVIDEO200` metric schema, stress completion, and shell responsiveness after stress.
+- `make test-mouse`: exercises the visible `STARTUI` mouse/input path in QEMU after graphics/runtime changes.
+- `make test-mouse-failure`: rebuilds with `MOUSE_TEST_FORCE_FAIL` and verifies `MOUSE201`, no false mouse-ready marker, and continued shell startup.
+- `make ci`: runs the repository-wide Tier 3 validation gate; graphics changes must also run the focused graphics and mouse suites because they are not currently part of this target.
 - `make test-storage-failure`: exercises invalid FAT metadata so the boot reports `DISK021` and stops with `STOP 0x00000004`.
 - `make run-no-reboot`: keeps QEMU from rebooting on panic/triple-fault style failures so the last serial output stays visible.
 - `make run-trace`: writes a QEMU trace to `build/qemu-trace.log` for low-level fault analysis.
@@ -41,10 +57,12 @@ make gdb-kernel
 - `[video] init fb=... w=... h=... pitch=... bpp=... bb=... bp=... fast=...`
 - `PTVIDEO100 start workers=... iterations=... started=...` when the `videostress` command launches worker threads
 - `PTVIDEO110 limited by scheduler slots` when the stress test could not start all requested workers
-- `PTVIDEO200 worker=<n> ticks=<t> iterations=<i>` when a stress worker exits with timing info
+- `PTVIDEO200 worker=0x........ ticks=0x........ iterations=0x........` once per completed stress worker; each field is an uppercase, zero-padded 32-bit hexadecimal value
 - `PTBIG100` / `PTBIG190` / `PTBIG900` / `PTBIG901` when validating the large-ELF dynamic slot path
 - `[kbd] scan set 1` or `[kbd] scan set 2`
+- `KBD200` if a key was consumed through the direct polling compatibility fallback; the normal IRQ regression must not emit it
 - `[mouse] PS/2 mouse enabled on IRQ12`
+- `MOUSE201` / `MOUSE202` / `MOUSE203` / `MOUSE204` if mouse initialization entered a degraded mode; no mouse marker should appear in the normal mouse regression
 - `[mouse] first packet received`
 - `[int] IDT active, PIC remapped, IRQ0/IRQ1/IRQ12 enabled`
 - `DISK021`
@@ -244,6 +262,33 @@ Check:
 - no debug extra da GUI na serial while the GUI runs
 - shell accepts `ver` after the test clicks `Cancel`
 - `DOSSHELL` and `EDIT` still exit normally after mouse movement inside the app
+
+### Graphics ABI / Win95Ui rendering regressions
+
+Run:
+
+```sh
+make test-ui-runtime
+make test-graphics
+make test-mouse
+```
+
+Check:
+
+- a rectangle batch contains 1 through 64 entries; any invalid count, user range, or rectangle rejects the complete syscall before pixels or damage change
+- the runtime flushes queued rectangles before text, surface, clear, and present operations; if syscall 35 fails, it replays the saved rectangles through the legacy single-rectangle call in the same order
+- surface format 0 is the legacy byte sequence `[X,R,G,B]`; format 1 is a little-endian packed `0x00RRGGBB` word, and format 2 is straight-alpha `0xAARRGGBB`
+- wrong red/blue channels usually mean a legacy byte stream was mislabeled as packed format 1 (or vice versa)
+- ARGB alpha 0 preserves the destination, alpha 255 replaces it, and partial alpha uses source-over with nearest-integer rounding
+- syscall 36 clips text inside the requested rectangle; `APP_GFX_TEXT_TRANSPARENT_BG` leaves zero glyph bits untouched, while `flags == 0` remains opaque; the generic runtime helper tries this path first
+- Win95Ui transparent labels deliberately use clipped `ui_font_8x8` foreground runs through rectangle batching, rather than syscall 36, to keep their glyph pixels unchanged
+- packed formats 1/2, including ARGB Win95Ui icons, require runtime and kernel lockstep; only format 0 preserves the older byte-stream ABI
+- if a packed wallpaper, list-row, or ARGB icon surface call explicitly fails, the runtime should emit its documented clipped, ordered runs; a kernel that returns success while ignoring `format` cannot be detected by this fallback
+- with `DIRTY_RECT_DEBUG`, repeated contained rectangles should not grow the pending list, and touching/overlapping strips merge only when their full horizontal or vertical span matches
+- `videostress 2 60` emits two distinct `PTVIDEO200` lines whose `iterations` field is `0x0000003C`; `ticks` is recorded for comparison but has no fixed pass/fail ceiling
+- after the stress workers finish, `ver` still responds, proving the video lock was released
+
+For a release-ready or cross-cutting graphics change, finish with `make ci` after the focused suites pass.
 
 ### FAT or multi-disk regressions
 

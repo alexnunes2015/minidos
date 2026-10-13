@@ -54,6 +54,31 @@ static void desktop_item_display_name(const desktop_item_t* item, char out[13]) 
         return;
     }
 
+    if (str_equal(item->name, "COMPUTER")) {
+        str_copy(out, "Computer", 13);
+        return;
+    }
+    if (str_equal(item->name, "NETWORK")) {
+        str_copy(out, "Network", 13);
+        return;
+    }
+    if (str_equal(item->name, "RECYCLE")) {
+        str_copy(out, "Recycle", 13);
+        return;
+    }
+    if (str_equal(item->name, "SHELL.COM")) {
+        str_copy(out, "Shell", 13);
+        return;
+    }
+    if (str_equal(item->name, "DOCS")) {
+        str_copy(out, "Documents", 13);
+        return;
+    }
+    if (str_equal(item->name, "CONTROL")) {
+        str_copy(out, "Control", 13);
+        return;
+    }
+
     for (i = 0; item->name[i] != '\0' && j < 12; i++) {
         if (item->name[i] == '.') {
             break;
@@ -96,6 +121,9 @@ static int desktop_item_icon_id(const desktop_item_t* item, int selected) {
         return WIN95_ICON_NOTEPAD;
     }
     if (str_contains(item->name, "SET")) {
+        return WIN95_ICON_SETTINGS;
+    }
+    if (str_contains(item->name, "CONTROL")) {
         return WIN95_ICON_SETTINGS;
     }
     if (str_contains(item->name, "NET")) {
@@ -181,6 +209,48 @@ static void layout_desktop_items(demo_state_t* state) {
     }
 }
 
+static int desktop_has_item(const demo_state_t* state, const char* name) {
+    int i;
+
+    if (!state || !name) {
+        return 0;
+    }
+
+    for (i = 0; i < state->desktop_item_count; i++) {
+        if (str_equal(state->desktop_items[i].name, name)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void desktop_add_item(demo_state_t* state, const char* name, int is_dir) {
+    desktop_item_t* item;
+
+    if (!state || !name || state->desktop_item_count >= DESKTOP_MAX_ITEMS || desktop_has_item(state, name)) {
+        return;
+    }
+
+    item = &state->desktop_items[state->desktop_item_count++];
+    str_copy(item->name, name, (int)sizeof(item->name));
+    item->is_dir = is_dir;
+    item->bounds = ui_rect_make(0, 0, 0, 0);
+}
+
+static void desktop_add_pinned_items(demo_state_t* state) {
+    if (!state) {
+        return;
+    }
+
+    desktop_add_item(state, "COMPUTER", 1);
+    desktop_add_item(state, "NETWORK", 1);
+    desktop_add_item(state, "RECYCLE", 1);
+    desktop_add_item(state, "SHELL.COM", 0);
+    desktop_add_item(state, "DOCS", 1);
+    desktop_add_item(state, "CONTROL", 1);
+}
+
 void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state) {
     int i;
     int count = 0;
@@ -209,6 +279,7 @@ void load_desktop_items(const minidos_app_api_t* api, demo_state_t* state) {
         count++;
     }
     state->desktop_item_count = count;
+    desktop_add_pinned_items(state);
     layout_desktop_items(state);
 }
 
@@ -219,8 +290,9 @@ void draw_win95_icon_clipped(const minidos_app_api_t* api, ui_rect_t icon_rect, 
     int offset_x;
     int offset_y;
     int y;
+    app_gfx_surface_blit_t blit;
 
-    if (!api || icon_id < 0 || icon_id >= WIN95_ICON_COUNT) {
+    if (!api || icon_id < 0 || icon_id >= WIN95_ICON_COUNT || ui_rect_is_empty(clip)) {
         return;
     }
 
@@ -244,6 +316,24 @@ void draw_win95_icon_clipped(const minidos_app_api_t* api, ui_rect_t icon_rect, 
 
     offset_x = icon_rect.x + ((icon_rect.w - draw_w) / 2);
     offset_y = icon_rect.y + ((icon_rect.h - draw_h) / 2);
+
+    blit.buffer = (const unsigned char*)(const void*)icon->pixels;
+    blit.width = (int)icon->width;
+    blit.height = (int)icon->height;
+    blit.stride = (int)icon->width * 4;
+    blit.format = APP_SURFACE_FORMAT_ARGB8888_LE;
+    blit.dest_x = offset_x;
+    blit.dest_y = offset_y;
+    blit.clip_x = clip.x;
+    blit.clip_y = clip.y;
+    blit.clip_w = clip.w;
+    blit.clip_h = clip.h;
+    blit.dest_w = draw_w;
+    blit.dest_h = draw_h;
+    (void)ui_gfx_rect_batch_flush(api);
+    if (app_gfx_surface_blit(api, &blit) > 0) {
+        return;
+    }
 
     for (y = 0; y < draw_h; y++) {
         int src_y = (y * icon->height) / draw_h;
@@ -322,8 +412,13 @@ static void draw_desktop_item(const minidos_app_api_t* api, const demo_state_t* 
 
     draw_win95_icon_clipped(api, icon_rect, icon_id, clip);
 
+    if (state->selected_desktop_item != item_index) {
+        draw_text_transparent_clipped(api, label_rect.x + 1, label_rect.y + 1, display_name,
+            0x000000u,
+            clip);
+    }
     draw_text_transparent_clipped(api, label_rect.x, label_rect.y, display_name,
-        (state->selected_desktop_item == item_index) ? state->wm.theme.selection_text : state->wm.theme.text,
+        (state->selected_desktop_item == item_index) ? state->wm.theme.selection_text : 0xFFFFFFu,
         clip);
 }
 

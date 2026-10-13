@@ -40,6 +40,8 @@ enum {
     MINIDOS_SYSCALL_EXIT = 32,
     MINIDOS_SYSCALL_GFX_SURFACE_BLIT = 33,
     MINIDOS_SYSCALL_DRIVE_VALID = 34,
+    MINIDOS_SYSCALL_GFX_RECT_BATCH = 35,
+    MINIDOS_SYSCALL_GFX_TEXT_CLIPPED = 36,
 };
 
 enum {
@@ -62,6 +64,13 @@ typedef struct {
     unsigned int color;
 } app_gfx_rect_t;
 
+#define APP_GFX_RECT_BATCH_MAX 64
+
+typedef struct {
+    const app_gfx_rect_t* rects;
+    unsigned int count;
+} app_gfx_rect_batch_t;
+
 typedef struct {
     int x;
     int y;
@@ -71,11 +80,33 @@ typedef struct {
 } app_gfx_text_t;
 
 enum {
-    APP_SURFACE_FORMAT_XRGB8888 = 0,  /* 32-bit pixels: X:8 R:8 G:8 B:8 */
+    APP_GFX_TEXT_TRANSPARENT_BG = 1,
 };
 
 typedef struct {
-    unsigned char* buffer;  /* pointer to pixel data (user space) */
+    int x;
+    int y;
+    const char* text;
+    unsigned int fg;
+    unsigned int bg;
+    int clip_x;
+    int clip_y;
+    int clip_w;
+    int clip_h;
+    unsigned int flags;
+} app_gfx_text_clipped_t;
+
+enum {
+    /* Legacy byte stream: byte[0]=X, byte[1]=R, byte[2]=G, byte[3]=B. */
+    APP_SURFACE_FORMAT_XRGB8888 = 0,
+    /* Little-endian packed words with numeric value 0x00RRGGBB. */
+    APP_SURFACE_FORMAT_XRGB8888_LE = 1,
+    /* Little-endian packed words with numeric value 0xAARRGGBB. */
+    APP_SURFACE_FORMAT_ARGB8888_LE = 2,
+};
+
+typedef struct {
+    const unsigned char* buffer;  /* pointer to pixel data (user space) */
     int width;              /* surface width in pixels */
     int height;             /* surface height in pixels */
     int stride;             /* bytes per row (typically width * 4 for XRGB8888) */
@@ -170,8 +201,16 @@ static inline int app_gfx_rect(const minidos_app_api_t* api, const app_gfx_rect_
     return app_syscall(api, MINIDOS_SYSCALL_GFX_RECT, (unsigned int)rect, 0, 0);
 }
 
+static inline int app_gfx_rect_batch(const minidos_app_api_t* api, const app_gfx_rect_batch_t* batch) {
+    return app_syscall(api, MINIDOS_SYSCALL_GFX_RECT_BATCH, (unsigned int)batch, 0, 0);
+}
+
 static inline int app_gfx_text(const minidos_app_api_t* api, const app_gfx_text_t* text) {
     return app_syscall(api, MINIDOS_SYSCALL_GFX_TEXT, (unsigned int)text, 0, 0);
+}
+
+static inline int app_gfx_text_clipped(const minidos_app_api_t* api, const app_gfx_text_clipped_t* text) {
+    return app_syscall(api, MINIDOS_SYSCALL_GFX_TEXT_CLIPPED, (unsigned int)text, 0, 0);
 }
 
 static inline int app_gfx_size(const minidos_app_api_t* api, int* out_w, int* out_h) {

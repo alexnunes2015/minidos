@@ -61,6 +61,8 @@ typedef struct {
 #define APP_PATH_MAX 64
 #define APP_CLIP_NAME_MAX 64
 #define APP_USER_TEXT_MAX 256
+#define APP_GFX_MAX_DIMENSION 16384
+#define APP_GFX_COORD_LIMIT 32768
 #define APP_ELF_BUFFER_PHYS 0x00400000U
 #define APP_TASK_TABLE_PHYS 0x00340000U
 
@@ -316,6 +318,31 @@ static int shell_apps_user_range_valid(const shell_app_task_t* task, unsigned in
         return 0;
     }
     return 1;
+}
+
+static int shell_apps_gfx_position_valid(int value) {
+    return value >= -APP_GFX_COORD_LIMIT && value <= APP_GFX_COORD_LIMIT;
+}
+
+static int shell_apps_gfx_extent_valid(int origin, int size) {
+    if (!shell_apps_gfx_position_valid(origin) || size <= 0 || size > APP_GFX_MAX_DIMENSION) {
+        return 0;
+    }
+    return origin <= (0x7FFFFFFF - size);
+}
+
+static int shell_apps_gfx_rect_valid(const app_gfx_rect_t* rect) {
+    return rect
+        && shell_apps_gfx_extent_valid(rect->x, rect->w)
+        && shell_apps_gfx_extent_valid(rect->y, rect->h);
+}
+
+static int shell_apps_gfx_legacy_rect_safe(const app_gfx_rect_t* rect) {
+    if (!rect || rect->w <= 0 || rect->h <= 0) {
+        return rect != 0;
+    }
+    return rect->x <= (0x7FFFFFFF - rect->w)
+        && rect->y <= (0x7FFFFFFF - rect->h);
 }
 
 static int shell_apps_copy_user_bytes(const shell_app_task_t* task, const void* input, void* out, unsigned int size) {
@@ -1465,11 +1492,50 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
     if (num == MINIDOS_SYSCALL_GFX_RECT) {
         app_gfx_rect_t rect;
 
-        if (task->background || !shell_apps_copy_user_bytes(task, (const void*)a0, &rect, (unsigned int)sizeof(rect))) {
+        if (task->background
+            || !shell_apps_copy_user_bytes(task, (const void*)a0, &rect, (unsigned int)sizeof(rect))
+            || !shell_apps_gfx_legacy_rect_safe(&rect)) {
             return 0;
         }
         video_fill_rect(rect.x, rect.y, rect.w, rect.h, rect.color);
         return 1;
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_RECT_BATCH) {
+        app_gfx_rect_batch_t batch;
+        video_rect_t rects[APP_GFX_RECT_BATCH_MAX];
+        unsigned int entries_size;
+        unsigned int i;
+
+        if (task->background
+            || !shell_apps_copy_user_bytes(task, (const void*)a0, &batch, (unsigned int)sizeof(batch))
+            || !batch.rects
+            || batch.count == 0U
+            || batch.count > APP_GFX_RECT_BATCH_MAX) {
+            return 0;
+        }
+
+        entries_size = batch.count * (unsigned int)sizeof(app_gfx_rect_t);
+        if (!shell_apps_user_range_valid(task, (unsigned int)batch.rects, entries_size)) {
+            return 0;
+        }
+
+        for (i = 0; i < batch.count; i++) {
+            app_gfx_rect_t rect;
+            const app_gfx_rect_t* user_rect = batch.rects + i;
+
+            if (!shell_apps_copy_user_bytes(task, user_rect, &rect, (unsigned int)sizeof(rect))
+                || !shell_apps_gfx_rect_valid(&rect)) {
+                return 0;
+            }
+            rects[i].x = rect.x;
+            rects[i].y = rect.y;
+            rects[i].w = rect.w;
+            rects[i].h = rect.h;
+            rects[i].rgb = rect.color;
+        }
+
+        return video_fill_rect_batch(rects, (int)batch.count);
     }
 
     if (num == MINIDOS_SYSCALL_GFX_TEXT) {
@@ -1484,6 +1550,28 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
         }
         video_draw_text_at(text.x, text.y, rendered, text.fg, text.bg);
         return 1;
+    }
+
+    if (num == MINIDOS_SYSCALL_GFX_TEXT_CLIPPED) {
+        app_gfx_text_clipped_t text;
+        char rendered[APP_USER_TEXT_MAX];
+
+        if (task->background
+            || !shell_apps_copy_user_bytes(task, (const void*)a0, &text, (unsigned int)sizeof(text))
+            || !text.text
+            || (text.flags & ~((unsigned int)APP_GFX_TEXT_TRANSPARENT_BG)) != 0U
+            || !shell_apps_gfx_position_valid(text.x)
+            || !shell_apps_gfx_position_valid(text.y)
+            || !shell_apps_copy_user_string(task, text.text, rendered, (int)sizeof(rendered))) {
+            return 0;
+        }
+        if (text.clip_w > 0 && text.clip_h > 0
+            && (!shell_apps_gfx_extent_valid(text.clip_x, text.clip_w)
+                || !shell_apps_gfx_extent_valid(text.clip_y, text.clip_h))) {
+            return 0;
+        }
+        return video_draw_text_clipped(text.x, text.y, rendered, text.fg, text.bg,
+            text.clip_x, text.clip_y, text.clip_w, text.clip_h, text.flags);
     }
 
     if (num == MINIDOS_SYSCALL_GFX_SIZE) {
@@ -1511,10 +1599,66 @@ static int shell_apps_syscall(unsigned int num, unsigned int a0, unsigned int a1
 
     if (num == MINIDOS_SYSCALL_GFX_SURFACE_BLIT) {
         app_gfx_surface_blit_t blit;
-        if (task->background || !shell_apps_copy_user_bytes(task, (const void*)a0, &blit, sizeof(blit))) return 0;
-        if (!blit.buffer || blit.width <= 0 || blit.height <= 0 || blit.stride <= 0) return 0;
-        if (!shell_apps_user_range_valid(task, (unsigned int)blit.buffer, (unsigned int)(blit.height * blit.stride))) return 0;
-        return video_blit_surface_desc(&blit);
+        video_surface_blit_t surface;
+        unsigned int row_bytes;
+        unsigned int source_span;
+        unsigned int remaining_rows;
+        int dest_w;
+        int dest_h;
+
+        if (task->background
+            || !shell_apps_copy_user_bytes(task, (const void*)a0, &blit, (unsigned int)sizeof(blit))
+            || !blit.buffer
+            || blit.width <= 0
+            || blit.height <= 0
+            || blit.width > APP_GFX_MAX_DIMENSION
+            || blit.height > APP_GFX_MAX_DIMENSION
+            || blit.stride <= 0
+            || (blit.format != APP_SURFACE_FORMAT_XRGB8888
+                && blit.format != APP_SURFACE_FORMAT_XRGB8888_LE
+                && blit.format != APP_SURFACE_FORMAT_ARGB8888_LE)) {
+            return 0;
+        }
+
+        row_bytes = (unsigned int)blit.width * 4U;
+        if ((unsigned int)blit.stride < row_bytes) {
+            return 0;
+        }
+        remaining_rows = (unsigned int)(blit.height - 1);
+        if (remaining_rows > (0xFFFFFFFFU - row_bytes) / (unsigned int)blit.stride) {
+            return 0;
+        }
+        source_span = remaining_rows * (unsigned int)blit.stride + row_bytes;
+        if (!shell_apps_user_range_valid(task, (unsigned int)blit.buffer, source_span)) {
+            return 0;
+        }
+
+        dest_w = blit.dest_w > 0 ? blit.dest_w : blit.width;
+        dest_h = blit.dest_h > 0 ? blit.dest_h : blit.height;
+        if (!shell_apps_gfx_extent_valid(blit.dest_x, dest_w)
+            || !shell_apps_gfx_extent_valid(blit.dest_y, dest_h)) {
+            return 0;
+        }
+        if (blit.clip_w > 0 && blit.clip_h > 0
+            && (!shell_apps_gfx_extent_valid(blit.clip_x, blit.clip_w)
+                || !shell_apps_gfx_extent_valid(blit.clip_y, blit.clip_h))) {
+            return 0;
+        }
+
+        surface.buffer = blit.buffer;
+        surface.width = blit.width;
+        surface.height = blit.height;
+        surface.stride = blit.stride;
+        surface.format = blit.format;
+        surface.dest_x = blit.dest_x;
+        surface.dest_y = blit.dest_y;
+        surface.clip_x = blit.clip_x;
+        surface.clip_y = blit.clip_y;
+        surface.clip_w = blit.clip_w;
+        surface.clip_h = blit.clip_h;
+        surface.dest_w = blit.dest_w;
+        surface.dest_h = blit.dest_h;
+        return video_blit_surface(&surface);
     }
 
     if (num == MINIDOS_SYSCALL_CHDIR) {

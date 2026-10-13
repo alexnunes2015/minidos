@@ -1,7 +1,7 @@
 #ifndef MINIDOS_UI_BITMAP_H
 #define MINIDOS_UI_BITMAP_H
 
-#include "ui_defs.h"
+#include "ui_batch.h"
 
 #ifdef MINIDOS_UI_IMPLEMENTATION
 ui_bitmap_cache_t g_ui_bitmap_cache;
@@ -145,7 +145,7 @@ static int ui_bitmap_cache_load(const minidos_app_api_t* api, const char* path) 
 }
 
 /*
- * Decode the loaded BMP file cache into the wallpaper surface as XRGB8888.
+ * Decode the loaded BMP file cache into little-endian packed 0x00RRGGBB.
  * Returns 1 on success, 0 if the BMP is too large, already cached, or not loaded.
  * Falls back to 0 (invalid surface) silently on any error.
  */
@@ -190,11 +190,11 @@ static int ui_wallpaper_surface_load(const minidos_app_api_t* api, const char* p
 
         for (x = 0; x < w; x++) {
             const unsigned char* px = src_row + (unsigned int)x * c->bytes_per_pixel;
-            /* BMP is BGR; surface is XRGB8888: byte order X, R, G, B */
-            dst_row[x * 4 + 0] = 0;       /* X */
-            dst_row[x * 4 + 1] = px[2];   /* R */
-            dst_row[x * 4 + 2] = px[1];   /* G */
-            dst_row[x * 4 + 3] = px[0];   /* B */
+            /* BMP and packed XRGB are both B,G,R in little-endian memory. */
+            dst_row[x * 4 + 0] = px[0];   /* B */
+            dst_row[x * 4 + 1] = px[1];   /* G */
+            dst_row[x * 4 + 2] = px[2];   /* R */
+            dst_row[x * 4 + 3] = 0;       /* X */
         }
     }
 
@@ -210,21 +210,127 @@ static inline int ui_wallpaper_surface_matches(const char* path) {
     return g_ui_wallpaper_surface.valid && path && ui_path_equal(g_ui_wallpaper_surface.path, path);
 }
 
+static inline int ui_packed_xrgb_blit_scaled_fallback(const minidos_app_api_t* api,
+    const unsigned char* pixels, int src_w, int src_h, int stride,
+    int dst_x, int dst_y, int dst_w, int dst_h,
+    int clip_x, int clip_y, int clip_w, int clip_h) {
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int x;
+    int y;
+    unsigned int row_bytes;
+    unsigned int remaining_rows;
+    int ok = 1;
+
+    if (!api || !pixels
+        || src_w <= 0 || src_h <= 0 || src_w > 16384 || src_h > 16384
+        || dst_w <= 0 || dst_h <= 0 || dst_w > 16384 || dst_h > 16384
+        || stride <= 0
+        || dst_x < -32768 || dst_x > 32768
+        || dst_y < -32768 || dst_y > 32768
+        || dst_x > 0x7FFFFFFF - dst_w
+        || dst_y > 0x7FFFFFFF - dst_h) {
+        return 0;
+    }
+    row_bytes = (unsigned int)src_w * 4U;
+    remaining_rows = (unsigned int)(src_h - 1);
+    if ((unsigned int)stride < row_bytes
+        || remaining_rows > (0xFFFFFFFFU - row_bytes) / (unsigned int)stride) {
+        return 0;
+    }
+
+    left = dst_x;
+    top = dst_y;
+    right = dst_x + dst_w;
+    bottom = dst_y + dst_h;
+    if (clip_w > 0 && clip_h > 0) {
+        int clip_right;
+        int clip_bottom;
+
+        if (clip_w > 16384 || clip_h > 16384
+            || clip_x < -32768 || clip_x > 32768
+            || clip_y < -32768 || clip_y > 32768
+            || clip_x > 0x7FFFFFFF - clip_w
+            || clip_y > 0x7FFFFFFF - clip_h) {
+            return 0;
+        }
+        clip_right = clip_x + clip_w;
+        clip_bottom = clip_y + clip_h;
+        if (left < clip_x) { left = clip_x; }
+        if (top < clip_y) { top = clip_y; }
+        if (right > clip_right) { right = clip_right; }
+        if (bottom > clip_bottom) { bottom = clip_bottom; }
+    }
+    if (left >= right || top >= bottom) {
+        return 1;
+    }
+
+    for (y = top; y < bottom; y++) {
+        int src_y = ((y - dst_y) * src_h) / dst_h;
+
+        x = left;
+        while (x < right) {
+            int run_start = x;
+            int src_x = ((x - dst_x) * src_w) / dst_w;
+            const unsigned char* pixel = pixels
+                + (unsigned int)src_y * (unsigned int)stride
+                + (unsigned int)src_x * 4U;
+            unsigned int color = ((unsigned int)pixel[2] << 16)
+                | ((unsigned int)pixel[1] << 8)
+                | (unsigned int)pixel[0];
+            app_gfx_rect_t rect;
+
+            x++;
+            while (x < right) {
+                unsigned int next_color;
+
+                src_x = ((x - dst_x) * src_w) / dst_w;
+                pixel = pixels
+                    + (unsigned int)src_y * (unsigned int)stride
+                    + (unsigned int)src_x * 4U;
+                next_color = ((unsigned int)pixel[2] << 16)
+                    | ((unsigned int)pixel[1] << 8)
+                    | (unsigned int)pixel[0];
+                if (next_color != color) {
+                    break;
+                }
+                x++;
+            }
+
+            rect.x = run_start;
+            rect.y = y;
+            rect.w = x - run_start;
+            rect.h = 1;
+            rect.color = color;
+            if (ui_gfx_rect_batch_enqueue(api, &rect) <= 0) {
+                ok = 0;
+            }
+        }
+    }
+
+    return ok;
+}
+
 static inline int ui_wallpaper_surface_blit_scaled(const minidos_app_api_t* api,
     int dst_x, int dst_y, int dst_w, int dst_h,
     int clip_x, int clip_y, int clip_w, int clip_h) {
     ui_wallpaper_surface_t* s = &g_ui_wallpaper_surface;
     app_gfx_surface_blit_t blit;
+    int result;
 
     if (!s->valid) {
         return 0;
     }
 
+    (void)ui_gfx_rect_batch_flush(api);
+
     blit.buffer = s->pixels;
     blit.width  = s->width;
     blit.height = s->height;
     blit.stride = s->stride;
-    blit.format = APP_SURFACE_FORMAT_XRGB8888;
+    blit.format = APP_SURFACE_FORMAT_XRGB8888_LE;
     blit.dest_x = dst_x;
     blit.dest_y = dst_y;
     blit.clip_x = clip_x;
@@ -233,7 +339,15 @@ static inline int ui_wallpaper_surface_blit_scaled(const minidos_app_api_t* api,
     blit.clip_h = clip_h;
     blit.dest_w = dst_w;
     blit.dest_h = dst_h;
-    return app_gfx_surface_blit(api, &blit);
+    result = app_gfx_surface_blit(api, &blit);
+    if (result > 0) {
+        return 1;
+    }
+
+    return ui_packed_xrgb_blit_scaled_fallback(api,
+        s->pixels, s->width, s->height, s->stride,
+        dst_x, dst_y, dst_w, dst_h,
+        clip_x, clip_y, clip_w, clip_h);
 }
 
 /*

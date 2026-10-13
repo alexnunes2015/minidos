@@ -283,6 +283,18 @@ static int handle_activated_control(const minidos_app_api_t* api, demo_state_t* 
             (void)explorer_open_selected_in(api, state, explorer);
             return 0;
         }
+        if (explorer && control_id == explorer->newfolder_button_id) {
+            fileops_request_new_folder(state, explorer);
+            return 0;
+        }
+        if (explorer && control_id == explorer->rename_button_id) {
+            fileops_request_rename(state, explorer);
+            return 0;
+        }
+        if (explorer && control_id == explorer->delete_button_id) {
+            fileops_request_delete(state, explorer);
+            return 0;
+        }
     }
     return 0;
 }
@@ -390,6 +402,19 @@ static void cycle_explorer_focus(demo_state_t* state) {
 }
 
 int handle_keyboard(const minidos_app_api_t* api, demo_state_t* state, char c) {
+    /* Overlays capture keys first so typing a filename or pressing Esc does
+     * not quit the app. */
+    if (modal_is_active(state)) {
+        modal_handle_key(api, state, c);
+        return 0;
+    }
+    if (ctx_menu_is_open(state)) {
+        if (c == KEY_ESC) {
+            ctx_menu_dismiss(state);
+        }
+        return 0;
+    }
+
     if (c == 'q' || c == 'Q' || c == KEY_ESC) {
         return 1;
     }
@@ -507,6 +532,35 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
     left_down = ui_mouse_left_down(&state->mouse);
     left_pressed = ui_mouse_left_pressed(previous_mouse, &state->mouse);
     left_released = ui_mouse_left_released(previous_mouse, &state->mouse);
+
+    /* Modal dialog and context menu are drawn on top and consume all input
+     * while active. Handle them before any window/chrome interaction. */
+    if (modal_is_active(state)) {
+        modal_handle_mouse(api, state, state->mouse.x, state->mouse.y, left_pressed);
+        return 0;
+    }
+    if (ctx_menu_is_open(state)) {
+        ctx_menu_handle_mouse(api, state, state->mouse.x, state->mouse.y, left_pressed);
+        return 0;
+    }
+    {
+        int right_pressed = ((state->mouse.buttons & APP_MOUSE_RIGHT) != 0)
+            && ((previous_mouse->buttons & APP_MOUSE_RIGHT) == 0);
+        if (right_pressed) {
+            int win_id = ui_wm_top_window_at(&state->wm, state->mouse.x, state->mouse.y);
+            explorer_state_t* explorer = explorer_for_window(state, win_id);
+            if (explorer) {
+                int hit = explorer_hit_test_item_in(state, explorer, state->mouse.x, state->mouse.y);
+                ui_wm_bring_to_front(&state->wm, win_id);
+                if (hit >= 0) {
+                    explorer_select_item_in(state, explorer, hit);
+                }
+                ctx_menu_open_for(state, explorer, state->mouse.x, state->mouse.y);
+                return 0;
+            }
+        }
+    }
+
     start_rect = start_button_rect(state);
     menu_rect = start_menu_rect(state);
     main_window_rect = current_window_rect(state);
@@ -837,6 +891,8 @@ int handle_mouse(const minidos_app_api_t* api, demo_state_t* state, const app_mo
             close_main_window(state);
         } else if (explorer_for_window(state, out_window_id)) {
             explorer_close_window(state, out_window_id);
+        } else if (viewer_owns_window(state, out_window_id)) {
+            viewer_close_window(state, out_window_id);
         }
         return 0;
     }

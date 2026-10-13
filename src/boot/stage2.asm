@@ -21,6 +21,9 @@
 %define BOOT_DRIVE_FLAGS       0x0505
 %define BOOT_DRIVE_SPT         0x0506
 %define BOOT_DRIVE_HEADS       0x0508
+%define BOOT_MEDIA_KIND         0x0540
+%define BOOT_BIOS_VOLUME_FLAG   0x04
+%define EDD_PARAMS              0x7400
 
 %define VBE_MODE_INFO          0x7000
 %define VBE_CTRL_INFO          0x7200
@@ -28,6 +31,7 @@
 start:
     ; Save drive number from DL
     mov [drive_number], dl
+    mov byte [bios_boot_volume], 0
     
     ; Initialize serial
     call serial_init
@@ -47,6 +51,31 @@ start:
     jz .lba_check_done
     mov byte [lba_supported], 1
 .lba_check_done:
+
+    ; BIOS presents USB mass-storage as a hard disk (DL >= 0x80), but it
+    ; remains a BIOS-owned boot volume after entering protected mode.  EDD 3
+    ; reports USB in the interface-type field; floppy emulation is always
+    ; BIOS-owned as well.  Native ATA boot disks deliberately keep their PIO
+    ; path in the kernel.
+    cmp byte [drive_number], 0x80
+    jae .detect_usb_boot_volume
+    mov byte [bios_boot_volume], 1
+    jmp .boot_volume_detect_done
+.detect_usb_boot_volume:
+    mov word [EDD_PARAMS], 0x0042
+    mov dl, [drive_number]
+    mov si, EDD_PARAMS
+    mov ah, 0x48
+    int 0x13
+    jc .boot_volume_detect_done
+    cmp byte [EDD_PARAMS + 0x22], 'U'
+    jne .boot_volume_detect_done
+    cmp byte [EDD_PARAMS + 0x23], 'S'
+    jne .boot_volume_detect_done
+    cmp byte [EDD_PARAMS + 0x24], 'B'
+    jne .boot_volume_detect_done
+    mov byte [bios_boot_volume], 1
+.boot_volume_detect_done:
 
     ; Query BIOS drive geometry for CHS translation
     mov ah, 0x08
@@ -90,6 +119,7 @@ start:
     ; Publish boot drive metadata for the protected-mode kernel.
     mov al, [drive_number]
     mov [BOOT_DRIVE_NUMBER], al
+    mov byte [BOOT_MEDIA_KIND], 0
 
     xor al, al
     cmp byte [lba_supported], 0
@@ -100,6 +130,10 @@ start:
     je .no_geom_flag
     or al, 0x02
 .no_geom_flag:
+    cmp byte [bios_boot_volume], 0
+    je .no_bios_volume_flag
+    or al, BOOT_BIOS_VOLUME_FLAG
+.no_bios_volume_flag:
     mov [BOOT_DRIVE_FLAGS], al
 
     mov ax, [sectors_per_track]
@@ -473,6 +507,7 @@ gdt_desc:
 
 drive_number: db 0x80
 lba_supported: db 0
+bios_boot_volume: db 0
 geom_ok: db 0
 sectors_per_track: dw 63
 heads: dw 255

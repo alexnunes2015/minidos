@@ -32,7 +32,7 @@ typedef struct {
     unsigned char data[UI_BITMAP_MAX_FILE_SIZE];
 } ui_bitmap_cache_t;
 
-/* Decoded XRGB8888 wallpaper surface, populated once from the BMP file cache */
+/* Decoded packed 0x00RRGGBB wallpaper surface, populated once from the BMP file cache */
 typedef struct {
     char path[UI_BITMAP_PATH_MAX];
     unsigned char pixels[UI_WALLPAPER_SURFACE_MAX_BYTES];
@@ -149,6 +149,7 @@ typedef struct {
     char* text_buffer;
     int text_buffer_len;
     int text_len;
+    int caret_pos;
     int visible;
     int enabled;
     int focused;

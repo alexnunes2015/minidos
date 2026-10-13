@@ -16,7 +16,7 @@ This project is optimized for an AI-agent-first workflow. The human sets directi
 
 ## Non-Negotiable Rules
 
-- One task must have one primary subsystem owner: `boot`, `disk image`, `paging/interrupts`, `disk/FAT`, `shell`, `scheduler`, `userland`, `docs/tooling`.
+- One task must have one primary subsystem owner: `boot`, `disk image`, `paging/interrupts`, `disk/FAT`, `shell`, `scheduler`, `video`, `userland`, `docs/tooling`.
 - Do not mix unrelated critical subsystems in one change. Split first.
 - Any change that modifies observable behavior must update at least one automated test or one explicit validation command.
 - Any change that modifies architecture, image layout, syscall surface, debug markers, or boot flow must update the corresponding docs in the same task.
@@ -27,6 +27,7 @@ This project is optimized for an AI-agent-first workflow. The human sets directi
 - Keyboard input stays in the `paging/interrupts` owner bucket, but the authoritative implementation path is `src/kernel/input/keyboard.c` with the canonical interface in `src/kernel/input/keyboard.h`.
 - `src/kernel/keyboard.h` is compatibility-only and must remain a thin shim instead of reintroducing a second keyboard API surface.
 - Shared PS/2 controller helpers for keyboard and mouse live in `src/kernel/input/ps2_controller.h`; do not duplicate those wait/read/write loops inside leaf drivers.
+- Graphics rendering, damage tracking, and presentation stay in the `video` owner bucket. The graphics syscall validation in `src/kernel/shell/shell_apps.c` and matching application/runtime declarations are part of that boundary when a change is primarily about rendering behavior or its ABI.
 
 ## Required Workflow Per Task
 

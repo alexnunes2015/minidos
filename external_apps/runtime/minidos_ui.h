@@ -2,6 +2,7 @@
 #define MINIDOS_UI_H
 
 #include "ui/ui_defs.h"
+#include "ui/ui_batch.h"
 #include "ui/ui_bitmap.h"
 #include "ui/ui_rect.h"
 #include "ui/ui_draw.h"

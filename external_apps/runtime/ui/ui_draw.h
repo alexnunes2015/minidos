@@ -21,6 +21,8 @@ static inline int ui_draw_bitmap(const minidos_app_api_t* api, const char* path,
     const unsigned char* pixel_base;
     app_gfx_rect_t pixel_rect;
 
+    (void)ui_gfx_rect_batch_flush(api);
+
     /* Fast path: decode into wallpaper surface and blit in one syscall */
     if (ui_wallpaper_surface_load(api, path)) {
         draw_w = dst_w > 0 ? dst_w : g_ui_wallpaper_surface.width;
@@ -104,6 +106,11 @@ static inline int ui_draw_bitmap_clipped(const minidos_app_api_t* api, const cha
     app_gfx_rect_t pixel_rect;
     int draw_w;
     int draw_h;
+
+    if (ui_rect_is_empty(clip)) {
+        return 1;
+    }
+    (void)ui_gfx_rect_batch_flush(api);
 
     /* Fast path: use surface blit with kernel-side clipping */
     if (ui_wallpaper_surface_load(api, path)) {
@@ -223,10 +230,12 @@ static inline int ui_screen_size(const minidos_app_api_t* api, int* out_w, int* 
 }
 
 static inline void ui_clear(const minidos_app_api_t* api, unsigned int color) {
+    (void)ui_gfx_rect_batch_flush(api);
     (void)app_gfx_clear(api, color);
 }
 
 static inline void ui_present(const minidos_app_api_t* api) {
+    (void)ui_gfx_rect_batch_flush(api);
     (void)app_gfx_present(api);
 }
 
@@ -240,7 +249,7 @@ static inline void ui_fill_rect(const minidos_app_api_t* api, ui_rect_t rect, un
     gfx_rect.w = rect.w;
     gfx_rect.h = rect.h;
     gfx_rect.color = color;
-    (void)app_gfx_rect(api, &gfx_rect);
+    (void)ui_gfx_rect_batch_enqueue(api, &gfx_rect);
 }
 
 static inline void ui_draw_text(const minidos_app_api_t* api, int x, int y, const char* text, unsigned int fg, unsigned int bg) {
@@ -253,6 +262,7 @@ static inline void ui_draw_text(const minidos_app_api_t* api, int x, int y, cons
     gfx_text.text = text;
     gfx_text.fg = fg;
     gfx_text.bg = bg;
+    (void)ui_gfx_rect_batch_flush(api);
     (void)app_gfx_text(api, &gfx_text);
 }
 
@@ -329,11 +339,27 @@ static inline void ui_fill_rect_clipped(const minidos_app_api_t* api, ui_rect_t 
 /* Clipped text: preserves the fast text syscall for fully visible cells and clips edge cells pixel-exactly. */
 static inline void ui_draw_text_clipped(const minidos_app_api_t* api, int x, int y, const char* text,
     unsigned int fg, unsigned int bg, ui_rect_t clip) {
+    app_gfx_text_clipped_t request;
     int i;
     ui_rect_t char_rect;
     char single[2];
 
-    if (!api || !text) { return; }
+    if (!api || !text || ui_rect_is_empty(clip)) { return; }
+
+    request.x = x;
+    request.y = y;
+    request.text = text;
+    request.fg = fg;
+    request.bg = bg;
+    request.clip_x = clip.x;
+    request.clip_y = clip.y;
+    request.clip_w = clip.w;
+    request.clip_h = clip.h;
+    request.flags = 0U;
+    (void)ui_gfx_rect_batch_flush(api);
+    if (app_gfx_text_clipped(api, &request) > 0) {
+        return;
+    }
 
     single[1] = '\0';
     for (i = 0; text[i] != '\0'; i++) {
@@ -348,6 +374,82 @@ static inline void ui_draw_text_clipped(const minidos_app_api_t* api, int x, int
         single[0] = text[i];
         ui_draw_text(api, char_rect.x, char_rect.y, single, fg, bg);
     }
+}
+
+static inline void ui_draw_text_transparent_runs_clipped(const minidos_app_api_t* api,
+    int x, int y, const char* text, unsigned int fg, ui_rect_t clip) {
+    int i;
+
+    if (!api || !text || ui_rect_is_empty(clip)) {
+        return;
+    }
+
+    for (i = 0; text[i] != '\0'; i++) {
+        char ch = text[i];
+        const unsigned char* glyph;
+        int row;
+
+        if (ch < 32 || ch > 126) {
+            ch = ' ';
+        }
+        glyph = ui_font_8x8[ch - 32];
+        for (row = 0; row < UI_CHAR_H; row++) {
+            int py = y + row;
+            int col = 0;
+
+            while (col < UI_CHAR_W) {
+                int run_start;
+                unsigned char bits = glyph[row];
+
+                while (col < UI_CHAR_W
+                    && (!(bits & (0x80u >> col))
+                        || x + i * UI_CHAR_W + col < clip.x
+                        || x + i * UI_CHAR_W + col >= clip.x + clip.w
+                        || py < clip.y || py >= clip.y + clip.h)) {
+                    col++;
+                }
+                if (col >= UI_CHAR_W) {
+                    break;
+                }
+                run_start = col;
+                while (col < UI_CHAR_W
+                    && (bits & (0x80u >> col))
+                    && x + i * UI_CHAR_W + col >= clip.x
+                    && x + i * UI_CHAR_W + col < clip.x + clip.w
+                    && py >= clip.y && py < clip.y + clip.h) {
+                    col++;
+                }
+                ui_fill_rect(api, ui_rect_make(x + i * UI_CHAR_W + run_start,
+                    py, col - run_start, 1), fg);
+            }
+        }
+    }
+}
+
+static inline void ui_draw_text_transparent_clipped(const minidos_app_api_t* api,
+    int x, int y, const char* text, unsigned int fg, ui_rect_t clip) {
+    app_gfx_text_clipped_t request;
+
+    if (!api || !text || ui_rect_is_empty(clip)) {
+        return;
+    }
+
+    request.x = x;
+    request.y = y;
+    request.text = text;
+    request.fg = fg;
+    request.bg = 0U;
+    request.clip_x = clip.x;
+    request.clip_y = clip.y;
+    request.clip_w = clip.w;
+    request.clip_h = clip.h;
+    request.flags = APP_GFX_TEXT_TRANSPARENT_BG;
+    (void)ui_gfx_rect_batch_flush(api);
+    if (app_gfx_text_clipped(api, &request) > 0) {
+        return;
+    }
+
+    ui_draw_text_transparent_runs_clipped(api, x, y, text, fg, clip);
 }
 
 static inline void ui_frame_rect(const minidos_app_api_t* api, ui_rect_t rect, unsigned int color) {
@@ -684,6 +786,37 @@ static inline void ui_draw_text_clipped_right(const minidos_app_api_t* api, int 
     ui_draw_text(api, x, y, visible, fg, bg);
 }
 
+static inline void ui_draw_text_range(const minidos_app_api_t* api, int x, int y, const char* text,
+    unsigned int fg, unsigned int bg, int start, int max_chars) {
+    char visible[128];
+    int len;
+    int i;
+
+    if (!api || !text || max_chars <= 0) {
+        return;
+    }
+
+    len = ui_strlen(text);
+    if (start < 0) {
+        start = 0;
+    }
+    if (start >= len) {
+        return;
+    }
+    len -= start;
+    if (len > max_chars) {
+        len = max_chars;
+    }
+    if (len >= (int)sizeof(visible)) {
+        len = (int)sizeof(visible) - 1;
+    }
+    for (i = 0; i < len; i++) {
+        visible[i] = text[start + i];
+    }
+    visible[len] = '\0';
+    ui_draw_text(api, x, y, visible, fg, bg);
+}
+
 /* ---- Listview batch line rendering via surface blit ---- */
 
 /* 8x8 bitmap font glyphs for rendering text into pixel buffer (ASCII 32-126).
@@ -804,10 +937,10 @@ static inline void ui_linebuf_fill(unsigned char* buf, int buf_w, int buf_h,
     for (row = y; row < y + h; row++) {
         unsigned char* dst = buf + (row * buf_w + x) * 4;
         for (col = 0; col < w; col++) {
-            dst[col * 4 + 0] = 0;  /* X */
-            dst[col * 4 + 1] = r;
-            dst[col * 4 + 2] = g;
-            dst[col * 4 + 3] = b;
+            dst[col * 4 + 0] = b;
+            dst[col * 4 + 1] = g;
+            dst[col * 4 + 2] = r;
+            dst[col * 4 + 3] = 0;  /* X */
         }
     }
 }
@@ -840,9 +973,9 @@ static inline void ui_linebuf_char(unsigned char* buf, int buf_w, int buf_h,
             if (px < 0 || px >= buf_w) { continue; }
             dst = buf + (py * buf_w + px) * 4;
             if (bits & (0x80 >> col)) {
-                dst[0] = 0; dst[1] = fr; dst[2] = fgn; dst[3] = fb;
+                dst[0] = fb; dst[1] = fgn; dst[2] = fr; dst[3] = 0;
             } else {
-                dst[0] = 0; dst[1] = br; dst[2] = bgn; dst[3] = bb;
+                dst[0] = bb; dst[1] = bgn; dst[2] = br; dst[3] = 0;
             }
         }
     }
@@ -919,7 +1052,7 @@ static inline void ui_draw_listview_line_with_clip(const minidos_app_api_t* api,
     blit.width = clamped_w;
     blit.height = UI_LISTVIEW_ROW_H;
     blit.stride = clamped_w * 4;
-    blit.format = APP_SURFACE_FORMAT_XRGB8888;
+    blit.format = APP_SURFACE_FORMAT_XRGB8888_LE;
     blit.dest_x = dst_x;
     blit.dest_y = dst_y;
     blit.clip_x = use_clip ? clipped.x : -1;
@@ -928,7 +1061,18 @@ static inline void ui_draw_listview_line_with_clip(const minidos_app_api_t* api,
     blit.clip_h = use_clip ? clipped.h : 0;
     blit.dest_w = clamped_w;
     blit.dest_h = UI_LISTVIEW_ROW_H;
-    (void)app_gfx_surface_blit(api, &blit);
+    (void)ui_gfx_rect_batch_flush(api);
+    if (app_gfx_surface_blit(api, &blit) > 0) {
+        return;
+    }
+
+    (void)ui_packed_xrgb_blit_scaled_fallback(api,
+        line_buf->pixels, clamped_w, UI_LISTVIEW_ROW_H, clamped_w * 4,
+        dst_x, dst_y, clamped_w, UI_LISTVIEW_ROW_H,
+        use_clip ? clipped.x : -1,
+        use_clip ? clipped.y : 0,
+        use_clip ? clipped.w : 0,
+        use_clip ? clipped.h : 0);
 }
 
 /* Render one listview row into a line buffer and blit it to screen */
@@ -1110,12 +1254,13 @@ static inline void ui_listview_select_next(ui_listview_t* lv) {
     }
 }
 
-static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect, const char* text, int focused) {
+static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme_t* theme, ui_rect_t rect,
+    const char* text, int caret_pos, int focused) {
     unsigned int fill;
     int max_chars;
     int len = 0;
     int start = 0;
-    int visible_len = 0;
+    int caret_column = 0;
     int cursor_x;
     unsigned int ticks = 0;
     if (!theme) {
@@ -1129,15 +1274,19 @@ static inline void ui_draw_text_box(const minidos_app_api_t* api, const ui_theme
     if (text) {
         len = ui_strlen(text);
         max_chars = (rect.w - 8) / UI_CHAR_W;
-        ui_draw_text_clipped_right(api, rect.x + 4, rect.y + 4, text, theme->field_text, fill, max_chars);
         if (max_chars > 0) {
-            start = len > max_chars ? (len - max_chars) : 0;
-            visible_len = len - start;
+            if (caret_pos < 0 || caret_pos > len) {
+                caret_pos = len;
+            }
+            start = caret_pos > max_chars ? caret_pos - max_chars : 0;
+            caret_column = caret_pos - start;
+            ui_draw_text_range(api, rect.x + 4, rect.y + 4, text,
+                theme->field_text, fill, start, max_chars);
         }
     }
     ticks = app_get_ticks(api);
     if (focused && (((ticks / 20u) & 1u) == 0u)) {
-        cursor_x = rect.x + 4 + (visible_len * UI_CHAR_W);
+        cursor_x = rect.x + 4 + (caret_column * UI_CHAR_W);
         if (cursor_x > rect.x + rect.w - 3) {
             cursor_x = rect.x + rect.w - 3;
         }

@@ -45,6 +45,20 @@ Only deterministic IDs in this section are contractual. Human-readable prose log
 
 - `DISK021`: no validated boot volume or partition set was detected; boot continues without inventing a valid `A:` entry.
 
+### Input markers
+
+- `KBD200`: the keyboard consumed input through the direct polling compatibility fallback. It is a degraded mode, emitted at most once per boot; IRQ1 remains the preferred path.
+- `MOUSE201`: PS/2 controller was busy during mouse initialization; mouse input is disabled.
+- `MOUSE202`: PS/2 command-byte update failed; mouse input is disabled.
+- `MOUSE203`: mouse default-settings command did not receive an ACK; mouse input is disabled.
+- `MOUSE204`: mouse data-reporting command did not receive an ACK; mouse input is disabled.
+
+### Video markers
+
+- `PTVIDEO100 start workers=<w> iterations=<i> started=<s>`: the `videostress` request was accepted; decimal fields report requested workers, requested iterations per worker, and workers actually started.
+- `PTVIDEO110 limited by scheduler slots`: fewer stress workers started than requested because scheduler capacity was unavailable.
+- `PTVIDEO200 worker=0x........ ticks=0x........ iterations=0x........`: one completed stress worker. Each field is an uppercase, zero-padded 32-bit hexadecimal value; `ticks` is that worker's elapsed kernel-tick count and `iterations` is its completed render-loop count.
+
 ## Critical Subsystem Contracts
 
 ### `kernel/core`
@@ -73,6 +87,20 @@ Only deterministic IDs in this section are contractual. Human-readable prose log
 - Guard-page hits, corrupted saved context, or fatal bootstrap invariants are `Hard-fail` unless the offending context is provably user-owned and containable.
 - Fatal scheduler bootstrap failures must emit `STOP 0x00000006` or `STOP 0x00000007` on serial before the BSOD path takes over.
 - User faults that stay inside the offending app group are `Degraded mode` for that app, not a kernel panic, and must emit `APPFLT900` before control returns through `APPRET001`.
+- A terminated user task and every terminated member of its app group must become reusable on the next launch; the cleanup invariant covers the scheduler PID slot, user stack/runtime mapping, page-directory storage, and physical app arena span.
+
+### `paging/interrupts`
+
+**Primary owner:** `paging/interrupts`
+
+**Invariants**
+- Keyboard input is delivered through the IRQ1 handler when the interrupt path is enabled.
+- The direct PS/2 polling path is compatibility-only and must not be required by the normal IRQ keyboard regression.
+- Mouse input is exposed only after the PS/2 auxiliary device has completed initialization and IRQ12 is enabled.
+
+**Invalid input / timeout / hardware-fault policy**
+- If the compatibility polling path consumes a key, the kernel remains in degraded mode and emits `KBD200` so the loss of IRQ delivery is observable.
+- If mouse initialization fails, the kernel remains in degraded mode without advertising mouse presence and emits exactly one of `MOUSE201`–`MOUSE204`.
 
 ### `disk/FAT`
 
@@ -101,6 +129,34 @@ Only deterministic IDs in this section are contractual. Human-readable prose log
 - Missing startup-script storage is a `Degraded mode` with the stable marker `BOOT300`.
 - A failed shell handoff after boot markers is a `Hard-fail`.
 
+### `video`
+
+**Primary owner:** `video`
+
+**Invariants**
+- Graphics syscalls are additive: syscall 35 is the bounded rectangle batch and syscall 36 is clipped text; existing single-rectangle, text, and surface calls keep their behavior.
+- A rectangle batch contains 1 through 64 entries, is fully copied and validated before drawing, and is rendered in submission order under one video operation.
+- Surface format 0 remains the legacy byte sequence `[X,R,G,B]`. Format 1 is a little-endian packed word with numeric value `0x00RRGGBB`; format 2 is straight-alpha `0xAARRGGBB` and applies source-over independently per RGB component as `(src * alpha + dst * (255 - alpha) + 127) / 255`.
+- Formats 1 and 2 require runtime/kernel lockstep. Runtime run fallbacks activate only when the surface syscall explicitly returns failure and cannot detect a kernel that reports success while ignoring the format field; format 0 is the preserved earlier-ABI byte stream.
+- Dirty-region coalescing may remove containment or merge touching/overlapping rectangles with the same complete horizontal or vertical span, but it must remain conservative; capacity overflow retains the bounding-union fallback.
+
+**Invalid input / timeout / hardware-fault policy**
+- Invalid batch entries, counts, flags, formats, geometry, stride, source-span arithmetic, or user ranges are rejected before the renderer changes pixels or records damage.
+- A valid request clipped entirely outside the framebuffer succeeds without modifying the frame.
+- Unsupported framebuffer layouts use the existing generic rendering/present paths; they are not silently reinterpreted as a packed format.
+
+### `userland`
+
+**Primary owner:** `userland`
+
+**Invariants**
+- Syscall arguments are validated against the calling app's mapped user range before the kernel dereferences user pointers or mutates filesystem/video state.
+- ELF and `.COM` apps share the same syscall return-value contract and return to the shell after contained invalid-argument cases.
+
+**Invalid input / timeout / hardware-fault policy**
+- Invalid pointers, ranges, flags, formats, geometry, and unknown syscall numbers return the syscall's documented failure value; they do not panic the kernel or leave a scheduler task unreleased.
+- A direct user page fault remains an app/group fault (`APPFLT900`), distinct from a rejected syscall argument.
+
 ## Subsystem Owner Map
 
 - `boot`: `src/boot/`, stage2 handoff, early `kernel/core` orchestration, boot-time serial markers.
@@ -108,6 +164,7 @@ Only deterministic IDs in this section are contractual. Human-readable prose log
 - `disk/FAT`: `src/kernel/storage/`, storage enumeration, FAT12/floppy compatibility policy, ATA/FAT runtime behavior.
 - `shell`: shell loop, built-in command routing, shell-visible filesystem behavior, shell readiness contract.
 - `scheduler`: `src/kernel/process/`, task lifecycle, guard pages, ring3 return-to-kernel behavior.
+- `video`: `src/kernel/video/`, graphics rendering/presentation and damage tracking, plus the graphics ABI validation portion of `src/kernel/shell/shell_apps.c` and its matching declarations/helpers in `external_apps/runtime/`.
 - `userland`: external app ABI, loader/runtime bridge, `src/kernel/shell/shell_apps.c`, `external_apps/`.
 - `docs/tooling`: docs, build/test contracts, marker catalog, `scripts/`, and harness-level validation behavior.
 
